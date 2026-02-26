@@ -10,33 +10,61 @@
   window.__loft_overrides_installed = true;
 
   // Wrap Notification: call the original (Chrome shows the notification)
-  // AND relay metadata to the content script → daemon for badge updates.
+  // AND relay metadata to the content script for badge count updates.
   const OrigNotification = window.Notification;
+
+  function relayMetadata(title, options = {}) {
+    const safeIcon =
+      typeof options.icon === "string" && options.icon.startsWith("https://")
+        ? options.icon
+        : "";
+
+    window.postMessage(
+      {
+        __loft_notification: true,
+        title: title,
+        body: options.body || "",
+        icon: safeIcon,
+      },
+      "*"
+    );
+  }
 
   class LoftNotification extends OrigNotification {
     constructor(title, options = {}) {
       super(title, options);
-
-      const safeIcon =
-        typeof options.icon === "string" && options.icon.startsWith("https://")
-          ? options.icon
-          : "";
-
-      window.postMessage(
-        {
-          __loft_notification: true,
-          title: title,
-          body: options.body || "",
-          icon: safeIcon,
-        },
-        "*"
-      );
+      relayMetadata(title, options);
     }
   }
-
   window.Notification = LoftNotification;
 
-  // Override document.visibilityState so WhatsApp thinks the page is hidden
+  // Also wrap ServiceWorkerRegistration.prototype.showNotification, which
+  // some services use instead of `new Notification()`.  Relay metadata to the
+  // content script for badge count updates.
+  const origShowNotification =
+    ServiceWorkerRegistration.prototype.showNotification;
+
+  ServiceWorkerRegistration.prototype.showNotification = function (title, options = {}) {
+    const safeIcon =
+      typeof options.icon === "string" && options.icon.startsWith("https://")
+        ? options.icon
+        : "";
+
+    // Always relay metadata (used for badge count reconciliation)
+    window.postMessage(
+      {
+        __loft_notification: true,
+        title: title,
+        body: options.body || "",
+        icon: safeIcon,
+      },
+      "*"
+    );
+
+    return origShowNotification.call(this, title, options);
+  };
+
+  // Override document.visibilityState so the page thinks it is hidden
   // when the window loses focus. Without this, WhatsApp never fires
   // new Notification() because --app= mode keeps visibilityState "visible"
   // even when the window is unfocused.
@@ -69,4 +97,5 @@
     loftHidden = false;
     fireVisibilityChange();
   });
+
 })();

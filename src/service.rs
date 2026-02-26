@@ -18,6 +18,11 @@ pub struct ServiceDefinition {
 }
 
 impl ServiceDefinition {
+    /// XDG icon theme name for the app icon (e.g. `"loft-whatsapp"`).
+    pub fn app_icon_name(&self) -> String {
+        format!("loft-{}", self.name)
+    }
+
     /// XDG icon theme name for the tray icon (e.g. `"loft-whatsapp-symbolic"`).
     /// The `-symbolic` suffix tells GNOME to recolour the icon to match the panel theme.
     pub fn tray_icon_name(&self) -> String {
@@ -44,7 +49,7 @@ pub const MESSENGER: ServiceDefinition = ServiceDefinition {
     app_icon_url: "https://raw.githubusercontent.com/keithvassallomt/loft/main/assets/icons/messenger.svg",
     app_icon_filename: "messenger.svg",
     tray_icon_url: "https://raw.githubusercontent.com/keithvassallomt/loft/main/assets/icons/messenger-symbolic.svg",
-    chrome_desktop_id: "chrome-facebook.com_messages_-Default",
+    chrome_desktop_id: "chrome-facebook.com__messages_-Default",
 };
 
 pub const ALL_SERVICES: &[&ServiceDefinition] = &[&WHATSAPP, &MESSENGER];

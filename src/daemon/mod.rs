@@ -79,6 +79,7 @@ impl DaemonState {
         // Wake the show_signal in case we're waiting on it
         self.show_signal.notify_waiters();
     }
+
 }
 
 /// Main entry point for the service daemon.
@@ -318,9 +319,18 @@ impl ChromeManager {
         // 1. GNOME crash on notification click (strlen(NULL) in Mutter)
         // 2. Generic icon / raw class name in alt-tab
         // Overwrite it with our version that has a valid Exec=, Name, and Icon.
+        // We write immediately AND again after a delay, because Chrome may
+        // (re)create its broken version after our first write.
         if let Err(e) = crate::desktop::create_chrome_desktop_file(self.definition) {
             tracing::warn!("Failed to fix Chrome desktop file: {}", e);
         }
+        let definition = self.definition;
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            if let Err(e) = crate::desktop::create_chrome_desktop_file(definition) {
+                tracing::warn!("Failed to fix Chrome desktop file (delayed): {}", e);
+            }
+        });
 
         Ok(child)
     }

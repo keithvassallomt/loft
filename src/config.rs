@@ -7,6 +7,9 @@ use std::path::PathBuf;
 pub struct GlobalConfig {
     /// Custom Chrome binary path (overrides auto-detection)
     pub chrome_path: Option<String>,
+    /// Whether we've already suggested the "Hide Minimized" GNOME Shell extension.
+    #[serde(default)]
+    pub hide_minimized_suggested: bool,
 }
 
 /// Per-service config at ~/.config/loft/services/<name>.toml
@@ -89,6 +92,7 @@ mod tests {
 
         let config = GlobalConfig {
             chrome_path: Some("/usr/bin/google-chrome".to_string()),
+            hide_minimized_suggested: false,
         };
 
         let content = toml::to_string_pretty(&config).unwrap();

@@ -1,6 +1,10 @@
 (function () {
   "use strict";
 
+  // Guard against double injection (manifest + programmatic via injectContentScripts)
+  if (window.__loft_content_installed) return;
+  window.__loft_content_installed = true;
+
   // Determine which service we're on
   const url = window.location.href;
   let service = null;
@@ -147,6 +151,163 @@
 
   // Initial extraction (delayed to let page load)
   setTimeout(extractBadgeCount, 3000);
+
+  // ================================================================
+  // Messenger DOM notification scraping (Messenger only)
+  // ================================================================
+  if (service === "messenger") {
+    // Set of conversation hrefs we've already notified about.
+    // Cleared when the conversation loses its "Unread message:" indicator,
+    // so re-appearing unreads trigger a fresh notification.
+    const notifiedConversations = new Set();
+
+    /**
+     * Scan the conversation list for unread messages and send
+     * dom_notification messages for any newly detected ones.
+     */
+    function scanForUnreadMessages() {
+      const allAnchors = document.querySelectorAll('a[href*="/messages/"]');
+      const currentlyUnread = new Set();
+
+      for (const anchor of allAnchors) {
+        const href = anchor.getAttribute("href");
+        if (!href) continue;
+
+        // Walk text nodes inside this anchor looking for "Unread message:"
+        let isUnread = false;
+        const walker = document.createTreeWalker(
+          anchor,
+          NodeFilter.SHOW_TEXT,
+          null
+        );
+        let textNode;
+        while ((textNode = walker.nextNode())) {
+          if (textNode.textContent.trim() === "Unread message:") {
+            isUnread = true;
+            break;
+          }
+        }
+
+        if (!isUnread) continue;
+        currentlyUnread.add(href);
+
+        // Skip if we already notified about this conversation
+        if (notifiedConversations.has(href)) continue;
+        notifiedConversations.add(href);
+
+        const notification = extractConversationData(anchor, href);
+        if (notification) {
+          safeSendMessage(notification);
+        }
+      }
+
+      // Remove conversations that are no longer unread so we
+      // re-notify if they become unread again later
+      for (const href of notifiedConversations) {
+        if (!currentlyUnread.has(href)) {
+          notifiedConversations.delete(href);
+        }
+      }
+    }
+
+    /**
+     * Extract sender name, message preview, and profile pic URL
+     * from a Messenger conversation row anchor element.
+     */
+    function extractConversationData(anchor, href) {
+      // Sender name: first leaf-level <span> that isn't utility text
+      let senderName = "";
+      for (const span of anchor.querySelectorAll("span")) {
+        const text = span.textContent.trim();
+        if (
+          text &&
+          text !== "Unread message:" &&
+          text.length > 1 &&
+          text.length < 100 &&
+          !text.match(/^\d+[hms]$/) &&  // skip timestamps like "2h", "5m"
+          !text.match(/^·$/) &&          // skip separator dots
+          !span.querySelector("span")    // prefer leaf-level spans
+        ) {
+          senderName = text;
+          break;
+        }
+      }
+
+      // Message preview: first text node after the "Unread message:" marker
+      let messagePreview = "";
+      const walker = document.createTreeWalker(
+        anchor,
+        NodeFilter.SHOW_TEXT,
+        null
+      );
+      let foundMarker = false;
+      let textNode;
+      while ((textNode = walker.nextNode())) {
+        if (foundMarker) {
+          const text = textNode.textContent.trim();
+          if (text && text !== senderName && text.length > 1) {
+            messagePreview = text;
+            break;
+          }
+        }
+        if (textNode.textContent.trim() === "Unread message:") {
+          foundMarker = true;
+        }
+      }
+
+      // Profile picture: <img> with fbcdn.net source
+      let profilePic = "";
+      const img = anchor.querySelector('img[src*="fbcdn.net"]');
+      if (img) {
+        profilePic = img.src;
+      }
+
+      if (!senderName && !messagePreview) return null;
+
+      return {
+        type: "dom_notification",
+        sender: senderName,
+        body: messagePreview,
+        icon: profilePic,
+        href: href,
+      };
+    }
+
+    // Observe DOM changes and debounce scans to avoid excessive work
+    let scanTimeout = null;
+    const domObserver = new MutationObserver(() => {
+      if (scanTimeout) clearTimeout(scanTimeout);
+      scanTimeout = setTimeout(scanForUnreadMessages, 500);
+    });
+
+    function startDomObserver() {
+      if (document.body) {
+        domObserver.observe(document.body, {
+          childList: true,
+          subtree: true,
+        });
+        // Initial scan after page settles
+        setTimeout(scanForUnreadMessages, 5000);
+      } else {
+        setTimeout(startDomObserver, 500);
+      }
+    }
+    startDomObserver();
+
+    // Handle navigate_to_conversation from daemon (notification click)
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg.type === "navigate_to_conversation" && msg.url) {
+        // Try SPA navigation first by clicking the matching anchor
+        const anchor = document.querySelector('a[href="' + msg.url + '"]');
+        if (anchor) {
+          anchor.click();
+        } else {
+          // Fallback: full navigation
+          window.location.href = "https://www.facebook.com" + msg.url;
+        }
+      }
+    });
+  }
 
   // Relay notifications from MAIN world override to background script
   window.addEventListener("message", (event) => {

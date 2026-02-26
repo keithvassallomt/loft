@@ -234,6 +234,7 @@ mod tests {
     fn test_config_override_nonexistent() {
         let config = GlobalConfig {
             chrome_path: Some("/nonexistent/path/chrome".to_string()),
+            hide_minimized_suggested: false,
         };
         // Should fall through since the path doesn't exist
         // (may still find Chrome on system, so we just check it doesn't panic)

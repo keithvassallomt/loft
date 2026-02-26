@@ -28,8 +28,8 @@ pub fn uninstall_service(definition: &ServiceDefinition, delete_data: bool) -> R
     // Remove autostart entry (XDG path; portal cleanup is best-effort)
     let _ = set_autostart(definition, false);
 
-    // Remove tray icon from XDG icon theme (keep app icon — it's used in the manager UI)
-    remove_tray_icon_from_theme(definition);
+    // Remove app and tray icons from XDG icon theme
+    remove_icons_from_theme(definition);
 
     // Remove per-service config
     let config_path = config_dir()
@@ -236,6 +236,7 @@ pub fn ensure_icons() {
 /// Download app icon and tray icon for a single service (skips if already present).
 fn ensure_icons_for(definition: &ServiceDefinition) -> Result<()> {
     fetch_app_icon(definition)?;
+    install_app_icon_to_theme(definition)?;
     fetch_tray_icon(definition)?;
     Ok(())
 }
@@ -265,6 +266,45 @@ fn fetch_app_icon(definition: &ServiceDefinition) -> Result<()> {
     }
 
     tracing::debug!("Saved app icon to {}", icon_path.display());
+    Ok(())
+}
+
+/// Install the app icon into the XDG icon theme so .desktop files and autostart
+/// entries can reference it by name (e.g. `loft-whatsapp`) rather than by path.
+///
+/// Copies from `~/.local/share/loft/icons/<file>` to
+/// `~/.local/share/icons/hicolor/scalable/apps/loft-<name>.svg` (or 48x48 PNG).
+fn install_app_icon_to_theme(definition: &ServiceDefinition) -> Result<()> {
+    let icon_name = definition.app_icon_name();
+    let icons_base = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+        .join("icons/hicolor");
+
+    let is_svg = definition.app_icon_filename.ends_with(".svg");
+    let dest = if is_svg {
+        icons_base
+            .join("scalable/apps")
+            .join(format!("{}.svg", icon_name))
+    } else {
+        icons_base
+            .join("48x48/apps")
+            .join(format!("{}.png", icon_name))
+    };
+
+    if dest.exists() {
+        return Ok(());
+    }
+
+    let src = data_dir().join("icons").join(definition.app_icon_filename);
+    if !src.exists() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(dest.parent().unwrap())?;
+    std::fs::copy(&src, &dest)
+        .with_context(|| format!("Failed to install app icon to {}", dest.display()))?;
+
+    tracing::debug!("Installed app icon to theme: {}", dest.display());
     Ok(())
 }
 
@@ -313,23 +353,24 @@ fn fetch_tray_icon(definition: &ServiceDefinition) -> Result<()> {
     Ok(())
 }
 
-/// Remove the tray icon from the XDG icon theme directory.
-fn remove_tray_icon_from_theme(definition: &ServiceDefinition) {
-    let tray_icon_name = definition.tray_icon_name();
+/// Remove icons from the XDG icon theme directory (both app and tray).
+fn remove_icons_from_theme(definition: &ServiceDefinition) {
     let icons_base = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("~/.local/share"))
         .join("icons/hicolor");
 
-    // Try both scalable (SVG) and sized (PNG) locations
-    let svg_path = icons_base
-        .join("scalable/apps")
-        .join(format!("{}.svg", tray_icon_name));
-    let png_path = icons_base
-        .join("48x48/apps")
-        .join(format!("{}.png", tray_icon_name));
+    // Remove both app icon and tray icon from theme
+    for name in [definition.app_icon_name(), definition.tray_icon_name()] {
+        let svg_path = icons_base
+            .join("scalable/apps")
+            .join(format!("{}.svg", name));
+        let png_path = icons_base
+            .join("48x48/apps")
+            .join(format!("{}.png", name));
 
-    let _ = std::fs::remove_file(&svg_path);
-    let _ = std::fs::remove_file(&png_path);
+        let _ = std::fs::remove_file(&svg_path);
+        let _ = std::fs::remove_file(&png_path);
+    }
 }
 
 fn download_url(url: &str) -> Result<Vec<u8>> {
@@ -439,11 +480,11 @@ pub fn set_autostart(definition: &ServiceDefinition, enabled: bool) -> Result<()
         std::fs::create_dir_all(&autostart_dir)?;
         let loft_binary =
             std::env::current_exe().context("Could not determine loft binary path")?;
-        let icon_path = data_dir().join("icons").join(definition.app_icon_filename);
         let content = format!(
             "[Desktop Entry]\n\
              Type=Application\n\
              Name={name}\n\
+             Comment={name} (Loft)\n\
              Exec={exec} --service {service}\n\
              Icon={icon}\n\
              Terminal=false\n\
@@ -451,7 +492,7 @@ pub fn set_autostart(definition: &ServiceDefinition, enabled: bool) -> Result<()
             name = definition.display_name,
             exec = loft_binary.display(),
             service = definition.name,
-            icon = icon_path.display(),
+            icon = definition.app_icon_name(),
         );
         std::fs::write(&path, content)?;
         tracing::debug!("Enabled autostart: {}", path.display());
@@ -461,6 +502,32 @@ pub fn set_autostart(definition: &ServiceDefinition, enabled: bool) -> Result<()
     }
 
     Ok(())
+}
+
+// ============================================================
+// GNOME Shell extension detection
+// ============================================================
+
+/// Check if the "Hide Minimized" GNOME Shell extension is installed.
+///
+/// This extension hides minimized windows from the Activities overview,
+/// which is essential for Loft's close-to-tray behaviour to feel native.
+pub fn is_hide_minimized_installed() -> bool {
+    let uuid = "hide-minimized@danigm.net";
+
+    // User-installed
+    if let Some(data_dir) = dirs::data_dir() {
+        if data_dir
+            .join("gnome-shell/extensions")
+            .join(uuid)
+            .exists()
+        {
+            return true;
+        }
+    }
+
+    // System-installed
+    std::path::Path::new(&format!("/usr/share/gnome-shell/extensions/{}", uuid)).exists()
 }
 
 // ============================================================

@@ -5,6 +5,10 @@ let appUrl = null;
 let savedBounds = null;
 let offscreenCreated = false;
 let lastPolledVisible = null;
+let dndEnabled = false;
+
+// Maps chrome.notifications ID → conversation href for click-to-navigate
+const notificationHrefs = new Map();
 
 function connectNativeHost() {
   try {
@@ -35,6 +39,11 @@ function connectNativeHost() {
     if (msg.type === "show_window") {
       showAppWindow();
       return;
+    }
+
+    // Track DND state locally for notification suppression
+    if (msg.type === "dnd_changed") {
+      dndEnabled = !!msg.enabled;
     }
 
     // Forward other daemon messages (e.g. dnd_changed) to all Loft tabs
@@ -225,10 +234,55 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     appUrl = sender.tab.url;
   }
 
+  // Handle Messenger DOM notifications locally (don't forward to daemon)
+  if (msg.type === "dom_notification") {
+    if (!dndEnabled) {
+      const notifId = msg.href || ("msg-" + Date.now());
+      const opts = {
+        type: "basic",
+        title: msg.sender || "Messenger",
+        message: msg.body || "",
+        iconUrl: (msg.icon && msg.icon.startsWith("http")) ? msg.icon : "icons/icon128.png",
+      };
+      chrome.notifications.create(notifId, opts, () => {
+        if (chrome.runtime.lastError) {
+          console.warn("Loft: Failed to create notification:", chrome.runtime.lastError.message);
+        }
+      });
+      notificationHrefs.set(notifId, msg.href);
+    }
+    return false;
+  }
+
   if (port) {
     port.postMessage(msg);
   }
   return false;
+});
+
+// Handle notification clicks: focus window and navigate to conversation
+chrome.notifications.onClicked.addListener((notificationId) => {
+  const href = notificationHrefs.get(notificationId);
+  notificationHrefs.delete(notificationId);
+  chrome.notifications.clear(notificationId);
+
+  showAppWindow();
+
+  if (href) {
+    chrome.tabs.query({}, (tabs) => {
+      for (const tab of tabs) {
+        if (tab.url && (tab.url.startsWith("https://facebook.com/messages") ||
+            tab.url.startsWith("https://www.facebook.com/messages"))) {
+          chrome.tabs.sendMessage(tab.id, { type: "navigate_to_conversation", url: href }).catch(() => {});
+        }
+      }
+    });
+  }
+});
+
+// Clean up notification tracking when notifications are closed
+chrome.notifications.onClosed.addListener((notificationId) => {
+  notificationHrefs.delete(notificationId);
 });
 
 // Create an offscreen document to keep Chrome alive when the app window is
