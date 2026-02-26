@@ -1,0 +1,47 @@
+id: chat.loft.Loft
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: loft
+finish-args:
+  # D-Bus access for tray icon (SNI) and own service names
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --own-name=chat.loft.*
+  # Portal access
+  - --talk-name=org.freedesktop.portal.Background
+  - --talk-name=org.freedesktop.portal.Notification
+  # Flatpak host spawn (to launch Chrome on host)
+  - --talk-name=org.freedesktop.Flatpak
+  # Filesystem access for profiles, config, and Chrome NM host
+  - --filesystem=xdg-data/loft:create
+  - --filesystem=xdg-config/loft:create
+  - --filesystem=xdg-config/google-chrome/NativeMessagingHosts:create
+  - --filesystem=xdg-data/applications:create
+  # Tray icon theme (SVGs installed to hicolor for SNI IconName resolution)
+  - --filesystem=xdg-data/icons:create
+  # Display
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # Network (for icon fetching)
+  - --share=network
+modules:
+  - name: loft
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/loft/cargo
+    build-commands:
+      - cargo build --release
+      - install -Dm755 target/release/loft /app/bin/loft
+      - install -Dm644 extension/manifest.json /app/share/loft/extension/manifest.json
+      - install -Dm644 extension/background.js /app/share/loft/extension/background.js
+      - install -Dm644 extension/content.js /app/share/loft/extension/content.js
+      - install -Dm644 flatpak/flathub/chat.loft.Loft.desktop /app/share/applications/chat.loft.Loft.desktop
+      - install -Dm644 flatpak/flathub/chat.loft.Loft.metainfo.xml /app/share/metainfo/chat.loft.Loft.metainfo.xml
+    sources:
+      - type: dir
+        path: ../../

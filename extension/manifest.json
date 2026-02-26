@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Loft Desktop Integration",
+  "version": "1.0.0",
+  "description": "Desktop integration for Meta web apps via Loft",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtGMehLed2qarZDtKW3FC1NYEVosrozPj7h0AESNFo8GFZ9TR9R3o1RULx8FaoBKllNF3XDh4o9yrq40CjiJ+ieFWi/Kt+WyT4H5f83+LStbPtUxCjl8rnEJn0TgEEHHGNOQmTv/DzBjQmHXoGbpPDxHbJubLtNTk0aJlONTNZ0DRwTmWWeW11abT9PvFwlHVB06BM87brifQNhBPpMgA1b3vl+GxJVfqk2aZZOlaPPC8jnI07LCLncBTRvGsfdCKn+vZIdrflg/Fh9nUa1WBzsRzWFnTZC2+UKfJUrFpEFdN0CkpSoQyb6+GIhuAwevbsV9XNUay7dkDO6OgeB50owIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "notifications",
+    "offscreen",
+    "tabs",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://web.whatsapp.com/*",
+        "https://facebook.com/messages/*",
+        "https://www.facebook.com/messages/*"
+      ],
+      "js": ["notification-override.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://web.whatsapp.com/*",
+        "https://facebook.com/messages/*",
+        "https://www.facebook.com/messages/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

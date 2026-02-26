@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>chat.loft.Loft</id>
+  <name>Loft</name>
+  <summary>Desktop integration for Meta web apps</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>
+      Loft provides Linux desktop integration for Meta web apps like WhatsApp
+      and Facebook Messenger. It uses real Google Chrome for full voice/video
+      calling support while adding system tray icons, badge counts, and proper
+      desktop presence.
+    </p>
+    <p>
+      Features:
+    </p>
+    <ul>
+      <li>Full voice and video calling via real Chrome</li>
+      <li>System tray icon with unread message badge</li>
+      <li>Close-to-tray behavior</li>
+      <li>Do Not Disturb toggle</li>
+      <li>Per-service autostart</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">chat.loft.Loft.desktop</launchable>
+  <url type="homepage">https://github.com/keithvassallomt/loft</url>
+  <url type="bugtracker">https://github.com/keithvassallomt/loft/issues</url>
+  <developer id="com.github.keithvassallomt">
+    <name>Keith Vassallo</name>
+  </developer>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-02-25">
+      <description>
+        <p>Initial release.</p>
+      </description>
+    </release>
+  </releases>
+  <requires>
+    <internet>always</internet>
+  </requires>
+</component>

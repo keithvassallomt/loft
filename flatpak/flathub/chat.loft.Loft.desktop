@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Loft
+Comment=Desktop integration for Meta web apps
+Exec=loft
+Icon=chat.loft.Loft
+Terminal=false
+Categories=Network;InstantMessaging;
