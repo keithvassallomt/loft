@@ -13,7 +13,7 @@ pub fn install_service(definition: &ServiceDefinition) -> Result<()> {
     deploy_extension()?;
     ensure_icons_for(definition)?;
     create_desktop_entry(definition)?;
-    create_chrome_notification_alias(definition)?;
+    create_chrome_desktop_file(definition)?;
     setup_nm_host()?;
     ServiceConfig::default().save(&definition.name)?;
     tracing::info!("Installed service: {}", definition.display_name);
@@ -28,11 +28,7 @@ pub fn uninstall_service(definition: &ServiceDefinition, delete_data: bool) -> R
     // Remove autostart entry (XDG path; portal cleanup is best-effort)
     let _ = set_autostart(definition, false);
 
-    // Remove app icon
-    let icon_path = data_dir().join("icons").join(definition.app_icon_filename);
-    let _ = std::fs::remove_file(&icon_path);
-
-    // Remove tray icon from XDG icon theme
+    // Remove tray icon from XDG icon theme (keep app icon — it's used in the manager UI)
     remove_tray_icon_from_theme(definition);
 
     // Remove per-service config
@@ -148,31 +144,46 @@ fn chrome_notification_desktop_path(definition: &ServiceDefinition) -> PathBuf {
         .join(format!("{}.desktop", definition.chrome_desktop_id))
 }
 
-/// Create a hidden .desktop file matching Chrome's notification identity.
+/// Create a hidden .desktop file matching Chrome's auto-generated app identity.
 ///
-/// GNOME resolves notification sources by matching the `desktop-entry` hint
-/// to a .desktop file.  Chrome uses its own generated identity (based on URL),
-/// so without this file, notifications show as "chrome-web.whatsapp.com_-Default".
-/// This alias file provides a friendly Name so they show as "WhatsApp" etc.
-fn create_chrome_notification_alias(definition: &ServiceDefinition) -> Result<()> {
+/// Chrome in `--app=URL` mode sets the window's app-id / WM_CLASS to something
+/// like `chrome-web.whatsapp.com__-Default`.  GNOME uses this to resolve the
+/// window name and icon in alt-tab, and to resolve notification click activation.
+///
+/// Chrome also auto-generates its own `.desktop` file with this ID, but it has
+/// `NoDisplay=true` and **no `Exec=` line**.  Without a valid `Exec=`, calling
+/// `g_app_info_get_executable()` returns NULL, which crashes Mutter
+/// (`strlen(NULL)` in `sn_launcher_context_set_binary_name`).
+///
+/// We pre-create this file with a valid `Exec=` line so that:
+/// 1. Alt-tab shows the correct name and icon
+/// 2. Notification click activation doesn't crash GNOME
+///
+/// The daemon also rewrites this file after Chrome spawns (since Chrome
+/// overwrites it on launch), see `daemon::mod.rs::fix_chrome_desktop_file`.
+pub fn create_chrome_desktop_file(definition: &ServiceDefinition) -> Result<()> {
+    let loft_binary = std::env::current_exe().context("Could not determine loft binary path")?;
     let icon_path = data_dir().join("icons").join(definition.app_icon_filename);
 
     let content = format!(
         "[Desktop Entry]\n\
          Type=Application\n\
          Name={name}\n\
+         Exec={exec} --service {service}\n\
          Icon={icon}\n\
          NoDisplay=true\n",
         name = definition.display_name,
+        exec = loft_binary.display(),
+        service = definition.name,
         icon = icon_path.display(),
     );
 
     let path = chrome_notification_desktop_path(definition);
     std::fs::create_dir_all(path.parent().unwrap())?;
     std::fs::write(&path, &content)
-        .with_context(|| format!("Failed to write Chrome alias {}", path.display()))?;
+        .with_context(|| format!("Failed to write Chrome desktop file {}", path.display()))?;
 
-    tracing::debug!("Created Chrome notification alias: {}", path.display());
+    tracing::debug!("Created Chrome desktop file: {}", path.display());
     Ok(())
 }
 
@@ -428,16 +439,19 @@ pub fn set_autostart(definition: &ServiceDefinition, enabled: bool) -> Result<()
         std::fs::create_dir_all(&autostart_dir)?;
         let loft_binary =
             std::env::current_exe().context("Could not determine loft binary path")?;
+        let icon_path = data_dir().join("icons").join(definition.app_icon_filename);
         let content = format!(
             "[Desktop Entry]\n\
              Type=Application\n\
              Name={name}\n\
              Exec={exec} --service {service}\n\
+             Icon={icon}\n\
              Terminal=false\n\
              X-GNOME-Autostart-enabled=true\n",
             name = definition.display_name,
             exec = loft_binary.display(),
             service = definition.name,
+            icon = icon_path.display(),
         );
         std::fs::write(&path, content)?;
         tracing::debug!("Enabled autostart: {}", path.display());

@@ -4,7 +4,7 @@ pub mod tray;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use tokio::process::Child;
@@ -311,6 +311,16 @@ impl ChromeManager {
             load_extension_via_cdp(daemon_read_fd, daemon_write_fd, &ext_path)
         })
         .await??;
+
+        // Fix Chrome's auto-generated .desktop file for --app= mode.
+        // Chrome overwrites e.g. "chrome-web.whatsapp.com__-Default.desktop"
+        // with NoDisplay=true and NO Exec= line on every launch. This causes:
+        // 1. GNOME crash on notification click (strlen(NULL) in Mutter)
+        // 2. Generic icon / raw class name in alt-tab
+        // Overwrite it with our version that has a valid Exec=, Name, and Icon.
+        if let Err(e) = crate::desktop::create_chrome_desktop_file(self.definition) {
+            tracing::warn!("Failed to fix Chrome desktop file: {}", e);
+        }
 
         Ok(child)
     }

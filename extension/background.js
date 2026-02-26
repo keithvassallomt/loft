@@ -225,33 +225,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     appUrl = sender.tab.url;
   }
 
-  // Handle intercepted notifications — create via chrome.notifications API
-  // so they display the correct title instead of the extension origin.
-  if (msg.type === "notification") {
-    const notifOpts = {
-      type: "basic",
-      title: msg.title || "",
-      message: msg.body || "",
-      iconUrl: msg.icon || "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQAAAABJREeEFodHJhRmVUAAAAAElFTkSuQmCC",
-    };
-    chrome.notifications.create(notifOpts, () => {
-      if (chrome.runtime.lastError) {
-        console.warn("Loft: Failed to create notification:", chrome.runtime.lastError.message);
-      }
-    });
-    // Still forward to daemon for badge/tracking
-  }
-
   if (port) {
     port.postMessage(msg);
   }
   return false;
-});
-
-// Clicking a notification restores the app window
-chrome.notifications.onClicked.addListener((notificationId) => {
-  showAppWindow();
-  chrome.notifications.clear(notificationId);
 });
 
 // Create an offscreen document to keep Chrome alive when the app window is
@@ -293,9 +270,36 @@ setInterval(async () => {
   }
 }, 500);
 
+// When the extension is loaded via CDP into an already-open tab, the content
+// scripts don't get injected automatically.  Re-inject them programmatically
+// so notifications, badge extraction, etc. work without a manual page reload.
+async function injectContentScripts() {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!isLoftTab(tab.url)) continue;
+    try {
+      // Inject the MAIN-world notification override first
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["notification-override.js"],
+        world: "MAIN",
+      });
+      // Then inject the ISOLATED-world content script
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["content.js"],
+      });
+      console.log("Loft: Injected content scripts into tab", tab.id);
+    } catch (e) {
+      console.warn("Loft: Failed to inject into tab", tab.id, e);
+    }
+  }
+}
+
 // Connect on startup — detect the app window first so appUrl is set
 // before the NM host connection sends the ready message.
 detectAppWindow().then(() => {
   connectNativeHost();
   ensureOffscreen();
+  injectContentScripts();
 });

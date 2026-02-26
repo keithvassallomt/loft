@@ -12,6 +12,16 @@
 
   if (!service) return;
 
+  // Wrapper that silently drops messages if the extension context has been
+  // invalidated (e.g. extension reloaded while the page is still open).
+  function safeSendMessage(msg) {
+    try {
+      chrome.runtime.sendMessage(msg);
+    } catch {
+      // Extension context invalidated — nothing we can do
+    }
+  }
+
   const SERVICE_DISPLAY_NAMES = {
     whatsapp: "WhatsApp",
     messenger: "Messenger",
@@ -90,7 +100,7 @@
   setTimeout(showFirstRunBubble, 3000);
 
   // Send ready message
-  chrome.runtime.sendMessage({ type: "ready", service: service });
+  safeSendMessage({ type: "ready", service: service });
 
   // Badge extraction
   let lastBadgeCount = 0;
@@ -114,7 +124,7 @@
 
     if (count !== lastBadgeCount) {
       lastBadgeCount = count;
-      chrome.runtime.sendMessage({
+      safeSendMessage({
         type: "badge_update",
         count: count,
       });
@@ -142,13 +152,19 @@
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     if (event.data && event.data.__loft_notification) {
-      chrome.runtime.sendMessage({
+      safeSendMessage({
         type: "notification",
         title: event.data.title,
         body: event.data.body,
         icon: event.data.icon,
       });
     }
+  });
+
+  // Protect against accidental window close (e.g. muscle memory).
+  // Shows Chrome's native "Leave site?" confirmation dialog.
+  window.addEventListener("beforeunload", (event) => {
+    event.preventDefault();
   });
 
   // Listen for daemon messages (e.g., DND changes)

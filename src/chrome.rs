@@ -5,13 +5,13 @@ use std::process::Command;
 use crate::config::GlobalConfig;
 use crate::service::ServiceDefinition;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ChromeInfo {
     pub path: String,
     pub launch_method: LaunchMethod,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LaunchMethod {
     Direct,
     Flatpak,
@@ -124,6 +124,7 @@ pub fn build_chrome_args(
         "--enable-unsafe-extension-debugging".to_string(),
         "--no-first-run".to_string(),
         "--no-default-browser-check".to_string(),
+        "--ozone-platform=wayland".to_string(),
     ]
 }
 
@@ -194,7 +195,7 @@ mod tests {
 
         let args = build_chrome_args(service, &profile);
 
-        assert_eq!(args.len(), 7);
+        assert_eq!(args.len(), 8);
         assert_eq!(args[0], "--app=https://web.whatsapp.com/");
         assert!(args[1].contains("profiles/whatsapp"));
         assert_eq!(args[2], "--class=loft-whatsapp");
@@ -202,6 +203,7 @@ mod tests {
         assert_eq!(args[4], "--enable-unsafe-extension-debugging");
         assert_eq!(args[5], "--no-first-run");
         assert_eq!(args[6], "--no-default-browser-check");
+        assert_eq!(args[7], "--ozone-platform=wayland");
     }
 
     #[test]

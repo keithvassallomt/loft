@@ -179,6 +179,8 @@ async fn handle_relay_connection(
                         state.badge_count.store(count, Ordering::Relaxed);
                     }
                     Ok(ExtensionMessage::Notification { title, body, .. }) => {
+                        // Notification metadata from extension — Chrome shows
+                        // the native notification itself, we just log it.
                         tracing::debug!("Notification: {} - {}", title, body);
                     }
                     Ok(ExtensionMessage::WindowHidden) => {
