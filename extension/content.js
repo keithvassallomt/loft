@@ -153,6 +153,65 @@
   setTimeout(extractBadgeCount, 3000);
 
   // ================================================================
+  // Messenger DOM cleanup — remove Facebook chrome (banner, nav bar)
+  // ================================================================
+  if (service === "messenger") {
+    function cleanMessengerUI() {
+      // Remove the top banner (Facebook navigation bar)
+      const banner = document.querySelector('[role="banner"]');
+      if (banner) {
+        const sibling = banner.nextElementSibling;
+        banner.remove();
+
+        // In the div immediately after the banner, find the nested div
+        // that has a 'top' CSS property set and clear it so content
+        // sits flush at the top after banner removal.
+        if (sibling) {
+          const nested = sibling.querySelector('div');
+          if (nested) {
+            const inner = nested.querySelector('div');
+            if (inner && getComputedStyle(inner).top !== 'auto') {
+              inner.style.top = '0';
+              inner.style.height = '100%';
+            }
+          }
+        }
+      }
+
+      // Force --header-height to 0 everywhere via injected stylesheet.
+      // A :root setProperty isn't enough because React re-sets the variable
+      // on descendant elements, overriding inheritance from :root.
+      if (!document.getElementById('loft-header-fix')) {
+        const style = document.createElement('style');
+        style.id = 'loft-header-fix';
+        style.textContent = '* { --header-height: 0px !important; }';
+        document.head.appendChild(style);
+      }
+    }
+
+    // Run cleanup after page settles, and re-run on DOM changes
+    // (React may re-render these elements)
+    let cleanupTimeout = null;
+    const cleanupObserver = new MutationObserver(() => {
+      if (cleanupTimeout) clearTimeout(cleanupTimeout);
+      cleanupTimeout = setTimeout(cleanMessengerUI, 300);
+    });
+
+    function startCleanupObserver() {
+      if (document.body) {
+        cleanupObserver.observe(document.body, {
+          childList: true,
+          subtree: true,
+        });
+        setTimeout(cleanMessengerUI, 2000);
+      } else {
+        setTimeout(startCleanupObserver, 500);
+      }
+    }
+    startCleanupObserver();
+  }
+
+  // ================================================================
   // Messenger DOM notification scraping (Messenger only)
   // ================================================================
   if (service === "messenger") {
@@ -160,6 +219,12 @@
     // Cleared when the conversation loses its "Unread message:" indicator,
     // so re-appearing unreads trigger a fresh notification.
     const notifiedConversations = new Set();
+    // Suppress notifications during a startup grace period.  Messenger's
+    // React UI re-renders conversation elements multiple times during load,
+    // creating "new" hrefs that a simple first-scan boolean would miss.
+    // A time-based window catches all of these initial renders.
+    const loadTime = Date.now();
+    const STARTUP_GRACE_MS = 15000;
 
     /**
      * Scan the conversation list for unread messages and send
@@ -195,6 +260,9 @@
         if (notifiedConversations.has(href)) continue;
         notifiedConversations.add(href);
 
+        // Don't fire notifications during startup grace period
+        if (Date.now() - loadTime < STARTUP_GRACE_MS) continue;
+
         const notification = extractConversationData(anchor, href);
         if (notification) {
           safeSendMessage(notification);
@@ -208,6 +276,8 @@
           notifiedConversations.delete(href);
         }
       }
+
+      // (grace period is time-based, no flag to set)
     }
 
     /**

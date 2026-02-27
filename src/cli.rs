@@ -11,6 +11,10 @@ pub struct Args {
     #[arg(long, hide = true)]
     pub native_messaging: bool,
 
+    /// Start minimized to tray (no Chrome window until activated)
+    #[arg(long)]
+    pub minimized: bool,
+
     /// Enable verbose logging (debug + trace to stdout)
     #[arg(short, long)]
     pub verbose: bool,
@@ -70,6 +74,14 @@ mod tests {
     fn test_native_messaging() {
         let args = Args::try_parse_from(["loft", "--native-messaging"]).unwrap();
         assert!(args.native_messaging);
+    }
+
+    #[test]
+    fn test_minimized() {
+        let args =
+            Args::try_parse_from(["loft", "--service", "whatsapp", "--minimized"]).unwrap();
+        assert!(matches!(args.service, Some(ServiceName::Whatsapp)));
+        assert!(args.minimized);
     }
 
     #[test]

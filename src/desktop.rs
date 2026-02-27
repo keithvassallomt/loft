@@ -11,6 +11,7 @@ const EXTENSION_ID: &str = "eofapmpkglkhhdjadegnleadgbjooljp";
 /// Install a service: fetch icon, create .desktop file, set up NM host manifest.
 pub fn install_service(definition: &ServiceDefinition) -> Result<()> {
     deploy_extension()?;
+    deploy_gnome_shell_extension()?;
     ensure_icons_for(definition)?;
     create_desktop_entry(definition)?;
     create_chrome_desktop_file(definition)?;
@@ -212,6 +213,49 @@ fn deploy_extension() -> Result<()> {
     }
 
     tracing::debug!("Deployed extension to {}", ext_dir.display());
+    Ok(())
+}
+
+/// Deploy the GNOME Shell extension to ~/.local/share/gnome-shell/extensions/loft-shell-helper@chat.loft/.
+fn deploy_gnome_shell_extension() -> Result<()> {
+    let ext_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+        .join("gnome-shell/extensions/loft-shell-helper@chat.loft");
+    std::fs::create_dir_all(&ext_dir)
+        .with_context(|| format!("Failed to create GNOME Shell extension dir {}", ext_dir.display()))?;
+
+    let files: &[(&str, &str)] = &[
+        ("metadata.json", include_str!("../gnome-shell-extension/metadata.json")),
+        ("extension.js", include_str!("../gnome-shell-extension/extension.js")),
+    ];
+
+    for (name, content) in files {
+        std::fs::write(ext_dir.join(name), content)
+            .with_context(|| format!("Failed to write GNOME Shell extension file {}", name))?;
+    }
+
+    tracing::debug!("Deployed GNOME Shell extension to {}", ext_dir.display());
+
+    // Best-effort: enable the extension (requires gnome-extensions CLI)
+    match std::process::Command::new("gnome-extensions")
+        .args(["enable", "loft-shell-helper@chat.loft"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            tracing::info!("Enabled GNOME Shell extension loft-shell-helper@chat.loft");
+        }
+        Ok(output) => {
+            tracing::warn!(
+                "gnome-extensions enable failed ({}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Err(e) => {
+            tracing::warn!("gnome-extensions not available ({}), extension may need manual enable", e);
+        }
+    }
+
     Ok(())
 }
 
@@ -485,7 +529,7 @@ pub fn set_autostart(definition: &ServiceDefinition, enabled: bool) -> Result<()
              Type=Application\n\
              Name={name}\n\
              Comment={name} (Loft)\n\
-             Exec={exec} --service {service}\n\
+             Exec={exec} --service {service} --minimized\n\
              Icon={icon}\n\
              Terminal=false\n\
              X-GNOME-Autostart-enabled=true\n",
@@ -502,32 +546,6 @@ pub fn set_autostart(definition: &ServiceDefinition, enabled: bool) -> Result<()
     }
 
     Ok(())
-}
-
-// ============================================================
-// GNOME Shell extension detection
-// ============================================================
-
-/// Check if the "Hide Minimized" GNOME Shell extension is installed.
-///
-/// This extension hides minimized windows from the Activities overview,
-/// which is essential for Loft's close-to-tray behaviour to feel native.
-pub fn is_hide_minimized_installed() -> bool {
-    let uuid = "hide-minimized@danigm.net";
-
-    // User-installed
-    if let Some(data_dir) = dirs::data_dir() {
-        if data_dir
-            .join("gnome-shell/extensions")
-            .join(uuid)
-            .exists()
-        {
-            return true;
-        }
-    }
-
-    // System-installed
-    std::path::Path::new(&format!("/usr/share/gnome-shell/extensions/{}", uuid)).exists()
 }
 
 // ============================================================

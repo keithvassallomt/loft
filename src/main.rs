@@ -24,7 +24,7 @@ fn main() -> Result<()> {
     if let Some(service_name) = args.service {
         tracing::info!("Starting service daemon: {}", service_name);
         let rt = tokio::runtime::Runtime::new()?;
-        return rt.block_on(daemon::run(service_name));
+        return rt.block_on(daemon::run(service_name, args.minimized));
     }
 
     tracing::info!("Starting Loft manager");

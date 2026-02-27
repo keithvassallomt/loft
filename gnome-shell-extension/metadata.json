@@ -1,0 +1,7 @@
+{
+  "uuid": "loft-shell-helper@chat.loft",
+  "name": "Loft Shell Helper",
+  "description": "Window management helper for Loft — handles window activation and hides minimized Loft windows from alt-tab.",
+  "shell-version": ["47", "48", "49"],
+  "url": "https://github.com/keithvassallomt/loft"
+}

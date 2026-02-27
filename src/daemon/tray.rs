@@ -192,7 +192,7 @@ mod tests {
     use super::*;
 
     fn make_test_state() -> Arc<DaemonState> {
-        Arc::new(DaemonState::new(false))
+        Arc::new(DaemonState::new(false, false))
     }
 
     #[test]

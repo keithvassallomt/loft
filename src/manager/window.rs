@@ -131,7 +131,6 @@ fn create_uninstalled_row(
                     list_box.remove(&old_row);
                     let new_row = create_installed_row(definition, &list_box);
                     list_box.insert(&new_row, idx);
-                    maybe_suggest_hide_minimized(&list_box);
                 }
             }
             Err(e) => tracing::error!("Install failed: {}", e),
@@ -140,49 +139,6 @@ fn create_uninstalled_row(
 
     row.add_suffix(&button);
     row
-}
-
-fn maybe_suggest_hide_minimized(list_box: &gtk4::ListBox) {
-    if desktop::is_hide_minimized_installed() {
-        return;
-    }
-
-    let mut config = GlobalConfig::load().unwrap_or_default();
-    if config.hide_minimized_suggested {
-        return;
-    }
-
-    config.hide_minimized_suggested = true;
-    let _ = config.save();
-
-    let window = list_box
-        .root()
-        .and_then(|r| r.downcast::<gtk4::Window>().ok());
-
-    let dialog = libadwaita::AlertDialog::new(
-        Some("Recommended: Hide Minimized"),
-        Some(
-            "For the best close-to-tray experience, install the \
-             \u{201c}Hide Minimized\u{201d} GNOME Shell extension. \
-             It hides minimized windows from the Activities overview.",
-        ),
-    );
-
-    dialog.add_response("dismiss", "Not Now");
-    dialog.add_response("install", "Install Extension");
-    dialog.set_response_appearance("install", libadwaita::ResponseAppearance::Suggested);
-    dialog.set_default_response(Some("install"));
-    dialog.set_close_response("dismiss");
-
-    dialog.connect_response(None, move |_, response| {
-        if response == "install" {
-            let _ = std::process::Command::new("xdg-open")
-                .arg("https://extensions.gnome.org/extension/2639/hide-minimized/")
-                .spawn();
-        }
-    });
-
-    dialog.present(window.as_ref());
 }
 
 /// Row for an installed service: ExpanderRow with settings and Uninstall button.

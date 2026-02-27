@@ -9,8 +9,14 @@
   if (window.__loft_overrides_installed) return;
   window.__loft_overrides_installed = true;
 
-  // Wrap Notification: call the original (Chrome shows the notification)
-  // AND relay metadata to the content script for badge count updates.
+  // Messenger notifications are handled entirely via DOM scraping in
+  // content.js.  Suppress Chrome's native Notification constructor for
+  // Messenger to avoid duplicate / "Active now" spam on page load.
+  // WhatsApp relies on native notifications, so keep them there.
+  const isMessenger =
+    window.location.href.startsWith("https://facebook.com/messages") ||
+    window.location.href.startsWith("https://www.facebook.com/messages");
+
   const OrigNotification = window.Notification;
 
   function relayMetadata(title, options = {}) {
@@ -30,13 +36,27 @@
     );
   }
 
-  class LoftNotification extends OrigNotification {
-    constructor(title, options = {}) {
-      super(title, options);
+  if (isMessenger) {
+    // Stub that looks like Notification but never shows anything.
+    // Relay metadata only so badge count reconciliation still works.
+    function SilentNotification(title, options = {}) {
       relayMetadata(title, options);
     }
+    SilentNotification.permission = OrigNotification.permission;
+    SilentNotification.requestPermission = OrigNotification.requestPermission.bind(OrigNotification);
+    SilentNotification.prototype = Object.create(EventTarget.prototype);
+    SilentNotification.prototype.close = function () {};
+    window.Notification = SilentNotification;
+  } else {
+    // WhatsApp: wrap the real Notification, relay metadata AND show natively.
+    class LoftNotification extends OrigNotification {
+      constructor(title, options = {}) {
+        super(title, options);
+        relayMetadata(title, options);
+      }
+    }
+    window.Notification = LoftNotification;
   }
-  window.Notification = LoftNotification;
 
   // Also wrap ServiceWorkerRegistration.prototype.showNotification, which
   // some services use instead of `new Notification()`.  Relay metadata to the
@@ -45,23 +65,11 @@
     ServiceWorkerRegistration.prototype.showNotification;
 
   ServiceWorkerRegistration.prototype.showNotification = function (title, options = {}) {
-    const safeIcon =
-      typeof options.icon === "string" && options.icon.startsWith("https://")
-        ? options.icon
-        : "";
-
-    // Always relay metadata (used for badge count reconciliation)
-    window.postMessage(
-      {
-        __loft_notification: true,
-        title: title,
-        body: options.body || "",
-        icon: safeIcon,
-      },
-      "*"
-    );
-
-    return origShowNotification.call(this, title, options);
+    relayMetadata(title, options);
+    // Only show the native notification for non-Messenger services
+    if (!isMessenger) {
+      return origShowNotification.call(this, title, options);
+    }
   };
 
   // Override document.visibilityState so the page thinks it is hidden

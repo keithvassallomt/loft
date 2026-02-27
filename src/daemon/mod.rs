@@ -1,4 +1,5 @@
 pub mod dbus;
+pub mod gnome_shell;
 pub mod messaging;
 pub mod tray;
 
@@ -21,6 +22,9 @@ pub struct DaemonState {
     pub badge_count: AtomicU32,
     pub dnd: AtomicBool,
     pub quit_requested: AtomicBool,
+    /// When true, the messaging handler will immediately hide the window
+    /// on the first `WindowShown` event (for `--minimized` startup).
+    pub start_minimized: AtomicBool,
     pub show_signal: Notify,
     pub chrome_pid: tokio::sync::Mutex<Option<u32>>,
     /// Broadcast channel for sending commands to the extension via native messaging.
@@ -28,13 +32,14 @@ pub struct DaemonState {
 }
 
 impl DaemonState {
-    pub fn new(dnd: bool) -> Self {
+    pub fn new(dnd: bool, minimized: bool) -> Self {
         let (cmd_tx, _) = tokio::sync::broadcast::channel(16);
         Self {
             visible: AtomicBool::new(false),
             badge_count: AtomicU32::new(0),
             dnd: AtomicBool::new(dnd),
             quit_requested: AtomicBool::new(false),
+            start_minimized: AtomicBool::new(minimized),
             show_signal: Notify::new(),
             chrome_pid: tokio::sync::Mutex::new(None),
             cmd_tx,
@@ -83,7 +88,7 @@ impl DaemonState {
 }
 
 /// Main entry point for the service daemon.
-pub async fn run(service_name: ServiceName) -> Result<()> {
+pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
     let definition = service::get_definition(&service_name);
     let global_config = GlobalConfig::load()?;
     let service_config = ServiceConfig::load(&service_name)?;
@@ -102,7 +107,7 @@ pub async fn run(service_name: ServiceName) -> Result<()> {
     }
 
     // 2. Shared state
-    let state = Arc::new(DaemonState::new(service_config.do_not_disturb));
+    let state = Arc::new(DaemonState::new(service_config.do_not_disturb, minimized));
 
     // 3. Register D-Bus service
     let _dbus_conn = dbus::register(
@@ -126,22 +131,47 @@ pub async fn run(service_name: ServiceName) -> Result<()> {
         }
     );
 
-    // 5. Spawn tray icon
+    // 5. Spawn tray icon (retry with backoff — at login the SNI watcher
+    //    D-Bus service may not be available yet)
     let icon_path = dirs::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
         .join("loft/icons")
         .join(definition.app_icon_filename);
-    let loft_tray = tray::LoftTray::new(
-        definition.name.to_string(),
-        definition.display_name.to_string(),
-        service_config.do_not_disturb,
-        definition.tray_icon_name(),
-        &icon_path,
-        Arc::clone(&state),
-    );
-    let _tray_handle = tray::spawn_tray(loft_tray, Arc::clone(&state))
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to spawn tray icon: {:?}", e))?;
+
+    let mut tray_handle = None;
+    let retry_delays = [0, 2, 4, 8, 16];
+    for (attempt, &delay_secs) in retry_delays.iter().enumerate() {
+        if delay_secs > 0 {
+            tracing::info!(
+                "Tray icon unavailable, retrying in {}s (attempt {}/{})",
+                delay_secs,
+                attempt + 1,
+                retry_delays.len()
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+        }
+        let loft_tray = tray::LoftTray::new(
+            definition.name.to_string(),
+            definition.display_name.to_string(),
+            service_config.do_not_disturb,
+            definition.tray_icon_name(),
+            &icon_path,
+            Arc::clone(&state),
+        );
+        match tray::spawn_tray(loft_tray, Arc::clone(&state)).await {
+            Ok(handle) => {
+                tray_handle = Some(handle);
+                break;
+            }
+            Err(e) => {
+                if attempt == retry_delays.len() - 1 {
+                    return Err(anyhow::anyhow!("Failed to spawn tray icon after {} attempts: {:?}", retry_delays.len(), e));
+                }
+                tracing::warn!("Tray icon spawn failed: {:?}", e);
+            }
+        }
+    }
+    let _tray_handle = tray_handle.unwrap();
     tracing::info!("Tray icon spawned for {}", definition.display_name);
 
     // 6. Start native messaging socket server
@@ -151,6 +181,37 @@ pub async fn run(service_name: ServiceName) -> Result<()> {
         Arc::clone(&state),
         cmd_tx,
     ));
+
+    // 6b. Start GNOME Shell extension handler (parallel to NM relay)
+    {
+        let wm_class = definition.chrome_desktop_id.to_string();
+        let mut cmd_rx = state.cmd_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match cmd_rx.recv().await {
+                    Ok(messaging::DaemonMessage::ShowWindow) => {
+                        match gnome_shell::focus_window(&wm_class).await {
+                            Ok(true) => tracing::debug!("GNOME Shell focused window"),
+                            Ok(false) => tracing::debug!("GNOME Shell: window not found"),
+                            Err(e) => tracing::debug!("GNOME Shell helper unavailable: {}", e),
+                        }
+                    }
+                    Ok(messaging::DaemonMessage::HideWindow) => {
+                        match gnome_shell::hide_window(&wm_class).await {
+                            Ok(true) => tracing::debug!("GNOME Shell hid window"),
+                            Ok(false) => tracing::debug!("GNOME Shell: window not found"),
+                            Err(e) => tracing::debug!("GNOME Shell helper unavailable: {}", e),
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("GNOME Shell handler lagged {} messages", n);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
 
     // 7. Set up signal handling
     let signal_state = Arc::clone(&state);
@@ -218,11 +279,9 @@ impl ChromeManager {
 
             let start_time = Instant::now();
 
-            // Block until Chrome exits.
-            // While Chrome is running, show/hide is handled entirely by the
-            // extension (minimize/restore) — the daemon loop doesn't need to
-            // intervene.
-            let status = child.wait().await?;
+            // Wait for Chrome to exit (extension handles show/hide via
+            // chrome.windows.update while Chrome is running).
+            child.wait().await?;
             *self.state.chrome_pid.lock().await = None;
             self.state.visible.store(false, Ordering::Relaxed);
 

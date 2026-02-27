@@ -188,8 +188,21 @@ async fn handle_relay_connection(
                         state.visible.store(false, Ordering::Relaxed);
                     }
                     Ok(ExtensionMessage::WindowShown) => {
-                        tracing::info!("Extension reports window shown (user restored)");
-                        state.visible.store(true, Ordering::Relaxed);
+                        // If we're starting minimized, immediately hide the
+                        // window on the first WindowShown.  compare_exchange
+                        // ensures this only fires once.
+                        if state.start_minimized.compare_exchange(
+                            true, false,
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                        ).is_ok() {
+                            tracing::info!("Start-minimized: hiding window immediately");
+                            let _ = state.cmd_tx.send(DaemonMessage::HideWindow);
+                            state.visible.store(false, Ordering::Relaxed);
+                        } else {
+                            tracing::info!("Extension reports window shown (user restored)");
+                            state.visible.store(true, Ordering::Relaxed);
+                        }
                     }
                     Err(e) => {
                         tracing::warn!("Unknown message from extension: {}", e);
