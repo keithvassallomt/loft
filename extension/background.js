@@ -234,6 +234,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     appUrl = sender.tab.url;
   }
 
+  // Handle hide request from titlebar button
+  if (msg.type === "hide_request") {
+    hideAppWindow();
+    return false;
+  }
+
   // Handle Messenger DOM notifications locally (don't forward to daemon)
   if (msg.type === "dom_notification") {
     if (!dndEnabled) {

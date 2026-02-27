@@ -26,6 +26,123 @@
     }
   }
 
+  // ================================================================
+  // Loft titlebar — auto-hide bar with hide-to-tray button
+  // ================================================================
+  const TITLEBAR_HEIGHT = 36;
+
+  function createLoftTitleBar() {
+    if (document.getElementById('loft-titlebar')) return;
+
+    const bar = document.createElement('div');
+    bar.id = 'loft-titlebar';
+    bar.style.cssText = [
+      'position: fixed',
+      'top: -' + TITLEBAR_HEIGHT + 'px',
+      'left: 0',
+      'width: 100%',
+      'height: ' + TITLEBAR_HEIGHT + 'px',
+      'background: #1a1a1a',
+      'z-index: 2147483647',
+      'display: flex',
+      'align-items: center',
+      'justify-content: space-between',
+      'border-bottom: 1px solid #333',
+      'user-select: none',
+      'transition: top 0.2s ease',
+      'box-sizing: border-box',
+      'padding: 0 8px',
+    ].join('; ');
+
+    // Left side: "Loft" label
+    const label = document.createElement('span');
+    label.textContent = 'Loft';
+    label.style.cssText = [
+      'color: #888',
+      'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      'font-size: 12px',
+      'font-weight: 600',
+      'letter-spacing: 0.5px',
+    ].join('; ');
+
+    // Right side: hide button
+    const hideBtn = document.createElement('button');
+    hideBtn.textContent = '\u25B2'; // ▲
+    hideBtn.title = 'Hide to tray';
+    hideBtn.style.cssText = [
+      'background: none',
+      'border: none',
+      'color: #666',
+      'font-size: 10px',
+      'cursor: pointer',
+      'padding: 4px 12px',
+      'line-height: 1',
+      'border-radius: 3px',
+    ].join('; ');
+    hideBtn.addEventListener('mouseenter', () => {
+      hideBtn.style.color = '#fff';
+      hideBtn.style.background = 'rgba(255,255,255,0.1)';
+    });
+    hideBtn.addEventListener('mouseleave', () => {
+      hideBtn.style.color = '#666';
+      hideBtn.style.background = 'none';
+    });
+    hideBtn.addEventListener('click', () => {
+      safeSendMessage({ type: 'hide_request' });
+    });
+
+    bar.appendChild(label);
+    bar.appendChild(hideBtn);
+    document.body.prepend(bar);
+
+    // Inject styles for body offset transition (synced with bar animation)
+    if (!document.getElementById('loft-titlebar-offset')) {
+      const style = document.createElement('style');
+      style.id = 'loft-titlebar-offset';
+      style.textContent = [
+        'body { transition: margin-top 0.2s ease, height 0.2s ease !important; }',
+        'body.loft-bar-visible { margin-top: ' + TITLEBAR_HEIGHT + 'px !important; height: calc(100% - ' + TITLEBAR_HEIGHT + 'px) !important; }',
+      ].join('\n');
+      document.head.appendChild(style);
+    }
+
+    // Show/hide bar when mouse enters top 10% of window
+    let barVisible = false;
+    function showBar() {
+      if (barVisible) return;
+      barVisible = true;
+      bar.style.top = '0';
+      document.body.classList.add('loft-bar-visible');
+    }
+    function hideBar() {
+      if (!barVisible) return;
+      barVisible = false;
+      bar.style.top = '-' + TITLEBAR_HEIGHT + 'px';
+      document.body.classList.remove('loft-bar-visible');
+    }
+
+    document.addEventListener('mousemove', (e) => {
+      const threshold = window.innerHeight * 0.1;
+      if (e.clientY <= threshold) {
+        showBar();
+      } else {
+        hideBar();
+      }
+    });
+
+    // Hide bar when mouse leaves the window
+    document.addEventListener('mouseleave', hideBar);
+  }
+
+  function initTitleBar() {
+    if (document.body) {
+      createLoftTitleBar();
+    } else {
+      setTimeout(initTitleBar, 100);
+    }
+  }
+  initTitleBar();
+
   const SERVICE_DISPLAY_NAMES = {
     whatsapp: "WhatsApp",
     messenger: "Messenger",
@@ -43,7 +160,7 @@
       bubble.id = "loft-first-run-bubble";
       bubble.style.cssText = [
         "position: fixed",
-        "top: 16px",
+        "top: 40px",
         "left: 50%",
         "transform: translateX(-50%)",
         "z-index: 2147483647",
@@ -61,9 +178,9 @@
       ].join("; ");
 
       bubble.textContent =
-        "Use the tray icon to show/hide " +
+        "Use the \u25B2 button or tray icon to hide " +
         displayName +
-        ". Clicking Close (x) resets your window.";
+        ". Clicking Close (\u00d7) resets your window.";
 
       const closeBtn = document.createElement("span");
       closeBtn.textContent = "\u00d7";
