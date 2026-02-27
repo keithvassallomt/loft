@@ -14,6 +14,14 @@ pub struct GlobalConfig {
 pub struct ServiceConfig {
     pub autostart: bool,
     pub do_not_disturb: bool,
+    #[serde(default)]
+    pub start_hidden: bool,
+    #[serde(default = "default_true")]
+    pub show_titlebar: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for ServiceConfig {
@@ -21,6 +29,8 @@ impl Default for ServiceConfig {
         Self {
             autostart: false,
             do_not_disturb: false,
+            start_hidden: false,
+            show_titlebar: true,
         }
     }
 }
@@ -104,6 +114,8 @@ mod tests {
         let config = ServiceConfig {
             autostart: true,
             do_not_disturb: false,
+            start_hidden: true,
+            show_titlebar: false,
         };
 
         let content = toml::to_string_pretty(&config).unwrap();
@@ -118,5 +130,17 @@ mod tests {
         let config = ServiceConfig::default();
         assert!(!config.autostart);
         assert!(!config.do_not_disturb);
+        assert!(!config.start_hidden);
+        assert!(config.show_titlebar);
+    }
+
+    #[test]
+    fn test_service_config_missing_new_fields() {
+        // Old config files without start_hidden/show_titlebar should deserialize with defaults
+        let toml = "autostart = true\ndo_not_disturb = false\n";
+        let config: ServiceConfig = toml::from_str(toml).unwrap();
+        assert!(config.autostart);
+        assert!(!config.start_hidden);
+        assert!(config.show_titlebar);
     }
 }

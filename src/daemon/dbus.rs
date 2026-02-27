@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -5,12 +6,15 @@ use zbus::interface;
 use zbus::names::{BusName, InterfaceName, WellKnownName};
 use zbus::zvariant::ObjectPath;
 
+use crate::config::ServiceConfig;
 use crate::service::ServiceDefinition;
 
+use super::messaging::DaemonMessage;
 use super::DaemonState;
 
 pub struct LoftService {
     pub state: Arc<DaemonState>,
+    pub service_name: String,
 }
 
 #[interface(name = "chat.loft.Service")]
@@ -46,6 +50,20 @@ impl LoftService {
             self.state.is_dnd(),
         )
     }
+
+    async fn set_show_titlebar(&self, show: bool) {
+        tracing::info!("D-Bus SetShowTitlebar({}) called", show);
+        self.state.show_titlebar.store(show, Ordering::Relaxed);
+        let _ = self.state.cmd_tx.send(DaemonMessage::TitlebarConfig { show });
+
+        // Persist to config
+        if let Ok(mut config) = ServiceConfig::load(&self.service_name) {
+            config.show_titlebar = show;
+            if let Err(e) = config.save(&self.service_name) {
+                tracing::error!("Failed to save config: {}", e);
+            }
+        }
+    }
 }
 
 fn bus_name_for(definition: &ServiceDefinition) -> Result<WellKnownName<'static>> {
@@ -80,6 +98,25 @@ pub async fn call_show(definition: &ServiceDefinition) -> Result<()> {
             Some(iface),
             "Show",
             &(),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Send a SetShowTitlebar() call to the already-running daemon instance.
+pub async fn call_set_show_titlebar(definition: &ServiceDefinition, show: bool) -> Result<()> {
+    let connection = zbus::Connection::session().await?;
+    let bus_name = bus_name_for(definition)?;
+    let path = object_path_for(definition)?;
+    let iface = InterfaceName::try_from("chat.loft.Service")
+        .map_err(|e| anyhow::anyhow!("Invalid interface: {}", e))?;
+    connection
+        .call_method(
+            Some(BusName::from(bus_name)),
+            path,
+            Some(iface),
+            "SetShowTitlebar",
+            &(show,),
         )
         .await?;
     Ok(())

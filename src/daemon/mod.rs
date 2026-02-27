@@ -25,6 +25,7 @@ pub struct DaemonState {
     /// When true, the messaging handler will immediately hide the window
     /// on the first `WindowShown` event (for `--minimized` startup).
     pub start_minimized: AtomicBool,
+    pub show_titlebar: AtomicBool,
     pub show_signal: Notify,
     pub chrome_pid: tokio::sync::Mutex<Option<u32>>,
     /// Broadcast channel for sending commands to the extension via native messaging.
@@ -32,7 +33,7 @@ pub struct DaemonState {
 }
 
 impl DaemonState {
-    pub fn new(dnd: bool, minimized: bool) -> Self {
+    pub fn new(dnd: bool, minimized: bool, show_titlebar: bool) -> Self {
         let (cmd_tx, _) = tokio::sync::broadcast::channel(16);
         Self {
             visible: AtomicBool::new(false),
@@ -40,6 +41,7 @@ impl DaemonState {
             dnd: AtomicBool::new(dnd),
             quit_requested: AtomicBool::new(false),
             start_minimized: AtomicBool::new(minimized),
+            show_titlebar: AtomicBool::new(show_titlebar),
             show_signal: Notify::new(),
             chrome_pid: tokio::sync::Mutex::new(None),
             cmd_tx,
@@ -56,6 +58,10 @@ impl DaemonState {
 
     pub fn is_dnd(&self) -> bool {
         self.dnd.load(Ordering::Relaxed)
+    }
+
+    pub fn show_titlebar(&self) -> bool {
+        self.show_titlebar.load(Ordering::Relaxed)
     }
 
     pub fn request_show(&self) {
@@ -107,13 +113,19 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
     }
 
     // 2. Shared state
-    let state = Arc::new(DaemonState::new(service_config.do_not_disturb, minimized));
+    let minimized = minimized || service_config.start_hidden;
+    let state = Arc::new(DaemonState::new(
+        service_config.do_not_disturb,
+        minimized,
+        service_config.show_titlebar,
+    ));
 
     // 3. Register D-Bus service
     let _dbus_conn = dbus::register(
         definition,
         dbus::LoftService {
             state: Arc::clone(&state),
+            service_name: service_name.to_string(),
         },
     )
     .await

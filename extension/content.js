@@ -1,8 +1,15 @@
 (function () {
   "use strict";
 
-  // Guard against double injection (manifest + programmatic via injectContentScripts)
-  if (window.__loft_content_installed) return;
+  // Always remove stale Loft DOM elements before (re-)initializing.
+  // After CDP extension reload, the old isolated world is dead but its DOM
+  // elements (with dead click handlers) persist.  The new injection may run
+  // in a fresh isolated world where __loft_content_installed is unset, but
+  // the old #loft-titlebar is still in the DOM.  Clean it up unconditionally.
+  const oldBar = document.getElementById('loft-titlebar');
+  if (oldBar) oldBar.remove();
+  const oldBubble = document.getElementById('loft-first-run-bubble');
+  if (oldBubble) oldBubble.remove();
   window.__loft_content_installed = true;
 
   // Determine which service we're on
@@ -30,10 +37,9 @@
   // Loft titlebar — auto-hide bar with hide-to-tray button
   // ================================================================
   const TITLEBAR_HEIGHT = 36;
+  let titlebarEnabled = true;
 
   function createLoftTitleBar() {
-    if (document.getElementById('loft-titlebar')) return;
-
     const bar = document.createElement('div');
     bar.id = 'loft-titlebar';
     bar.style.cssText = [
@@ -52,6 +58,7 @@
       'transition: top 0.2s ease',
       'box-sizing: border-box',
       'padding: 0 8px',
+      'pointer-events: auto',
     ].join('; ');
 
     // Left side: "Loft" label
@@ -87,38 +94,56 @@
       hideBtn.style.color = '#666';
       hideBtn.style.background = 'none';
     });
-    hideBtn.addEventListener('click', () => {
+    hideBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
       safeSendMessage({ type: 'hide_request' });
     });
 
     bar.appendChild(label);
     bar.appendChild(hideBtn);
-    document.body.prepend(bar);
+    // Append (not prepend) so the bar is last in DOM order — ensures it
+    // paints on top of any same-z-index fixed elements inside the app.
+    document.body.appendChild(bar);
 
-    // Inject styles for body offset transition (synced with bar animation)
-    if (!document.getElementById('loft-titlebar-offset')) {
-      const style = document.createElement('style');
-      style.id = 'loft-titlebar-offset';
-      style.textContent = [
-        'body { transition: margin-top 0.2s ease, height 0.2s ease !important; }',
-        'body.loft-bar-visible { margin-top: ' + TITLEBAR_HEIGHT + 'px !important; height: calc(100% - ' + TITLEBAR_HEIGHT + 'px) !important; }',
-      ].join('\n');
-      document.head.appendChild(style);
+    // Find the app's root container (works for WhatsApp #app, Messenger, etc.)
+    function getAppRoot() {
+      const app = document.getElementById('app');
+      if (app) return app;
+      for (const child of document.body.children) {
+        if (child.id && child.id.startsWith('loft-')) continue;
+        if (['STYLE', 'SCRIPT', 'LINK'].includes(child.tagName)) continue;
+        return child;
+      }
+      return null;
     }
 
     // Show/hide bar when mouse enters top 10% of window
     let barVisible = false;
     function showBar() {
-      if (barVisible) return;
+      if (barVisible || !titlebarEnabled) return;
       barVisible = true;
       bar.style.top = '0';
-      document.body.classList.add('loft-bar-visible');
+      const root = getAppRoot();
+      if (root) {
+        root.style.setProperty('transition', 'margin-top 0.2s ease, max-height 0.2s ease', 'important');
+        root.style.setProperty('margin-top', TITLEBAR_HEIGHT + 'px', 'important');
+        root.style.setProperty('max-height', 'calc(100vh - ' + TITLEBAR_HEIGHT + 'px)', 'important');
+      }
     }
     function hideBar() {
       if (!barVisible) return;
       barVisible = false;
       bar.style.top = '-' + TITLEBAR_HEIGHT + 'px';
-      document.body.classList.remove('loft-bar-visible');
+      const root = getAppRoot();
+      if (root) {
+        root.style.setProperty('margin-top', '0', 'important');
+        root.style.setProperty('max-height', '100vh', 'important');
+        setTimeout(() => {
+          root.style.removeProperty('margin-top');
+          root.style.removeProperty('max-height');
+          root.style.removeProperty('transition');
+        }, 200);
+      }
     }
 
     document.addEventListener('mousemove', (e) => {
@@ -132,6 +157,9 @@
 
     // Hide bar when mouse leaves the window
     document.addEventListener('mouseleave', hideBar);
+
+    // Expose hideBar so the titlebar_config handler can dismiss it
+    window.__loftHideBar = hideBar;
   }
 
   function initTitleBar() {
@@ -150,6 +178,7 @@
 
   // First-run speech bubble
   function showFirstRunBubble() {
+    if (!chrome.storage) return;
     const storageKey = "loftFirstRunDismissed_" + service;
     chrome.storage.local.get(storageKey, (data) => {
       if (data[storageKey]) return;
@@ -515,10 +544,17 @@
     event.preventDefault();
   });
 
-  // Listen for daemon messages (e.g., DND changes)
+  // Listen for daemon messages (e.g., DND changes, titlebar config)
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "dnd_changed") {
       console.log("Loft: DND changed to", msg.enabled);
+    }
+    if (msg.type === "titlebar_config") {
+      titlebarEnabled = !!msg.show;
+      console.log("Loft: Titlebar enabled:", titlebarEnabled);
+      if (!titlebarEnabled && window.__loftHideBar) {
+        window.__loftHideBar();
+      }
     }
   });
 })();

@@ -53,7 +53,7 @@ async fn set_autostart_portal(
         .identifier(identifier)
         .reason(reason.as_str())
         .auto_start(enabled)
-        .command(&["loft", "--service", definition.name, "--minimized"])
+        .command(&["loft", "--service", definition.name])
         .dbus_activatable(false)
         .send()
         .await?

@@ -208,6 +208,62 @@ fn create_installed_row(
 
     row.add_row(&autostart_row);
 
+    // Start Hidden toggle
+    let start_hidden_row = libadwaita::SwitchRow::new();
+    start_hidden_row.set_title("Start Hidden");
+    start_hidden_row.set_subtitle("Start with the window hidden in the tray");
+    start_hidden_row.set_active(config.start_hidden);
+
+    start_hidden_row.connect_active_notify(move |switch| {
+        let enabled = switch.is_active();
+        let cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
+        let autostart_enabled = cfg.autostart;
+
+        let mut cfg = cfg;
+        cfg.start_hidden = enabled;
+        if let Err(e) = cfg.save(&definition.name) {
+            tracing::error!("Failed to save start_hidden for {}: {}", definition.display_name, e);
+        }
+
+        // Regenerate the autostart entry so it picks up the new setting
+        if autostart_enabled {
+            let window = switch
+                .root()
+                .and_then(|r| r.downcast::<gtk4::Window>().ok());
+            glib::spawn_future_local(async move {
+                if let Err(e) = crate::autostart::set_autostart(definition, true, window.as_ref()).await {
+                    tracing::error!("Failed to update autostart for {}: {}", definition.display_name, e);
+                }
+            });
+        }
+    });
+
+    row.add_row(&start_hidden_row);
+
+    // Show Loft Titlebar toggle
+    let titlebar_row = libadwaita::SwitchRow::new();
+    titlebar_row.set_title("Show Loft Titlebar");
+    titlebar_row.set_subtitle("In-page toolbar with hide-to-tray button");
+    titlebar_row.set_active(config.show_titlebar);
+
+    titlebar_row.connect_active_notify(move |switch| {
+        let show = switch.is_active();
+        let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
+        cfg.show_titlebar = show;
+        if let Err(e) = cfg.save(&definition.name) {
+            tracing::error!("Failed to save show_titlebar for {}: {}", definition.display_name, e);
+        }
+
+        // Update running daemon via D-Bus (fire-and-forget)
+        glib::spawn_future_local(async move {
+            if let Err(e) = crate::daemon::dbus::call_set_show_titlebar(definition, show).await {
+                tracing::debug!("Could not update running daemon titlebar setting: {}", e);
+            }
+        });
+    });
+
+    row.add_row(&titlebar_row);
+
     row
 }
 

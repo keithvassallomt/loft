@@ -234,9 +234,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     appUrl = sender.tab.url;
   }
 
-  // Handle hide request from titlebar button
+  // Handle hide request from titlebar button — route through daemon
+  // so it can use GNOME Shell extension D-Bus (more reliable on Wayland)
   if (msg.type === "hide_request") {
-    hideAppWindow();
+    if (port) {
+      port.postMessage({ type: "hide_request" });
+    }
     return false;
   }
 

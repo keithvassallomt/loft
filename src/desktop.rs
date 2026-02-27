@@ -529,7 +529,7 @@ pub fn set_autostart(definition: &ServiceDefinition, enabled: bool) -> Result<()
              Type=Application\n\
              Name={name}\n\
              Comment={name} (Loft)\n\
-             Exec={exec} --service {service} --minimized\n\
+             Exec={exec} --service {service}\n\
              Icon={icon}\n\
              Terminal=false\n\
              X-GNOME-Autostart-enabled=true\n",

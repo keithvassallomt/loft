@@ -29,6 +29,8 @@ pub enum ExtensionMessage {
     WindowHidden,
     /// Extension reports the window was restored/focused (e.g. via alt-tab).
     WindowShown,
+    /// Content script titlebar button requests hide-to-tray.
+    HideRequest,
 }
 
 /// Messages sent from the daemon to the Chrome extension.
@@ -38,6 +40,7 @@ pub enum DaemonMessage {
     DndChanged { enabled: bool },
     HideWindow,
     ShowWindow,
+    TitlebarConfig { show: bool },
     Ping,
 }
 
@@ -173,6 +176,13 @@ async fn handle_relay_connection(
                 match serde_json::from_value::<ExtensionMessage>(value) {
                     Ok(ExtensionMessage::Ready { service }) => {
                         tracing::info!("Extension ready for service: {}", service);
+                        // Send current titlebar config to the extension
+                        let config_msg = DaemonMessage::TitlebarConfig {
+                            show: state.show_titlebar(),
+                        };
+                        if let Err(e) = write_nm_message_async(&mut writer, &config_msg).await {
+                            tracing::warn!("Failed to send titlebar config: {}", e);
+                        }
                     }
                     Ok(ExtensionMessage::BadgeUpdate { count }) => {
                         tracing::debug!("Badge update: {}", count);
@@ -182,6 +192,10 @@ async fn handle_relay_connection(
                         // Notification metadata from extension — Chrome shows
                         // the native notification itself, we just log it.
                         tracing::debug!("Notification: {} - {}", title, body);
+                    }
+                    Ok(ExtensionMessage::HideRequest) => {
+                        tracing::info!("Extension titlebar hide request");
+                        state.request_hide();
                     }
                     Ok(ExtensionMessage::WindowHidden) => {
                         tracing::info!("Extension reports window hidden (user closed)");
