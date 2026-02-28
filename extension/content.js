@@ -330,7 +330,7 @@
       if (!document.getElementById('loft-header-fix')) {
         const style = document.createElement('style');
         style.id = 'loft-header-fix';
-        style.textContent = '* { --header-height: 0px !important; }';
+        style.textContent = '* { --header-height: 0px !important; } [role="dialog"], [role="dialog"] * { --header-height: 56px !important; }';
         document.head.appendChild(style);
       }
     }

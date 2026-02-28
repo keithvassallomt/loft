@@ -320,6 +320,10 @@ impl ChromeManager {
         std::fs::create_dir_all(&profile)
             .with_context(|| format!("Failed to create profile dir {}", profile.display()))?;
 
+        // Ensure Chrome always prompts for download location (in --app= mode
+        // there is no download shelf, so silent downloads confuse users).
+        set_chrome_download_prompt(&profile);
+
         let args = chrome::build_chrome_args(self.definition, &profile);
         let mut cmd = chrome::build_chrome_command(&self.chrome_info, &args);
 
@@ -404,6 +408,51 @@ impl ChromeManager {
         });
 
         Ok(child)
+    }
+}
+
+/// Configure Chrome download preferences for --app= mode.
+///
+/// Sets `download.prompt_for_download: true` (Save As dialog) and
+/// `download.show_notifications: false` (suppress Chrome's own
+/// download-complete notification) in the profile's Preferences JSON.
+fn set_chrome_download_prompt(profile_path: &std::path::Path) {
+    let prefs_dir = profile_path.join("Default");
+    let prefs_file = prefs_dir.join("Preferences");
+
+    let mut prefs: serde_json::Value = if prefs_file.exists() {
+        match std::fs::read_to_string(&prefs_file) {
+            Ok(contents) => serde_json::from_str(&contents).unwrap_or_else(|_| serde_json::json!({})),
+            Err(_) => serde_json::json!({}),
+        }
+    } else {
+        serde_json::json!({})
+    };
+
+    let prefs_obj = prefs.as_object_mut().unwrap();
+
+    let download = prefs_obj
+        .entry("download")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(obj) = download.as_object_mut() {
+        obj.insert("prompt_for_download".to_string(), serde_json::json!(true));
+        obj.insert("show_notifications".to_string(), serde_json::json!(false));
+    }
+
+    // Suppress the download bubble auto-popup (Chrome's in-window indicator)
+    let bubble = prefs_obj
+        .entry("download_bubble")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(obj) = bubble.as_object_mut() {
+        obj.insert("partial_view_enabled".to_string(), serde_json::json!(false));
+    }
+
+    if let Err(e) = std::fs::create_dir_all(&prefs_dir) {
+        tracing::warn!("Failed to create Chrome Default dir: {}", e);
+        return;
+    }
+    if let Err(e) = std::fs::write(&prefs_file, serde_json::to_string_pretty(&prefs).unwrap_or_default()) {
+        tracing::warn!("Failed to write Chrome Preferences: {}", e);
     }
 }
 

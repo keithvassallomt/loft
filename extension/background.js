@@ -359,6 +359,7 @@ async function injectContentScripts() {
   }
 }
 
+
 // Connect on startup — detect the app window first so appUrl is set
 // before the NM host connection sends the ready message.
 detectAppWindow().then(() => {
