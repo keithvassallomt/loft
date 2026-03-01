@@ -1401,6 +1401,7 @@ dependencies = [
  "ashpd",
  "clap",
  "dirs",
+ "futures-util",
  "gtk4",
  "image",
  "ksni",

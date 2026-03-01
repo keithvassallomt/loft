@@ -143,48 +143,27 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
         }
     );
 
-    // 5. Spawn tray icon (retry with backoff — at login the SNI watcher
-    //    D-Bus service may not be available yet)
+    // 5. Spawn tray icon lifecycle (handles spawn with retry, state sync,
+    //    and respawn after suspend/resume)
     let icon_path = dirs::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
         .join("loft/icons")
         .join(definition.app_icon_filename);
 
-    let mut tray_handle = None;
-    let retry_delays = [0, 2, 4, 8, 16];
-    for (attempt, &delay_secs) in retry_delays.iter().enumerate() {
-        if delay_secs > 0 {
-            tracing::info!(
-                "Tray icon unavailable, retrying in {}s (attempt {}/{})",
-                delay_secs,
-                attempt + 1,
-                retry_delays.len()
-            );
-            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-        }
-        let loft_tray = tray::LoftTray::new(
-            definition.name.to_string(),
-            definition.display_name.to_string(),
-            service_config.do_not_disturb,
-            definition.tray_icon_name(),
-            &icon_path,
-            Arc::clone(&state),
-        );
-        match tray::spawn_tray(loft_tray, Arc::clone(&state)).await {
-            Ok(handle) => {
-                tray_handle = Some(handle);
-                break;
-            }
-            Err(e) => {
-                if attempt == retry_delays.len() - 1 {
-                    return Err(anyhow::anyhow!("Failed to spawn tray icon after {} attempts: {:?}", retry_delays.len(), e));
-                }
-                tracing::warn!("Tray icon spawn failed: {:?}", e);
-            }
-        }
-    }
-    let _tray_handle = tray_handle.unwrap();
-    tracing::info!("Tray icon spawned for {}", definition.display_name);
+    let tray_respawn = Arc::new(tokio::sync::Notify::new());
+
+    tokio::spawn(tray::run_tray_lifecycle(
+        Arc::clone(&state),
+        definition.name.to_string(),
+        definition.display_name.to_string(),
+        definition.tray_icon_name(),
+        icon_path,
+        Arc::clone(&tray_respawn),
+    ));
+
+    // 5b. Monitor suspend/resume and watcher restarts to trigger tray respawn
+    tokio::spawn(monitor_suspend_resume(Arc::clone(&tray_respawn)));
+    tokio::spawn(monitor_watcher_restart(Arc::clone(&tray_respawn)));
 
     // 6. Start native messaging socket server
     let cmd_tx = state.cmd_tx.clone();
@@ -537,4 +516,104 @@ fn load_extension_via_cdp(read_fd: i32, write_fd: i32, extension_path: &str) -> 
     }
 
     Err(anyhow::anyhow!("CDP pipe closed without response"))
+}
+
+/// Monitor system suspend/resume via logind's `PrepareForSleep` D-Bus signal.
+/// When the system resumes, notifies the tray lifecycle to respawn its icon
+/// (the SNI watcher often loses track of items across suspend cycles).
+async fn monitor_suspend_resume(respawn: std::sync::Arc<tokio::sync::Notify>) {
+    use futures_util::StreamExt;
+
+    let conn = match zbus::Connection::system().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Cannot monitor suspend/resume (no system bus): {}", e);
+            return;
+        }
+    };
+
+    // Subscribe to the PrepareForSleep signal from logind
+    let rule = "type='signal',sender='org.freedesktop.login1',\
+                interface='org.freedesktop.login1.Manager',\
+                member='PrepareForSleep'";
+    if let Err(e) = conn
+        .call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "AddMatch",
+            &(rule,),
+        )
+        .await
+    {
+        tracing::warn!("Failed to subscribe to PrepareForSleep: {}", e);
+        return;
+    }
+
+    tracing::debug!("Listening for suspend/resume events");
+    let mut stream = zbus::MessageStream::from(&conn);
+
+    while let Some(Ok(msg)) = stream.next().await {
+        let member = msg.header().member().map(|m| m.as_str().to_string());
+        if member.as_deref() != Some("PrepareForSleep") {
+            continue;
+        }
+        if let Ok(body) = msg.body().deserialize::<(bool,)>() {
+            if !body.0 {
+                tracing::info!("Resumed from suspend, respawning tray icon");
+                respawn.notify_one();
+            }
+        }
+    }
+}
+
+/// Monitor the `org.kde.StatusNotifierWatcher` bus name on the session bus.
+/// When the watcher restarts (name owner changes), respawn the tray icon to
+/// prevent the ksni crate's internal auto-re-registration from creating
+/// duplicate entries in the watcher.
+async fn monitor_watcher_restart(respawn: std::sync::Arc<tokio::sync::Notify>) {
+    use futures_util::StreamExt;
+
+    let conn = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Cannot monitor StatusNotifierWatcher (no session bus): {}", e);
+            return;
+        }
+    };
+
+    let rule = "type='signal',sender='org.freedesktop.DBus',\
+                interface='org.freedesktop.DBus',\
+                member='NameOwnerChanged',\
+                arg0='org.kde.StatusNotifierWatcher'";
+    if let Err(e) = conn
+        .call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "AddMatch",
+            &(rule,),
+        )
+        .await
+    {
+        tracing::warn!("Failed to subscribe to StatusNotifierWatcher changes: {}", e);
+        return;
+    }
+
+    tracing::debug!("Listening for StatusNotifierWatcher name changes");
+    let mut stream = zbus::MessageStream::from(&conn);
+
+    while let Some(Ok(msg)) = stream.next().await {
+        let member = msg.header().member().map(|m| m.as_str().to_string());
+        if member.as_deref() != Some("NameOwnerChanged") {
+            continue;
+        }
+        // NameOwnerChanged args: (name, old_owner, new_owner)
+        if let Ok(body) = msg.body().deserialize::<(String, String, String)>() {
+            if body.0 == "org.kde.StatusNotifierWatcher" && !body.2.is_empty() {
+                tracing::info!("StatusNotifierWatcher restarted, respawning tray icon");
+                respawn.notify_one();
+            }
+        }
+    }
 }

@@ -152,39 +152,193 @@ fn load_icon(path: &PathBuf) -> Vec<Icon> {
     }
 }
 
-/// Spawn the tray icon and start a background task that syncs daemon state to it.
-pub async fn spawn_tray(
-    tray: LoftTray,
+/// Run the tray icon lifecycle: spawn with retry, sync state, and respawn
+/// when signalled (e.g. after suspend/resume) or when duplicate registrations
+/// are detected (caused by ksni auto-re-registering with the SNI watcher).
+///
+/// This function runs forever (or until the tray cannot be spawned after retries).
+pub async fn run_tray_lifecycle(
     state: Arc<DaemonState>,
-) -> Result<Handle<LoftTray>, ksni::Error> {
-    let handle = tray.spawn().await?;
+    service_name: String,
+    display_name: String,
+    tray_icon_name: String,
+    icon_path: PathBuf,
+    respawn: Arc<tokio::sync::Notify>,
+) {
+    let retry_delays = [0u64, 2, 4, 8, 16];
+    let pid = std::process::id();
 
-    // Background task: sync DaemonState -> tray every 500ms
-    let sync_handle = handle.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
-        loop {
-            interval.tick().await;
-            let badge = state.badge_count.load(Ordering::Relaxed);
-            let visible = state.visible.load(Ordering::Relaxed);
-            let dnd = state.dnd.load(Ordering::Relaxed);
-
-            let updated = sync_handle
-                .update(|tray| {
-                    tray.badge_count = badge;
-                    tray.visible = visible;
-                    tray.dnd = dnd;
-                })
-                .await;
-
-            if updated.is_none() {
-                // Handle closed, tray shut down
-                break;
+    loop {
+        // Spawn tray with retry backoff
+        let mut handle: Option<Handle<LoftTray>> = None;
+        for (attempt, &delay_secs) in retry_delays.iter().enumerate() {
+            if delay_secs > 0 {
+                tracing::info!(
+                    "Tray icon unavailable, retrying in {}s (attempt {}/{})",
+                    delay_secs,
+                    attempt + 1,
+                    retry_delays.len()
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+            }
+            let tray = LoftTray::new(
+                service_name.clone(),
+                display_name.clone(),
+                state.is_dnd(),
+                tray_icon_name.clone(),
+                &icon_path,
+                Arc::clone(&state),
+            );
+            match tray.spawn().await {
+                Ok(h) => {
+                    handle = Some(h);
+                    break;
+                }
+                Err(e) => {
+                    if attempt == retry_delays.len() - 1 {
+                        tracing::error!(
+                            "Failed to spawn tray icon after {} attempts: {:?}",
+                            retry_delays.len(),
+                            e
+                        );
+                        return;
+                    }
+                    tracing::warn!("Tray icon spawn failed: {:?}", e);
+                }
             }
         }
-    });
 
-    Ok(handle)
+        let handle = handle.unwrap();
+        let spawn_time = std::time::Instant::now();
+        tracing::info!("Tray icon spawned for {}", display_name);
+
+        // Sync loop: push DaemonState → tray every 500ms, break on respawn signal
+        // or when duplicate SNI registrations are detected.
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+        let mut should_respawn = false;
+        let mut dup_check_interval = tokio::time::interval(std::time::Duration::from_secs(10));
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    let badge = state.badge_count.load(Ordering::Relaxed);
+                    let visible = state.visible.load(Ordering::Relaxed);
+                    let dnd = state.dnd.load(Ordering::Relaxed);
+
+                    let result = handle.update(|tray: &mut LoftTray| {
+                        tray.badge_count = badge;
+                        tray.visible = visible;
+                        tray.dnd = dnd;
+                    }).await;
+
+                    if result.is_none() {
+                        tracing::warn!("Tray handle closed unexpectedly, respawning");
+                        break;
+                    }
+                }
+                _ = dup_check_interval.tick() => {
+                    // Skip checks in the first 15s — let things settle after spawn
+                    if spawn_time.elapsed() < std::time::Duration::from_secs(15) {
+                        continue;
+                    }
+                    if has_duplicate_registration(pid).await {
+                        tracing::info!("Duplicate SNI registration detected, respawning tray icon");
+                        should_respawn = true;
+                        break;
+                    }
+                }
+                _ = respawn.notified() => {
+                    should_respawn = true;
+                    break;
+                }
+            }
+        }
+
+        if !should_respawn {
+            // Tray died on its own — respawn immediately (outer loop)
+            continue;
+        }
+
+        // Clean shutdown before respawn
+        tracing::info!("Shutting down tray icon for respawn");
+        handle.shutdown().await;
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+}
+
+/// Check the StatusNotifierWatcher for duplicate registrations from this process.
+/// Returns true if more than one item is registered for our PID.
+async fn has_duplicate_registration(pid: u32) -> bool {
+    let conn = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    // Query RegisteredStatusNotifierItems property
+    let reply = conn
+        .call_method(
+            Some("org.kde.StatusNotifierWatcher"),
+            "/StatusNotifierWatcher",
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &("org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"),
+        )
+        .await;
+
+    let reply = match reply {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+
+    let items: Vec<String> = match reply.body().deserialize::<(zbus::zvariant::Value,)>() {
+        Ok((zbus::zvariant::Value::Array(arr),)) => arr
+            .iter()
+            .filter_map(|v| {
+                if let zbus::zvariant::Value::Str(s) = v {
+                    Some(s.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        _ => return false,
+    };
+
+    // Count items that belong to our PID:
+    // - Well-known name format: "org.kde.StatusNotifierItem-{pid}-{N}/..."
+    // - Unique name format: ":{N}.{M}/..." — resolve via GetConnectionUnixProcessID
+    let pid_prefix = format!("org.kde.StatusNotifierItem-{}-", pid);
+    let mut our_count = 0usize;
+
+    for item in &items {
+        if item.starts_with(&pid_prefix) {
+            our_count += 1;
+            continue;
+        }
+        // Check unique-name entries: extract bus name before the first '/'
+        if let Some(bus_name) = item.split('/').next() {
+            if bus_name.starts_with(':') {
+                let owner_pid = conn
+                    .call_method(
+                        Some("org.freedesktop.DBus"),
+                        "/org/freedesktop/DBus",
+                        Some("org.freedesktop.DBus"),
+                        "GetConnectionUnixProcessID",
+                        &(bus_name,),
+                    )
+                    .await;
+                if let Ok(reply) = owner_pid {
+                    if let Ok((p,)) = reply.body().deserialize::<(u32,)>() {
+                        if p == pid {
+                            our_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    our_count > 1
 }
 
 #[cfg(test)]

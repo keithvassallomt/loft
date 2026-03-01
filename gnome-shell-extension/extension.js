@@ -3,11 +3,12 @@
 //
 // 1. Exposes a D-Bus interface so the Loft daemon can focus/hide Chrome
 //    windows without triggering GNOME's focus-stealing prevention.
-// 2. Hides minimized Loft windows from the alt-tab switcher and overview.
+// 2. Hides minimized Loft windows from alt-tab, overview, and the dock.
 
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {Workspace} from 'resource:///org/gnome/shell/ui/workspace.js';
@@ -39,6 +40,7 @@ const DBUS_IFACE = `<node>
 // Save original prototypes for clean restore on disable
 const _origIsOverviewWindow = Workspace.prototype._isOverviewWindow;
 const _origAppSwitcherInit = AppSwitcherPopup.prototype._init;
+const _origGetRunning = Shell.AppSystem.prototype.get_running;
 
 function _isLoftWindow(win) {
     let meta = win;
@@ -75,7 +77,7 @@ export default class LoftShellHelper extends Extension {
             null, null, null
         );
 
-        // --- Hide minimized Loft windows from alt-tab and overview ---
+        // --- Hide minimized Loft windows from alt-tab, overview, and dock ---
 
         // Alt-Tab: AppSwitcherPopup._init builds the app/window list.
         // After the original _init runs, filter out minimized Loft windows
@@ -107,12 +109,42 @@ export default class LoftShellHelper extends Extension {
                 meta = win.get_meta_window();
             return !meta.minimized;
         };
+
+        // Dock: Patch get_running() so the dash doesn't show Loft apps
+        // whose windows are all minimized (hidden to tray).
+        Shell.AppSystem.prototype.get_running = function() {
+            const apps = _origGetRunning.call(this);
+            return apps.filter(app => {
+                const windows = app.get_windows();
+                if (windows.length === 0)
+                    return true;
+                return !windows.every(w => _isMinimizedLoftWindow(w));
+            });
+        };
+
+        // Trigger a dock rebuild when a Loft window is minimized/unminimized,
+        // since the app's running state doesn't actually change.
+        this._minimizeId = global.window_manager.connect('minimize',
+            (wm, actor) => this._notifyDashIfLoft(actor.meta_window));
+        this._unminimizeId = global.window_manager.connect('unminimize',
+            (wm, actor) => this._notifyDashIfLoft(actor.meta_window));
     }
 
     disable() {
         // Restore original prototypes
         Workspace.prototype._isOverviewWindow = _origIsOverviewWindow;
         AppSwitcherPopup.prototype._init = _origAppSwitcherInit;
+        Shell.AppSystem.prototype.get_running = _origGetRunning;
+
+        // Disconnect minimize/unminimize handlers
+        if (this._minimizeId) {
+            global.window_manager.disconnect(this._minimizeId);
+            this._minimizeId = null;
+        }
+        if (this._unminimizeId) {
+            global.window_manager.disconnect(this._unminimizeId);
+            this._unminimizeId = null;
+        }
 
         // Release D-Bus
         if (this._dbusId) {
@@ -123,6 +155,22 @@ export default class LoftShellHelper extends Extension {
             Gio.bus_unown_name(this._nameId);
             this._nameId = null;
         }
+    }
+
+    _notifyDashIfLoft(win) {
+        const wmClass = win.get_wm_class?.() ?? '';
+        if (!LOFT_WM_CLASSES.has(wmClass))
+            return;
+        const tracker = Shell.WindowTracker.get_default();
+        const app = tracker.get_window_app(win);
+        if (!app)
+            return;
+        // Short delay to let the minimize/unminimize animation settle,
+        // then poke the app-state-changed signal so the dash rebuilds.
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+            Shell.AppSystem.get_default().emit('app-state-changed', app);
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _findWindow(wmClass) {
