@@ -116,10 +116,11 @@ async function detectAppWindow() {
       } else {
         saveWindowBounds(win);
       }
-      // Remember the app URL from the tab
+      // Remember the app URL from the tab and restore zoom level
       const loftTab = win.tabs.find((tab) => isLoftTab(tab.url));
       if (loftTab) {
         appUrl = loftTab.url;
+        restoreZoom(loftTab.id);
       }
       break;
     }
@@ -222,6 +223,30 @@ chrome.windows.onRemoved.addListener((windowId) => {
   }
 });
 
+// Adjust zoom for a tab by a delta amount, clamped to [0.3, 3.0], and persist
+async function adjustZoom(tabId, delta) {
+  try {
+    const current = await chrome.tabs.getZoom(tabId);
+    const newZoom = Math.min(3.0, Math.max(0.3, Math.round((current + delta) * 10) / 10));
+    await chrome.tabs.setZoom(tabId, newZoom);
+    chrome.storage.local.set({ loftZoomLevel: newZoom });
+  } catch (e) {
+    console.warn("Loft: Failed to adjust zoom:", e);
+  }
+}
+
+// Restore persisted zoom level on a tab
+async function restoreZoom(tabId) {
+  try {
+    const data = await chrome.storage.local.get("loftZoomLevel");
+    if (data.loftZoomLevel) {
+      await chrome.tabs.setZoom(tabId, data.loftZoomLevel);
+    }
+  } catch (e) {
+    console.warn("Loft: Failed to restore zoom:", e);
+  }
+}
+
 // Listen for messages from content scripts and forward to native host
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Track the window ID from the content script's tab
@@ -239,6 +264,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "hide_request") {
     if (port) {
       port.postMessage({ type: "hide_request" });
+    }
+    return false;
+  }
+
+  // Handle zoom controls from titlebar buttons
+  if (msg.type === "zoom_in" || msg.type === "zoom_out") {
+    if (sender.tab) {
+      adjustZoom(sender.tab.id, msg.type === "zoom_in" ? 0.1 : -0.1);
     }
     return false;
   }
@@ -353,6 +386,7 @@ async function injectContentScripts() {
         files: ["content.js"],
       });
       console.log("Loft: Injected content scripts into tab", tab.id);
+      restoreZoom(tab.id);
     } catch (e) {
       console.warn("Loft: Failed to inject into tab", tab.id, e);
     }

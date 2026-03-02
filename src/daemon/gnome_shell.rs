@@ -52,3 +52,102 @@ pub async fn hide_window(wm_class: &str) -> Result<bool> {
     let (success,): (bool,) = reply.body().deserialize()?;
     Ok(success)
 }
+
+/// Register a service panel icon in the GNOME Shell extension.
+pub async fn register_service(
+    name: &str,
+    display_name: &str,
+    icon_name: &str,
+    wm_class: &str,
+) -> Result<()> {
+    let connection = zbus::Connection::session().await?;
+    connection
+        .call_method(
+            Some(BusName::from(bus_name()?)),
+            object_path()?,
+            Some(iface_name()?),
+            "RegisterService",
+            &(name, display_name, icon_name, wm_class),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Remove a service panel icon from the GNOME Shell extension.
+pub async fn unregister_service(name: &str) -> Result<()> {
+    let connection = zbus::Connection::session().await?;
+    connection
+        .call_method(
+            Some(BusName::from(bus_name()?)),
+            object_path()?,
+            Some(iface_name()?),
+            "UnregisterService",
+            &(name,),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Update the badge count on a service's panel icon.
+pub async fn update_badge(name: &str, count: u32) -> Result<()> {
+    let connection = zbus::Connection::session().await?;
+    connection
+        .call_method(
+            Some(BusName::from(bus_name()?)),
+            object_path()?,
+            Some(iface_name()?),
+            "UpdateBadge",
+            &(name, count),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Update the DND state on a service's panel icon.
+pub async fn update_dnd(name: &str, enabled: bool) -> Result<()> {
+    let connection = zbus::Connection::session().await?;
+    connection
+        .call_method(
+            Some(BusName::from(bus_name()?)),
+            object_path()?,
+            Some(iface_name()?),
+            "UpdateDnd",
+            &(name, enabled),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Update the visibility state on a service's panel icon.
+pub async fn update_visible(name: &str, visible: bool) -> Result<()> {
+    let connection = zbus::Connection::session().await?;
+    connection
+        .call_method(
+            Some(BusName::from(bus_name()?)),
+            object_path()?,
+            Some(iface_name()?),
+            "UpdateVisible",
+            &(name, visible),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Check if the GNOME Shell extension's D-Bus name is available.
+pub async fn is_available() -> bool {
+    let connection = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let bus_name = match bus_name() {
+        Ok(n) => n,
+        Err(_) => return false,
+    };
+    let dbus = match zbus::fdo::DBusProxy::new(&connection).await {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    dbus.name_has_owner(BusName::from(bus_name))
+        .await
+        .unwrap_or(false)
+}

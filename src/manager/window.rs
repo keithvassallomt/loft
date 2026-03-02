@@ -6,7 +6,7 @@ use gtk4::prelude::*;
 use libadwaita::prelude::*;
 
 use crate::chrome;
-use crate::config::GlobalConfig;
+use crate::config::{GlobalConfig, TrayBackend};
 use crate::config::ServiceConfig;
 use crate::desktop;
 use crate::service;
@@ -68,6 +68,49 @@ fn show_chrome_not_found(content: &gtk4::Box) {
 }
 
 fn show_service_list(content: &gtk4::Box) {
+    let outer = gtk4::Box::new(gtk4::Orientation::Vertical, 16);
+
+    // --- Global settings ---
+    let settings_group = libadwaita::PreferencesGroup::new();
+    settings_group.set_title("Settings");
+
+    let global_config = GlobalConfig::load().unwrap_or_default();
+
+    let tray_combo = libadwaita::ComboRow::new();
+    tray_combo.set_title("Tray Icon Backend");
+    tray_combo.set_subtitle("Panel icons require the Loft Shell Helper GNOME extension");
+    let model = gtk4::StringList::new(&[
+        "Auto (recommended)",
+        "GNOME Panel",
+        "System Tray (SNI)",
+    ]);
+    tray_combo.set_model(Some(&model));
+    tray_combo.set_selected(match global_config.tray_backend {
+        TrayBackend::Auto => 0,
+        TrayBackend::GnomePanel => 1,
+        TrayBackend::Sni => 2,
+    });
+
+    tray_combo.connect_selected_notify(move |combo| {
+        let backend = match combo.selected() {
+            1 => TrayBackend::GnomePanel,
+            2 => TrayBackend::Sni,
+            _ => TrayBackend::Auto,
+        };
+        let mut config = GlobalConfig::load().unwrap_or_default();
+        config.tray_backend = backend;
+        if let Err(e) = config.save() {
+            tracing::error!("Failed to save tray backend setting: {}", e);
+        }
+    });
+
+    settings_group.add(&tray_combo);
+    outer.append(&settings_group);
+
+    // --- Service list ---
+    let services_group = libadwaita::PreferencesGroup::new();
+    services_group.set_title("Services");
+
     let list_box = gtk4::ListBox::new();
     list_box.set_selection_mode(gtk4::SelectionMode::None);
     list_box.add_css_class("boxed-list");
@@ -76,9 +119,12 @@ fn show_service_list(content: &gtk4::Box) {
         create_service_row(definition, &list_box);
     }
 
+    services_group.add(&list_box);
+    outer.append(&services_group);
+
     let clamp = libadwaita::Clamp::new();
     clamp.set_maximum_size(600);
-    clamp.set_child(Some(&list_box));
+    clamp.set_child(Some(&outer));
 
     let scrolled = gtk4::ScrolledWindow::new();
     scrolled.set_child(Some(&clamp));

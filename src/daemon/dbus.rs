@@ -51,6 +51,23 @@ impl LoftService {
         )
     }
 
+    async fn set_dnd(&self, enabled: bool) {
+        tracing::info!("D-Bus SetDnd({}) called", enabled);
+        self.state.dnd.store(enabled, Ordering::Relaxed);
+        let _ = self
+            .state
+            .cmd_tx
+            .send(DaemonMessage::DndChanged { enabled });
+
+        // Persist to config
+        if let Ok(mut config) = ServiceConfig::load(&self.service_name) {
+            config.do_not_disturb = enabled;
+            if let Err(e) = config.save(&self.service_name) {
+                tracing::error!("Failed to save DND config: {}", e);
+            }
+        }
+    }
+
     async fn set_show_titlebar(&self, show: bool) {
         tracing::info!("D-Bus SetShowTitlebar({}) called", show);
         self.state.show_titlebar.store(show, Ordering::Relaxed);

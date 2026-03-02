@@ -19,6 +19,14 @@
 
   const OrigNotification = window.Notification;
 
+  // Per-service DND flag, toggled from the tray menu via content.js relay.
+  let loftDnd = false;
+  window.addEventListener("message", (e) => {
+    if (e.data && e.data.__loft_dnd !== undefined) {
+      loftDnd = !!e.data.__loft_dnd;
+    }
+  });
+
   function relayMetadata(title, options = {}) {
     const safeIcon =
       typeof options.icon === "string" && options.icon.startsWith("https://")
@@ -36,25 +44,30 @@
     );
   }
 
+  // Silent stub that looks like Notification but never shows anything.
+  function SilentNotification(title, options = {}) {
+    relayMetadata(title, options);
+  }
+  SilentNotification.permission = OrigNotification.permission;
+  SilentNotification.requestPermission = OrigNotification.requestPermission.bind(OrigNotification);
+  SilentNotification.prototype = Object.create(EventTarget.prototype);
+  SilentNotification.prototype.close = function () {};
+
   if (isMessenger) {
-    // Stub that looks like Notification but never shows anything.
-    // Relay metadata only so badge count reconciliation still works.
-    function SilentNotification(title, options = {}) {
-      relayMetadata(title, options);
-    }
-    SilentNotification.permission = OrigNotification.permission;
-    SilentNotification.requestPermission = OrigNotification.requestPermission.bind(OrigNotification);
-    SilentNotification.prototype = Object.create(EventTarget.prototype);
-    SilentNotification.prototype.close = function () {};
+    // Messenger: always silent (DOM scraping handles notifications in content.js)
     window.Notification = SilentNotification;
   } else {
-    // WhatsApp: wrap the real Notification, relay metadata AND show natively.
-    class LoftNotification extends OrigNotification {
-      constructor(title, options = {}) {
-        super(title, options);
-        relayMetadata(title, options);
-      }
+    // WhatsApp: show native notifications unless per-service DND is on.
+    // Uses a function wrapper (not class extends) so we can conditionally
+    // skip the native notification when DND is active.
+    function LoftNotification(title, options = {}) {
+      relayMetadata(title, options);
+      if (loftDnd) return Object.create(SilentNotification.prototype);
+      return new OrigNotification(title, options);
     }
+    LoftNotification.permission = OrigNotification.permission;
+    LoftNotification.requestPermission = OrigNotification.requestPermission.bind(OrigNotification);
+    LoftNotification.prototype = OrigNotification.prototype;
     window.Notification = LoftNotification;
   }
 
@@ -66,8 +79,8 @@
 
   ServiceWorkerRegistration.prototype.showNotification = function (title, options = {}) {
     relayMetadata(title, options);
-    // Only show the native notification for non-Messenger services
-    if (!isMessenger) {
+    // Only show the native notification when not Messenger and not DND
+    if (!isMessenger && !loftDnd) {
       return origShowNotification.call(this, title, options);
     }
   };

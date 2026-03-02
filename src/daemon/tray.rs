@@ -5,7 +5,8 @@ use std::sync::Arc;
 use ksni::menu::{CheckmarkItem, StandardItem};
 use ksni::{Handle, Icon, MenuItem, Tray, TrayMethods};
 
-use super::DaemonState;
+use super::{messaging, DaemonState};
+use crate::config::ServiceConfig;
 
 pub struct LoftTray {
     pub service_name: String,
@@ -104,6 +105,16 @@ impl Tray for LoftTray {
                     let new_dnd = !tray.dnd;
                     tray.dnd = new_dnd;
                     tray.state.dnd.store(new_dnd, Ordering::Relaxed);
+                    let _ = tray.state.cmd_tx.send(messaging::DaemonMessage::DndChanged {
+                        enabled: new_dnd,
+                    });
+                    // Persist to config
+                    if let Ok(mut config) = ServiceConfig::load(&tray.service_name) {
+                        config.do_not_disturb = new_dnd;
+                        if let Err(e) = config.save(&tray.service_name) {
+                            tracing::error!("Failed to save DND config: {}", e);
+                        }
+                    }
                 }),
                 ..Default::default()
             }

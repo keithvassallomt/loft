@@ -72,35 +72,60 @@
       'letter-spacing: 0.5px',
     ].join('; ');
 
-    // Right side: hide button
-    const hideBtn = document.createElement('button');
-    hideBtn.textContent = '\u25B2'; // ▲
-    hideBtn.title = 'Hide to tray';
-    hideBtn.style.cssText = [
-      'background: none',
-      'border: none',
-      'color: #666',
-      'font-size: 10px',
-      'cursor: pointer',
-      'padding: 4px 12px',
-      'line-height: 1',
-      'border-radius: 3px',
-    ].join('; ');
-    hideBtn.addEventListener('mouseenter', () => {
-      hideBtn.style.color = '#fff';
-      hideBtn.style.background = 'rgba(255,255,255,0.1)';
+    // Helper: create a titlebar button with consistent styling + hover effect
+    function makeTitlebarBtn(text, title, fontSize) {
+      const btn = document.createElement('button');
+      btn.textContent = text;
+      btn.title = title;
+      btn.style.cssText = [
+        'background: none',
+        'border: none',
+        'color: #666',
+        'font-size: ' + fontSize,
+        'cursor: pointer',
+        'padding: 4px 12px',
+        'line-height: 1',
+        'border-radius: 3px',
+      ].join('; ');
+      btn.addEventListener('mouseenter', () => {
+        btn.style.color = '#fff';
+        btn.style.background = 'rgba(255,255,255,0.1)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.color = '#666';
+        btn.style.background = 'none';
+      });
+      return btn;
+    }
+
+    // Right side: zoom controls + hide button
+    const rightGroup = document.createElement('div');
+    rightGroup.style.cssText = 'display: flex; gap: 2px; align-items: center';
+
+    const zoomOutBtn = makeTitlebarBtn('\u2212', 'Zoom out', '14px'); // −
+    zoomOutBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      safeSendMessage({ type: 'zoom_out' });
     });
-    hideBtn.addEventListener('mouseleave', () => {
-      hideBtn.style.color = '#666';
-      hideBtn.style.background = 'none';
+
+    const zoomInBtn = makeTitlebarBtn('+', 'Zoom in', '14px');
+    zoomInBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      safeSendMessage({ type: 'zoom_in' });
     });
+
+    const hideBtn = makeTitlebarBtn('\u25B2', 'Hide to tray', '10px'); // ▲
     hideBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       safeSendMessage({ type: 'hide_request' });
     });
 
+    rightGroup.appendChild(zoomOutBtn);
+    rightGroup.appendChild(zoomInBtn);
+    rightGroup.appendChild(hideBtn);
+
     bar.appendChild(label);
-    bar.appendChild(hideBtn);
+    bar.appendChild(rightGroup);
     // Append (not prepend) so the bar is last in DOM order — ensures it
     // paints on top of any same-z-index fixed elements inside the app.
     document.body.appendChild(bar);
@@ -117,9 +142,11 @@
       return null;
     }
 
-    // Show/hide bar when mouse enters top 10% of window
+    // Show/hide bar when mouse enters top edge of window
     let barVisible = false;
+    let hideTimeout = null;
     function showBar() {
+      if (hideTimeout) { clearTimeout(hideTimeout); hideTimeout = null; }
       if (barVisible || !titlebarEnabled) return;
       barVisible = true;
       bar.style.top = '0';
@@ -145,18 +172,22 @@
         }, 200);
       }
     }
+    function scheduleHide() {
+      if (hideTimeout) return;
+      hideTimeout = setTimeout(() => { hideTimeout = null; hideBar(); }, 3000);
+    }
 
     document.addEventListener('mousemove', (e) => {
-      const threshold = window.innerHeight * 0.1;
-      if (e.clientY <= threshold) {
+      const trigger = barVisible ? TITLEBAR_HEIGHT : 5;
+      if (e.clientY <= trigger) {
         showBar();
-      } else {
-        hideBar();
+      } else if (barVisible) {
+        scheduleHide();
       }
     });
 
     // Hide bar when mouse leaves the window
-    document.addEventListener('mouseleave', hideBar);
+    document.addEventListener('mouseleave', scheduleHide);
 
     // Expose hideBar so the titlebar_config handler can dismiss it
     window.__loftHideBar = hideBar;
@@ -252,51 +283,34 @@
   // Send ready message
   safeSendMessage({ type: "ready", service: service });
 
-  // Badge extraction
+  // Badge extraction — both apps use DOM scraping, not the page title.
   let lastBadgeCount = 0;
 
-  function extractBadgeCount() {
-    let count = 0;
-
-    if (service === "whatsapp") {
-      // WhatsApp shows unread count in page title: "(3) WhatsApp"
-      const titleMatch = document.title.match(/^\((\d+)\)/);
-      if (titleMatch) {
-        count = parseInt(titleMatch[1], 10);
+  // WhatsApp: scan for elements with aria-label like "N unread message(s)"
+  if (service === "whatsapp") {
+    function scanWhatsAppUnreads() {
+      let count = 0;
+      const el = document.querySelector('[aria-label*="unread message"]');
+      if (el) {
+        const match = el.getAttribute('aria-label').match(/^(\d+) unread message/);
+        if (match) count = parseInt(match[1], 10);
       }
-    } else if (service === "messenger") {
-      // Messenger shows unread count in page title: "Messenger (3)" or "(3) Messenger"
-      const titleMatch = document.title.match(/\((\d+)\)/);
-      if (titleMatch) {
-        count = parseInt(titleMatch[1], 10);
+      if (count !== lastBadgeCount) {
+        lastBadgeCount = count;
+        safeSendMessage({ type: "badge_update", count });
       }
     }
 
-    if (count !== lastBadgeCount) {
-      lastBadgeCount = count;
-      safeSendMessage({
-        type: "badge_update",
-        count: count,
-      });
-    }
-  }
-
-  // Observe title changes (most reliable for both apps)
-  const titleEl = document.querySelector("title");
-  if (titleEl) {
-    const titleObserver = new MutationObserver(extractBadgeCount);
-    titleObserver.observe(titleEl, {
-      childList: true,
-      characterData: true,
-      subtree: true,
+    // Observe DOM mutations in the conversation list area
+    const waObserver = new MutationObserver(scanWhatsAppUnreads);
+    waObserver.observe(document.body, {
+      childList: true, subtree: true, characterData: true,
     });
+
+    setInterval(scanWhatsAppUnreads, 2000);
+    setTimeout(scanWhatsAppUnreads, 3000);
   }
-
-  // Periodic fallback
-  setInterval(extractBadgeCount, 2000);
-
-  // Initial extraction (delayed to let page load)
-  setTimeout(extractBadgeCount, 3000);
+  // Messenger: badge count is handled by scanForUnreadMessages() below.
 
   // ================================================================
   // Messenger DOM cleanup — remove Facebook chrome (banner, nav bar)
@@ -423,7 +437,15 @@
         }
       }
 
-      // (grace period is time-based, no flag to set)
+      // Update badge count from DOM-verified unread conversations
+      const unreadCount = currentlyUnread.size;
+      if (unreadCount !== lastBadgeCount) {
+        lastBadgeCount = unreadCount;
+        safeSendMessage({
+          type: "badge_update",
+          count: unreadCount,
+        });
+      }
     }
 
     /**
@@ -548,6 +570,8 @@
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "dnd_changed") {
       console.log("Loft: DND changed to", msg.enabled);
+      // Relay to MAIN world so notification-override.js can suppress notifications
+      window.postMessage({ __loft_dnd: !!msg.enabled }, "*");
     }
     if (msg.type === "titlebar_config") {
       titlebarEnabled = !!msg.show;

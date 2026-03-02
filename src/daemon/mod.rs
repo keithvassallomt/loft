@@ -13,7 +13,7 @@ use tokio::sync::Notify;
 
 use crate::chrome::{self, ChromeInfo};
 use crate::cli::ServiceName;
-use crate::config::{GlobalConfig, ServiceConfig};
+use crate::config::{GlobalConfig, ServiceConfig, TrayBackend};
 use crate::service::{self, ServiceDefinition};
 
 /// Shared mutable state across all daemon components (D-Bus, tray, messaging).
@@ -143,27 +143,114 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
         }
     );
 
-    // 5. Spawn tray icon lifecycle (handles spawn with retry, state sync,
-    //    and respawn after suspend/resume)
-    let icon_path = dirs::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
-        .join("loft/icons")
-        .join(definition.app_icon_filename);
+    // 5. Tray/panel icon backend
+    let effective_backend = global_config.tray_backend.resolve();
+    tracing::info!("Tray backend: {} (resolved: {})", global_config.tray_backend, effective_backend);
 
-    let tray_respawn = Arc::new(tokio::sync::Notify::new());
+    match effective_backend {
+        TrayBackend::GnomePanel => {
+            // Register panel icon with GNOME Shell extension (with retry —
+            // at login the extension may not be ready yet)
+            let svc_name = definition.name.to_string();
+            let display_name = definition.display_name.to_string();
+            let icon = definition.tray_icon_name();
+            let wm_class = definition.chrome_desktop_id.to_string();
 
-    tokio::spawn(tray::run_tray_lifecycle(
-        Arc::clone(&state),
-        definition.name.to_string(),
-        definition.display_name.to_string(),
-        definition.tray_icon_name(),
-        icon_path,
-        Arc::clone(&tray_respawn),
-    ));
+            let retry_delays = [0u64, 2, 4, 8, 16];
+            let mut registered = false;
+            for (attempt, &delay_secs) in retry_delays.iter().enumerate() {
+                if delay_secs > 0 {
+                    tracing::info!(
+                        "GNOME panel icon unavailable, retrying in {}s (attempt {}/{})",
+                        delay_secs, attempt + 1, retry_delays.len()
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                }
+                match gnome_shell::register_service(&svc_name, &display_name, &icon, &wm_class).await {
+                    Ok(()) => {
+                        tracing::info!("Registered GNOME panel icon for {}", display_name);
+                        registered = true;
+                        break;
+                    }
+                    Err(e) => {
+                        if attempt == retry_delays.len() - 1 {
+                            tracing::error!("Failed to register GNOME panel icon after {} attempts: {}", retry_delays.len(), e);
+                        } else {
+                            tracing::warn!("GNOME panel icon registration failed: {}", e);
+                        }
+                    }
+                }
+            }
 
-    // 5b. Monitor suspend/resume and watcher restarts to trigger tray respawn
-    tokio::spawn(monitor_suspend_resume(Arc::clone(&tray_respawn)));
-    tokio::spawn(monitor_watcher_restart(Arc::clone(&tray_respawn)));
+            // Spawn sync task: push DaemonState → GNOME Shell panel icon
+            if registered {
+                let sync_state = Arc::clone(&state);
+                let sync_name = definition.name.to_string();
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+                    let mut last_badge: u32 = u32::MAX;
+                    let mut last_visible: bool = false;
+                    let mut last_dnd: bool = false;
+
+                    loop {
+                        interval.tick().await;
+
+                        if sync_state.quit_requested.load(Ordering::Relaxed) {
+                            break;
+                        }
+
+                        let badge = sync_state.badge_count.load(Ordering::Relaxed);
+                        let visible = sync_state.visible.load(Ordering::Relaxed);
+                        let dnd = sync_state.dnd.load(Ordering::Relaxed);
+
+                        if badge != last_badge {
+                            last_badge = badge;
+                            if let Err(e) = gnome_shell::update_badge(&sync_name, badge).await {
+                                tracing::debug!("Failed to update panel badge: {}", e);
+                            }
+                        }
+                        if visible != last_visible {
+                            last_visible = visible;
+                            if let Err(e) = gnome_shell::update_visible(&sync_name, visible).await {
+                                tracing::debug!("Failed to update panel visible: {}", e);
+                            }
+                        }
+                        if dnd != last_dnd {
+                            last_dnd = dnd;
+                            if let Err(e) = gnome_shell::update_dnd(&sync_name, dnd).await {
+                                tracing::debug!("Failed to update panel DND: {}", e);
+                            }
+                        }
+                    }
+
+                    // Clean up panel icon on shutdown
+                    let _ = gnome_shell::unregister_service(&sync_name).await;
+                });
+            }
+        }
+        TrayBackend::Sni | TrayBackend::Auto => {
+            // SNI tray icon lifecycle (Auto should never reach here, but handle gracefully)
+            let icon_path = dirs::data_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
+                .join("loft/icons")
+                .join(definition.app_icon_filename);
+
+            let tray_respawn = Arc::new(tokio::sync::Notify::new());
+
+            tokio::spawn(tray::run_tray_lifecycle(
+                Arc::clone(&state),
+                definition.name.to_string(),
+                definition.display_name.to_string(),
+                definition.tray_icon_name(),
+                icon_path,
+                Arc::clone(&tray_respawn),
+            ));
+
+            // Monitor suspend/resume and watcher restarts to trigger tray respawn
+            tokio::spawn(monitor_suspend_resume(Arc::clone(&tray_respawn)));
+            tokio::spawn(monitor_watcher_restart(Arc::clone(&tray_respawn)));
+        }
+    }
 
     // 6. Start native messaging socket server
     let cmd_tx = state.cmd_tx.clone();
@@ -173,7 +260,8 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
         cmd_tx,
     ));
 
-    // 6b. Start GNOME Shell extension handler (parallel to NM relay)
+    // 6b. Start GNOME Shell extension handler for window focus/hide
+    //     (always runs — handles FocusWindow/HideWindow D-Bus calls regardless of tray backend)
     {
         let wm_class = definition.chrome_desktop_id.to_string();
         let mut cmd_rx = state.cmd_tx.subscribe();
