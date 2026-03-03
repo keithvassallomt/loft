@@ -208,38 +208,53 @@ export default class LoftShellHelper extends Extension {
 
         const indicator = new PanelMenu.Button(0.0, `loft-${name}`, false);
 
-        // Icon with overlay badge
-        const iconBin = new St.Widget({
+        const box = new St.Widget({
             layout_manager: new Clutter.BinLayout(),
+            x_expand: false,
+            y_expand: true,
+            style_class: 'panel-status-indicators-box',
         });
+        indicator.add_child(box);
 
         const icon = new St.Icon({
             icon_name: iconName,
             style_class: 'system-status-icon',
-        });
-        iconBin.add_child(icon);
-
-        // Badge — small red circle overlaid on top-right corner of icon
-        const badge = new St.Label({
-            text: '',
-            style: `background-color: #e01b24;
-                    color: white;
-                    font-size: 8px;
-                    font-weight: bold;
-                    border-radius: 7px;
-                    min-width: 12px;
-                    min-height: 14px;
-                    padding: 0 2px;
-                    text-align: center;`,
-            x_align: Clutter.ActorAlign.END,
-            y_align: Clutter.ActorAlign.START,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
             x_expand: true,
             y_expand: true,
+        });
+        box.add_child(icon);
+
+        // Small red dot at bottom-right of the icon.
+        // BinLayout alignment is unreliable for overlay positioning, so we
+        // track the icon's actual allocation and set the dot position explicitly.
+        const DOT_SIZE = 6;
+        const badge = new St.Widget({
+            style: `background-color: #e01b24; border-radius: ${DOT_SIZE / 2}px; width: ${DOT_SIZE}px; height: ${DOT_SIZE}px;`,
             visible: false,
         });
-        iconBin.add_child(badge);
+        box.add_child(badge);
 
-        indicator.add_child(iconBin);
+        // Small grey dash at bottom-left for DND indicator.
+        const DASH_W = 8;
+        const DASH_H = 2;
+        const dndBadge = new St.Widget({
+            style: `background-color: #888888; border-radius: ${DASH_H / 2}px; width: ${DASH_W}px; height: ${DASH_H}px;`,
+            visible: false,
+        });
+        box.add_child(dndBadge);
+
+        icon.connect('notify::allocation', () => {
+            badge.set_position(
+                icon.x + icon.width - DOT_SIZE,
+                icon.y + icon.height - DOT_SIZE
+            );
+            dndBadge.set_position(
+                icon.x,
+                icon.y + icon.height - DASH_H
+            );
+        });
 
         // --- Popup menu ---
 
@@ -294,6 +309,7 @@ export default class LoftShellHelper extends Extension {
         this._panelIcons.set(name, {
             indicator,
             badge,
+            dndBadge,
             dndItem,
             showHideItem,
             wmClass,
@@ -314,18 +330,14 @@ export default class LoftShellHelper extends Extension {
     _updateBadge(name, count) {
         const entry = this._panelIcons.get(name);
         if (!entry) return;
-        if (count > 0) {
-            entry.badge.text = count > 99 ? '99+' : String(count);
-            entry.badge.visible = true;
-        } else {
-            entry.badge.visible = false;
-        }
+        entry.badge.visible = count > 0;
     }
 
     _updateDnd(name, enabled) {
         const entry = this._panelIcons.get(name);
         if (!entry) return;
         entry.dndItem.setToggleState(enabled);
+        entry.dndBadge.visible = enabled;
     }
 
     _updateVisible(name, visible) {

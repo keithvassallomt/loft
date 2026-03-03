@@ -1,16 +1,30 @@
 (function () {
   "use strict";
 
-  // Always remove stale Loft DOM elements before (re-)initializing.
-  // After CDP extension reload, the old isolated world is dead but its DOM
-  // elements (with dead click handlers) persist.  The new injection may run
-  // in a fresh isolated world where __loft_content_installed is unset, but
-  // the old #loft-titlebar is still in the DOM.  Clean it up unconditionally.
+  // Guard against double-injection in the same isolated world.
+  // When Chrome loads the extension via CDP it both auto-injects via the
+  // manifest AND background.js calls injectContentScripts() for already-open
+  // tabs.  Without this guard both injections run to completion, producing
+  // two independent scanForUnreadMessages() loops with separate
+  // notifiedConversations Sets — the root cause of duplicate Messenger
+  // notifications (one without photo, one with).
+  // After a CDP reload the isolated world is brand-new so the flag is unset
+  // and we fall through normally.
+  //
+  // IMPORTANT: This guard must come BEFORE the stale DOM cleanup below.
+  // If the second injection removes the live titlebar first and then exits
+  // at the guard, the titlebar is gone and never re-created.
+  if (window.__loft_content_installed) return;
+  window.__loft_content_installed = true;
+
+  // Clean up stale Loft DOM elements — they may survive from a previous
+  // isolated world (dead after CDP reload) whose JS is gone but whose DOM
+  // nodes persist.  Safe to run here because the guard above ensures we
+  // only reach this point in a fresh world.
   const oldBar = document.getElementById('loft-titlebar');
   if (oldBar) oldBar.remove();
   const oldBubble = document.getElementById('loft-first-run-bubble');
   if (oldBubble) oldBubble.remove();
-  window.__loft_content_installed = true;
 
   // Determine which service we're on
   const url = window.location.href;
@@ -33,6 +47,15 @@
     }
   }
 
+  // Messenger notification tracking — hoisted to outer scope so both the
+  // scanner (inside the messenger block) and the dnd_changed listener
+  // (outside it) can access them.
+  // Map<href, previewFingerprint> — tracks conversation href AND the latest
+  // message preview so new messages in an already-unread conversation are
+  // detected as fresh notification events.
+  const notifiedConversations = new Map();
+  let messengerDnd = false;
+
   // ================================================================
   // Loft titlebar — auto-hide bar with hide-to-tray button
   // ================================================================
@@ -40,81 +63,102 @@
   let titlebarEnabled = true;
 
   function createLoftTitleBar() {
-    const bar = document.createElement('div');
-    bar.id = 'loft-titlebar';
-    bar.style.cssText = [
-      'position: fixed',
+    // Use Shadow DOM to fully isolate titlebar CSS from the host page.
+    // Facebook/Messenger aggressively styles elements and can override
+    // inline styles via !important rules on broad selectors.
+    const host = document.createElement('div');
+    host.id = 'loft-titlebar';
+    host.style.cssText = [
+      'position: fixed !important',
       'top: -' + TITLEBAR_HEIGHT + 'px',
-      'left: 0',
-      'width: 100%',
-      'height: ' + TITLEBAR_HEIGHT + 'px',
-      'background: #1a1a1a',
-      'z-index: 2147483647',
-      'display: flex',
-      'align-items: center',
-      'justify-content: space-between',
-      'border-bottom: 1px solid #333',
-      'user-select: none',
+      'left: 0 !important',
+      'width: 100% !important',
+      'height: ' + TITLEBAR_HEIGHT + 'px !important',
+      'z-index: 2147483647 !important',
+      'display: block !important',
+      'visibility: visible !important',
+      'opacity: 1 !important',
       'transition: top 0.2s ease',
-      'box-sizing: border-box',
-      'padding: 0 8px',
-      'pointer-events: auto',
+      'pointer-events: auto !important',
     ].join('; ');
 
-    // Left side: "Loft" label
+    const shadow = host.attachShadow({ mode: 'closed' });
+
+    const style = document.createElement('style');
+    style.textContent = `
+      :host { all: initial; }
+      .bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        height: ${TITLEBAR_HEIGHT}px;
+        background: #1a1a1a;
+        border-bottom: 1px solid #333;
+        box-sizing: border-box;
+        padding: 0 8px;
+        user-select: none;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      .label {
+        color: #888;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+      }
+      .controls {
+        display: flex;
+        gap: 2px;
+        align-items: center;
+      }
+      button {
+        all: unset;
+        color: #666;
+        font-size: 14px;
+        cursor: pointer;
+        padding: 4px 12px;
+        line-height: 1;
+        border-radius: 3px;
+        box-sizing: border-box;
+      }
+      button:hover {
+        color: #fff;
+        background: rgba(255,255,255,0.1);
+      }
+      button.hide-btn { font-size: 10px; }
+    `;
+    shadow.appendChild(style);
+
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+
     const label = document.createElement('span');
+    label.className = 'label';
     label.textContent = 'Loft';
-    label.style.cssText = [
-      'color: #888',
-      'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-      'font-size: 12px',
-      'font-weight: 600',
-      'letter-spacing: 0.5px',
-    ].join('; ');
 
-    // Helper: create a titlebar button with consistent styling + hover effect
-    function makeTitlebarBtn(text, title, fontSize) {
-      const btn = document.createElement('button');
-      btn.textContent = text;
-      btn.title = title;
-      btn.style.cssText = [
-        'background: none',
-        'border: none',
-        'color: #666',
-        'font-size: ' + fontSize,
-        'cursor: pointer',
-        'padding: 4px 12px',
-        'line-height: 1',
-        'border-radius: 3px',
-      ].join('; ');
-      btn.addEventListener('mouseenter', () => {
-        btn.style.color = '#fff';
-        btn.style.background = 'rgba(255,255,255,0.1)';
-      });
-      btn.addEventListener('mouseleave', () => {
-        btn.style.color = '#666';
-        btn.style.background = 'none';
-      });
-      return btn;
-    }
-
-    // Right side: zoom controls + hide button
     const rightGroup = document.createElement('div');
-    rightGroup.style.cssText = 'display: flex; gap: 2px; align-items: center';
+    rightGroup.className = 'controls';
 
-    const zoomOutBtn = makeTitlebarBtn('\u2212', 'Zoom out', '14px'); // −
+    const zoomOutBtn = document.createElement('button');
+    zoomOutBtn.textContent = '\u2212';
+    zoomOutBtn.title = 'Zoom out';
     zoomOutBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       safeSendMessage({ type: 'zoom_out' });
     });
 
-    const zoomInBtn = makeTitlebarBtn('+', 'Zoom in', '14px');
+    const zoomInBtn = document.createElement('button');
+    zoomInBtn.textContent = '+';
+    zoomInBtn.title = 'Zoom in';
     zoomInBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       safeSendMessage({ type: 'zoom_in' });
     });
 
-    const hideBtn = makeTitlebarBtn('\u25B2', 'Hide to tray', '10px'); // ▲
+    const hideBtn = document.createElement('button');
+    hideBtn.className = 'hide-btn';
+    hideBtn.textContent = '\u25B2';
+    hideBtn.title = 'Hide to tray';
     hideBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       safeSendMessage({ type: 'hide_request' });
@@ -123,12 +167,12 @@
     rightGroup.appendChild(zoomOutBtn);
     rightGroup.appendChild(zoomInBtn);
     rightGroup.appendChild(hideBtn);
-
     bar.appendChild(label);
     bar.appendChild(rightGroup);
-    // Append (not prepend) so the bar is last in DOM order — ensures it
+    shadow.appendChild(bar);
+    // Append (not prepend) so the host is last in DOM order — ensures it
     // paints on top of any same-z-index fixed elements inside the app.
-    document.body.appendChild(bar);
+    document.body.appendChild(host);
 
     // Find the app's root container (works for WhatsApp #app, Messenger, etc.)
     function getAppRoot() {
@@ -149,7 +193,7 @@
       if (hideTimeout) { clearTimeout(hideTimeout); hideTimeout = null; }
       if (barVisible || !titlebarEnabled) return;
       barVisible = true;
-      bar.style.top = '0';
+      host.style.top = '0';
       const root = getAppRoot();
       if (root) {
         root.style.setProperty('transition', 'margin-top 0.2s ease, max-height 0.2s ease', 'important');
@@ -160,7 +204,7 @@
     function hideBar() {
       if (!barVisible) return;
       barVisible = false;
-      bar.style.top = '-' + TITLEBAR_HEIGHT + 'px';
+      host.style.top = '-' + TITLEBAR_HEIGHT + 'px';
       const root = getAppRoot();
       if (root) {
         root.style.setProperty('margin-top', '0', 'important');
@@ -375,16 +419,39 @@
   // Messenger DOM notification scraping (Messenger only)
   // ================================================================
   if (service === "messenger") {
-    // Set of conversation hrefs we've already notified about.
-    // Cleared when the conversation loses its "Unread message:" indicator,
-    // so re-appearing unreads trigger a fresh notification.
-    const notifiedConversations = new Set();
     // Suppress notifications during a startup grace period.  Messenger's
     // React UI re-renders conversation elements multiple times during load,
     // creating "new" hrefs that a simple first-scan boolean would miss.
     // A time-based window catches all of these initial renders.
     const loadTime = Date.now();
     const STARTUP_GRACE_MS = 15000;
+
+    /**
+     * Get a lightweight fingerprint of a conversation's latest message.
+     * Returns the first two substantial text nodes after the "Unread message:"
+     * marker (typically sender name + message preview), joined with "|".
+     * When a new message arrives, the preview changes, producing a different
+     * fingerprint — which lets the scanner detect it as a new event.
+     */
+    function getConversationFingerprint(anchor) {
+      const walker = document.createTreeWalker(anchor, NodeFilter.SHOW_TEXT, null);
+      let foundMarker = false;
+      let textNode;
+      const parts = [];
+      while ((textNode = walker.nextNode())) {
+        if (foundMarker) {
+          const text = textNode.textContent.trim();
+          if (text && text.length > 1 && !/^\d+[hms]$/.test(text) && text !== "·" && !/^Active\b/.test(text)) {
+            parts.push(text);
+            if (parts.length >= 2) break;
+          }
+        }
+        if (textNode.textContent.trim() === "Unread message:") {
+          foundMarker = true;
+        }
+      }
+      return parts.join("|");
+    }
 
     /**
      * Scan the conversation list for unread messages and send
@@ -414,14 +481,33 @@
         }
 
         if (!isUnread) continue;
+
+        // Muted conversations are excluded entirely — no badge count,
+        // no notifications.  Messenger marks them with an SVG using
+        // the --disabled-icon CSS variable.
+        if (anchor.querySelector('[style*="--disabled-icon"]')) continue;
+
         currentlyUnread.add(href);
 
-        // Skip if we already notified about this conversation
-        if (notifiedConversations.has(href)) continue;
-        notifiedConversations.add(href);
+        // Compare fingerprint (sender + preview) to detect new messages
+        // in an already-unread conversation, not just new conversations.
+        const fingerprint = getConversationFingerprint(anchor);
+        if (notifiedConversations.get(href) === fingerprint) continue;
 
         // Don't fire notifications during startup grace period
-        if (Date.now() - loadTime < STARTUP_GRACE_MS) continue;
+        if (Date.now() - loadTime < STARTUP_GRACE_MS) {
+          notifiedConversations.set(href, fingerprint);
+          continue;
+        }
+
+        // When DND is active, mark conversations as handled (so they don't
+        // re-trigger when DND is turned off) but don't send the notification.
+        if (messengerDnd) {
+          notifiedConversations.set(href, fingerprint);
+          continue;
+        }
+
+        notifiedConversations.set(href, fingerprint);
 
         const notification = extractConversationData(anchor, href);
         if (notification) {
@@ -431,7 +517,7 @@
 
       // Remove conversations that are no longer unread so we
       // re-notify if they become unread again later
-      for (const href of notifiedConversations) {
+      for (const [href] of notifiedConversations) {
         if (!currentlyUnread.has(href)) {
           notifiedConversations.delete(href);
         }
@@ -464,6 +550,7 @@
           text.length < 100 &&
           !text.match(/^\d+[hms]$/) &&  // skip timestamps like "2h", "5m"
           !text.match(/^·$/) &&          // skip separator dots
+          !text.match(/^Active\b/) &&    // skip online status ("Active Now", "Active 2h ago")
           !span.querySelector("span")    // prefer leaf-level spans
         ) {
           senderName = text;
@@ -524,8 +611,12 @@
           childList: true,
           subtree: true,
         });
-        // Initial scan after page settles
-        setTimeout(scanForUnreadMessages, 5000);
+        // Initial scans — retry a few times to catch slow page loads
+        setTimeout(scanForUnreadMessages, 3000);
+        setTimeout(scanForUnreadMessages, 8000);
+        setTimeout(scanForUnreadMessages, 15000);
+        // Periodic fallback scan (catches cases where MutationObserver misses a change)
+        setInterval(scanForUnreadMessages, 10000);
       } else {
         setTimeout(startDomObserver, 500);
       }
@@ -570,6 +661,11 @@
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "dnd_changed") {
       console.log("Loft: DND changed to", msg.enabled);
+      // Update Messenger DND tracking so scanForUnreadMessages() knows
+      // whether to suppress notifications for new unread conversations.
+      if (service === "messenger") {
+        messengerDnd = !!msg.enabled;
+      }
       // Relay to MAIN world so notification-override.js can suppress notifications
       window.postMessage({ __loft_dnd: !!msg.enabled }, "*");
     }

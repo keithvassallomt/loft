@@ -26,6 +26,7 @@ pub struct DaemonState {
     /// on the first `WindowShown` event (for `--minimized` startup).
     pub start_minimized: AtomicBool,
     pub show_titlebar: AtomicBool,
+    pub badges_enabled: AtomicBool,
     pub show_signal: Notify,
     pub chrome_pid: tokio::sync::Mutex<Option<u32>>,
     /// Broadcast channel for sending commands to the extension via native messaging.
@@ -33,7 +34,7 @@ pub struct DaemonState {
 }
 
 impl DaemonState {
-    pub fn new(dnd: bool, minimized: bool, show_titlebar: bool) -> Self {
+    pub fn new(dnd: bool, minimized: bool, show_titlebar: bool, badges_enabled: bool) -> Self {
         let (cmd_tx, _) = tokio::sync::broadcast::channel(16);
         Self {
             visible: AtomicBool::new(false),
@@ -42,6 +43,7 @@ impl DaemonState {
             quit_requested: AtomicBool::new(false),
             start_minimized: AtomicBool::new(minimized),
             show_titlebar: AtomicBool::new(show_titlebar),
+            badges_enabled: AtomicBool::new(badges_enabled),
             show_signal: Notify::new(),
             chrome_pid: tokio::sync::Mutex::new(None),
             cmd_tx,
@@ -64,6 +66,10 @@ impl DaemonState {
         self.show_titlebar.load(Ordering::Relaxed)
     }
 
+    pub fn is_badges_enabled(&self) -> bool {
+        self.badges_enabled.load(Ordering::Relaxed)
+    }
+
     pub fn request_show(&self) {
         self.visible.store(true, Ordering::Relaxed);
         let _ = self.cmd_tx.send(messaging::DaemonMessage::ShowWindow);
@@ -79,11 +85,12 @@ impl DaemonState {
 
     pub fn request_quit(&self) {
         self.quit_requested.store(true, Ordering::Relaxed);
-        // Send SIGTERM to Chrome process
+        // Kill Chrome's entire process group (negative pid) so renderer,
+        // GPU, crashpad, and other helper processes all receive SIGTERM.
         if let Ok(guard) = self.chrome_pid.try_lock() {
             if let Some(pid) = *guard {
                 unsafe {
-                    libc::kill(pid as i32, libc::SIGTERM);
+                    libc::kill(-(pid as i32), libc::SIGTERM);
                 }
             }
         }
@@ -118,6 +125,7 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
         service_config.do_not_disturb,
         minimized,
         service_config.show_titlebar,
+        service_config.badges_enabled,
     ));
 
     // 3. Register D-Bus service
@@ -199,7 +207,8 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
                             break;
                         }
 
-                        let badge = sync_state.badge_count.load(Ordering::Relaxed);
+                        let raw_badge = sync_state.badge_count.load(Ordering::Relaxed);
+                        let badge = if sync_state.is_badges_enabled() { raw_badge } else { 0 };
                         let visible = sync_state.visible.load(Ordering::Relaxed);
                         let dnd = sync_state.dnd.load(Ordering::Relaxed);
 
@@ -227,6 +236,18 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
                     let _ = gnome_shell::unregister_service(&sync_name).await;
                 });
             }
+
+            // Monitor for GNOME Shell extension restarts (covers suspend/resume:
+            // GNOME locks the screen on suspend, which disables then re-enables
+            // all extensions, destroying and recreating the panel). When the
+            // ShellHelper name reappears, re-register and sync current state.
+            tokio::spawn(monitor_shell_helper_restart(
+                Arc::clone(&state),
+                svc_name,
+                display_name,
+                icon,
+                wm_class,
+            ));
         }
         TrayBackend::Sni | TrayBackend::Auto => {
             // SNI tray icon lifecycle (Auto should never reach here, but handle gracefully)
@@ -358,9 +379,26 @@ impl ChromeManager {
 
             let start_time = Instant::now();
 
-            // Wait for Chrome to exit (extension handles show/hide via
-            // chrome.windows.update while Chrome is running).
-            child.wait().await?;
+            // Wait for Chrome to exit. If it doesn't die within 5 seconds
+            // of a quit request, send SIGKILL to the process group to ensure
+            // all Chrome subprocesses are gone before the daemon exits.
+            loop {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    child.wait()
+                ).await {
+                    Ok(result) => { result?; break; }
+                    Err(_) if self.state.quit_requested.load(Ordering::Relaxed) => {
+                        tracing::warn!("Chrome didn't exit after SIGTERM, sending SIGKILL");
+                        if let Some(pid) = *self.state.chrome_pid.lock().await {
+                            unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+                        }
+                        child.wait().await?;
+                        break;
+                    }
+                    Err(_) => continue, // timeout but not quitting — keep waiting
+                }
+            }
             *self.state.chrome_pid.lock().await = None;
             self.state.visible.store(false, Ordering::Relaxed);
 
@@ -418,6 +456,10 @@ impl ChromeManager {
 
             use std::os::unix::process::CommandExt;
             cmd.pre_exec(move || {
+                // Put Chrome in its own process group so kill(-pid, sig)
+                // correctly signals Chrome and all its subprocesses.
+                libc::setpgid(0, 0);
+
                 // Chrome expects its CDP pipe on fd 3 (read) and fd 4 (write)
                 if libc::dup2(chrome_read_fd, 3) == -1 {
                     return Err(std::io::Error::last_os_error());
@@ -650,6 +692,84 @@ async fn monitor_suspend_resume(respawn: std::sync::Arc<tokio::sync::Notify>) {
             if !body.0 {
                 tracing::info!("Resumed from suspend, respawning tray icon");
                 respawn.notify_one();
+            }
+        }
+    }
+}
+
+/// Monitor the `chat.loft.ShellHelper` D-Bus name on the session bus.
+/// When the GNOME Shell extension restarts (e.g. after suspend/resume, which
+/// locks the screen and cycles disable/enable on all extensions), re-register
+/// the panel icon and sync current badge/visible/DND state.
+async fn monitor_shell_helper_restart(
+    state: Arc<DaemonState>,
+    svc_name: String,
+    display_name: String,
+    icon: String,
+    wm_class: String,
+) {
+    use futures_util::StreamExt;
+
+    let conn = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Cannot monitor ShellHelper restart (no session bus): {}", e);
+            return;
+        }
+    };
+
+    let rule = "type='signal',sender='org.freedesktop.DBus',\
+                interface='org.freedesktop.DBus',\
+                member='NameOwnerChanged',\
+                arg0='chat.loft.ShellHelper'";
+    if let Err(e) = conn
+        .call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "AddMatch",
+            &(rule,),
+        )
+        .await
+    {
+        tracing::warn!("Failed to subscribe to ShellHelper name changes: {}", e);
+        return;
+    }
+
+    tracing::debug!("Listening for ShellHelper restart events");
+    let mut stream = zbus::MessageStream::from(&conn);
+
+    while let Some(Ok(msg)) = stream.next().await {
+        if state.quit_requested.load(Ordering::Relaxed) {
+            break;
+        }
+        let member = msg.header().member().map(|m| m.as_str().to_string());
+        if member.as_deref() != Some("NameOwnerChanged") {
+            continue;
+        }
+        // NameOwnerChanged: (name, old_owner, new_owner)
+        // We only care about the name appearing (old empty, new non-empty).
+        if let Ok((name, old_owner, new_owner)) = msg.body().deserialize::<(String, String, String)>() {
+            if name == "chat.loft.ShellHelper" && old_owner.is_empty() && !new_owner.is_empty() {
+                tracing::info!("GNOME Shell helper restarted, re-registering panel icon for {}", svc_name);
+
+                // Brief pause so the extension's D-Bus handler is ready
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+                if let Err(e) = gnome_shell::register_service(&svc_name, &display_name, &icon, &wm_class).await {
+                    tracing::warn!("Failed to re-register panel icon after shell restart: {}", e);
+                    continue;
+                }
+
+                // Sync current state into the freshly created icon
+                let raw_badge = state.badge_count.load(Ordering::Relaxed);
+                let badge = if state.is_badges_enabled() { raw_badge } else { 0 };
+                let visible = state.visible.load(Ordering::Relaxed);
+                let dnd = state.dnd.load(Ordering::Relaxed);
+                let _ = gnome_shell::update_badge(&svc_name, badge).await;
+                let _ = gnome_shell::update_visible(&svc_name, visible).await;
+                let _ = gnome_shell::update_dnd(&svc_name, dnd).await;
+                tracing::info!("Panel icon re-registered and state synced (badge={}, visible={}, dnd={})", badge, visible, dnd);
             }
         }
     }

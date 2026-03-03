@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -8,6 +9,7 @@ use crate::service::ServiceDefinition;
 #[derive(Debug, Clone)]
 pub struct ChromeInfo {
     pub path: String,
+    pub display_name: String,
     pub launch_method: LaunchMethod,
 }
 
@@ -25,19 +27,44 @@ pub fn detect_chrome(config: &GlobalConfig) -> Result<ChromeInfo> {
         if is_executable(Path::new(path)) {
             return Ok(ChromeInfo {
                 path: path.clone(),
+                display_name: "Custom".to_string(),
                 launch_method: LaunchMethod::Direct,
             });
         }
         tracing::warn!("Configured Chrome path {} is not executable", path);
     }
 
-    // 2. Search PATH for google-chrome / google-chrome-stable
+    // Return the first result from detect_all_chrome
+    detect_all_chrome()
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("Google Chrome not found. Please install Google Chrome and try again."))
+}
+
+/// Detect all Chrome installations on the system.
+/// Returns a deduplicated list (by resolved path) in priority order.
+pub fn detect_all_chrome() -> Vec<ChromeInfo> {
+    let mut results = Vec::new();
+    let mut seen_paths = HashSet::new();
+
+    // Helper: add to results if path not already seen (resolving symlinks for dedup)
+    let mut add = |info: ChromeInfo| {
+        let canonical = std::fs::canonicalize(&info.path)
+            .unwrap_or_else(|_| PathBuf::from(&info.path));
+        let key = canonical.to_string_lossy().to_string();
+        if seen_paths.insert(key) {
+            results.push(info);
+        }
+    };
+
+    // 1. Search PATH for google-chrome / google-chrome-stable
     for name in &["google-chrome-stable", "google-chrome"] {
         if let Ok(output) = Command::new("which").arg(name).output() {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !path.is_empty() {
-                    return Ok(ChromeInfo {
+                    add(ChromeInfo {
+                        display_name: display_name_for_binary(name),
                         path,
                         launch_method: LaunchMethod::Direct,
                     });
@@ -46,39 +73,42 @@ pub fn detect_chrome(config: &GlobalConfig) -> Result<ChromeInfo> {
         }
     }
 
-    // 3-4. Well-known paths
+    // 2. Well-known paths
     for path in &[
         "/usr/bin/google-chrome-stable",
         "/usr/bin/google-chrome",
         "/opt/google/chrome/google-chrome",
     ] {
         if is_executable(Path::new(path)) {
-            return Ok(ChromeInfo {
+            let basename = Path::new(path)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
+            add(ChromeInfo {
+                display_name: display_name_for_binary(&basename),
                 path: path.to_string(),
                 launch_method: LaunchMethod::Direct,
             });
         }
     }
 
-    // 5. Flatpak
+    // 3. Flatpak
     if let Ok(output) = Command::new("flatpak")
         .args(["info", "com.google.Chrome"])
         .output()
     {
         if output.status.success() {
-            return Ok(ChromeInfo {
+            add(ChromeInfo {
+                display_name: "Google Chrome (Flatpak)".to_string(),
                 path: "com.google.Chrome".to_string(),
                 launch_method: LaunchMethod::Flatpak,
             });
         }
     }
 
-    // 6. AppImage scan
+    // 4. AppImage scan
     if let Some(home) = dirs::home_dir() {
-        let scan_dirs = [
-            home.join("Applications"),
-            home.join(".local/bin"),
-        ];
+        let scan_dirs = [home.join("Applications"), home.join(".local/bin")];
         for dir in &scan_dirs {
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
@@ -87,7 +117,9 @@ pub fn detect_chrome(config: &GlobalConfig) -> Result<ChromeInfo> {
                     if name_str.contains("chrome") && name_str.ends_with(".appimage") {
                         let path = entry.path();
                         if is_executable(&path) {
-                            return Ok(ChromeInfo {
+                            let file_name = name.to_string_lossy().to_string();
+                            add(ChromeInfo {
+                                display_name: format!("Chrome AppImage ({})", file_name),
                                 path: path.to_string_lossy().to_string(),
                                 launch_method: LaunchMethod::AppImage,
                             });
@@ -98,9 +130,16 @@ pub fn detect_chrome(config: &GlobalConfig) -> Result<ChromeInfo> {
         }
     }
 
-    Err(anyhow!(
-        "Google Chrome not found. Please install Google Chrome and try again."
-    ))
+    results
+}
+
+/// Map a Chrome binary name to a human-readable display name.
+fn display_name_for_binary(name: &str) -> String {
+    match name {
+        "google-chrome-stable" => "Google Chrome Stable".to_string(),
+        "google-chrome" => "Google Chrome".to_string(),
+        _ => name.to_string(),
+    }
 }
 
 /// Check if we're running inside a Flatpak sandbox.
@@ -208,6 +247,7 @@ mod tests {
     fn test_build_chrome_command_direct() {
         let chrome = ChromeInfo {
             path: "/usr/bin/google-chrome".to_string(),
+            display_name: "Google Chrome".to_string(),
             launch_method: LaunchMethod::Direct,
         };
         let args = vec!["--app=https://example.com".to_string()];

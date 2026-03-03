@@ -62,6 +62,8 @@ pub struct ServiceConfig {
     pub start_hidden: bool,
     #[serde(default = "default_true")]
     pub show_titlebar: bool,
+    #[serde(default = "default_true")]
+    pub badges_enabled: bool,
 }
 
 fn default_true() -> bool {
@@ -75,6 +77,7 @@ impl Default for ServiceConfig {
             do_not_disturb: false,
             start_hidden: false,
             show_titlebar: true,
+            badges_enabled: true,
         }
     }
 }
@@ -188,6 +191,7 @@ mod tests {
             do_not_disturb: false,
             start_hidden: true,
             show_titlebar: false,
+            badges_enabled: false,
         };
 
         let content = toml::to_string_pretty(&config).unwrap();
@@ -204,6 +208,7 @@ mod tests {
         assert!(!config.do_not_disturb);
         assert!(!config.start_hidden);
         assert!(config.show_titlebar);
+        assert!(config.badges_enabled);
     }
 
     #[test]
@@ -214,5 +219,6 @@ mod tests {
         assert!(config.autostart);
         assert!(!config.start_hidden);
         assert!(config.show_titlebar);
+        assert!(config.badges_enabled);
     }
 }

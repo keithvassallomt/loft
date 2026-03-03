@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use gtk4::gio;
 use gtk4::glib;
 use gtk4::prelude::*;
 use libadwaita::prelude::*;
@@ -105,6 +106,102 @@ fn show_service_list(content: &gtk4::Box) {
     });
 
     settings_group.add(&tray_combo);
+
+    // Chrome path selector
+    let detected_chromes = chrome::detect_all_chrome();
+    let chrome_combo = libadwaita::ComboRow::new();
+    chrome_combo.set_title("Chrome Path");
+
+    // Build the dropdown entries: detected installs + "Custom..."
+    let mut chrome_labels: Vec<String> = detected_chromes
+        .iter()
+        .map(|c| c.display_name.clone())
+        .collect();
+    chrome_labels.push("Custom…".to_string());
+    let chrome_model = gtk4::StringList::new(
+        &chrome_labels.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+    );
+    chrome_combo.set_model(Some(&chrome_model));
+
+    // Pre-select: match config.chrome_path against detected paths, or first entry if None
+    let custom_index = detected_chromes.len() as u32;
+    let initial_index = if let Some(ref configured) = global_config.chrome_path {
+        detected_chromes
+            .iter()
+            .position(|c| c.path == *configured)
+            .map(|i| i as u32)
+            .unwrap_or(custom_index) // configured path not in list → treat as custom
+    } else {
+        0
+    };
+    chrome_combo.set_selected(initial_index);
+
+    // Show the resolved path as subtitle
+    let initial_subtitle = if initial_index < custom_index {
+        detected_chromes[initial_index as usize].path.clone()
+    } else if let Some(ref p) = global_config.chrome_path {
+        p.clone()
+    } else {
+        String::new()
+    };
+    chrome_combo.set_subtitle(&initial_subtitle);
+
+    // Keep detected paths for the closure
+    let chrome_paths: Vec<String> = detected_chromes.iter().map(|c| c.path.clone()).collect();
+
+    chrome_combo.connect_selected_notify(move |combo| {
+        let selected = combo.selected();
+        if selected < custom_index {
+            // User picked a detected install
+            let path = &chrome_paths[selected as usize];
+            combo.set_subtitle(path);
+            let mut config = GlobalConfig::load().unwrap_or_default();
+            if selected == 0 {
+                // First entry = auto-detect (clear override)
+                config.chrome_path = None;
+            } else {
+                config.chrome_path = Some(path.clone());
+            }
+            if let Err(e) = config.save() {
+                tracing::error!("Failed to save Chrome path setting: {}", e);
+            }
+        } else {
+            // "Custom..." selected — open a file picker
+            let combo_clone = combo.clone();
+            let dialog = gtk4::FileDialog::new();
+            dialog.set_title("Select Chrome Binary");
+
+            // Start in /usr/bin if no custom path is set
+            let initial_folder = gio::File::for_path("/usr/bin");
+            dialog.set_initial_folder(Some(&initial_folder));
+
+            let window = combo
+                .root()
+                .and_then(|r| r.downcast::<gtk4::Window>().ok());
+
+            dialog.open(window.as_ref(), gio::Cancellable::NONE, move |result| {
+                match result {
+                    Ok(file) => {
+                        if let Some(path) = file.path() {
+                            let path_str = path.to_string_lossy().to_string();
+                            combo_clone.set_subtitle(&path_str);
+                            let mut config = GlobalConfig::load().unwrap_or_default();
+                            config.chrome_path = Some(path_str);
+                            if let Err(e) = config.save() {
+                                tracing::error!("Failed to save Chrome path: {}", e);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // User cancelled — revert to previous selection
+                        // (stay on "Custom..." with existing subtitle)
+                    }
+                }
+            });
+        }
+    });
+
+    settings_group.add(&chrome_combo);
     outer.append(&settings_group);
 
     // --- Service list ---
@@ -309,6 +406,30 @@ fn create_installed_row(
     });
 
     row.add_row(&titlebar_row);
+
+    // Show Badges toggle
+    let badges_row = libadwaita::SwitchRow::new();
+    badges_row.set_title("Show Badges");
+    badges_row.set_subtitle("Display unread message indicator on tray icon");
+    badges_row.set_active(config.badges_enabled);
+
+    badges_row.connect_active_notify(move |switch| {
+        let enabled = switch.is_active();
+        let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
+        cfg.badges_enabled = enabled;
+        if let Err(e) = cfg.save(&definition.name) {
+            tracing::error!("Failed to save badges_enabled for {}: {}", definition.display_name, e);
+        }
+
+        // Update running daemon via D-Bus (fire-and-forget)
+        glib::spawn_future_local(async move {
+            if let Err(e) = crate::daemon::dbus::call_set_badges_enabled(definition, enabled).await {
+                tracing::debug!("Could not update running daemon badges setting: {}", e);
+            }
+        });
+    });
+
+    row.add_row(&badges_row);
 
     row
 }

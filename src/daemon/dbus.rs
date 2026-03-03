@@ -81,6 +81,19 @@ impl LoftService {
             }
         }
     }
+
+    async fn set_badges_enabled(&self, enabled: bool) {
+        tracing::info!("D-Bus SetBadgesEnabled({}) called", enabled);
+        self.state.badges_enabled.store(enabled, Ordering::Relaxed);
+
+        // Persist to config
+        if let Ok(mut config) = ServiceConfig::load(&self.service_name) {
+            config.badges_enabled = enabled;
+            if let Err(e) = config.save(&self.service_name) {
+                tracing::error!("Failed to save config: {}", e);
+            }
+        }
+    }
 }
 
 fn bus_name_for(definition: &ServiceDefinition) -> Result<WellKnownName<'static>> {
@@ -134,6 +147,25 @@ pub async fn call_set_show_titlebar(definition: &ServiceDefinition, show: bool) 
             Some(iface),
             "SetShowTitlebar",
             &(show,),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Send a SetBadgesEnabled() call to the already-running daemon instance.
+pub async fn call_set_badges_enabled(definition: &ServiceDefinition, enabled: bool) -> Result<()> {
+    let connection = zbus::Connection::session().await?;
+    let bus_name = bus_name_for(definition)?;
+    let path = object_path_for(definition)?;
+    let iface = InterfaceName::try_from("chat.loft.Service")
+        .map_err(|e| anyhow::anyhow!("Invalid interface: {}", e))?;
+    connection
+        .call_method(
+            Some(BusName::from(bus_name)),
+            path,
+            Some(iface),
+            "SetBadgesEnabled",
+            &(enabled,),
         )
         .await?;
     Ok(())

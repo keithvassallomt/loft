@@ -7,6 +7,19 @@ let offscreenCreated = false;
 let lastPolledVisible = null;
 let dndEnabled = false;
 
+// Re-send the current DND state to the active Loft tab so the MAIN world
+// notification-override.js stays in sync (chrome.tabs.sendMessage is
+// unreliable for minimized tabs).
+function syncDndToTab() {
+  chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs) {
+      if (isLoftTab(tab.url)) {
+        chrome.tabs.sendMessage(tab.id, { type: "dnd_changed", enabled: dndEnabled }).catch(() => {});
+      }
+    }
+  });
+}
+
 // Maps chrome.notifications ID → conversation href for click-to-navigate
 const notificationHrefs = new Map();
 
@@ -155,6 +168,10 @@ function showAppWindow() {
         if (port) {
           port.postMessage({ type: "window_shown" });
         }
+        // Re-sync DND state to the content script → MAIN world relay.
+        // chrome.tabs.sendMessage is unreliable for minimized tabs, so the
+        // MAIN world notification-override.js may have a stale loftDnd flag.
+        syncDndToTab();
       }
     });
   } else {

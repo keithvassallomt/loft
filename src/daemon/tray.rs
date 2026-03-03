@@ -69,6 +69,17 @@ impl Tray for LoftTray {
         self.icon_data.clone()
     }
 
+    fn overlay_icon_pixmap(&self) -> Vec<Icon> {
+        let has_badge = self.badge_count > 0;
+        let has_dnd = self.dnd;
+        match (has_badge, has_dnd) {
+            (true, true) => vec![generate_combined_overlay()],
+            (true, false) => vec![generate_red_dot_overlay()],
+            (false, true) => vec![generate_dnd_dash_overlay()],
+            (false, false) => vec![],
+        }
+    }
+
     fn activate(&mut self, _x: i32, _y: i32) {
         // Left-click: toggle visibility
         if self.visible {
@@ -163,6 +174,131 @@ fn load_icon(path: &PathBuf) -> Vec<Icon> {
     }
 }
 
+/// Generate a small red dot overlay icon (ARGB32) for the badge indicator.
+/// Matches the GNOME panel dot: #e01b24, positioned at bottom-right.
+fn generate_red_dot_overlay() -> Icon {
+    const SIZE: i32 = 22;
+    const DOT_RADIUS: f32 = 3.5;
+    // Centre the dot in the bottom-right corner with a small margin
+    const DOT_CX: f32 = SIZE as f32 - DOT_RADIUS - 1.0;
+    const DOT_CY: f32 = SIZE as f32 - DOT_RADIUS - 1.0;
+    // GNOME Adwaita red: #e01b24
+    const R: f32 = 0xE0 as f32;
+    const G: f32 = 0x1B as f32;
+    const B: f32 = 0x24 as f32;
+
+    let mut data = vec![0u8; (SIZE * SIZE * 4) as usize];
+
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let dx = x as f32 + 0.5 - DOT_CX;
+            let dy = y as f32 + 0.5 - DOT_CY;
+            let dist = (dx * dx + dy * dy).sqrt();
+
+            // Anti-aliased edge: smooth over a 1px transition band
+            let alpha = if dist <= DOT_RADIUS - 0.5 {
+                1.0
+            } else if dist <= DOT_RADIUS + 0.5 {
+                DOT_RADIUS + 0.5 - dist
+            } else {
+                continue;
+            };
+
+            let idx = ((y * SIZE + x) * 4) as usize;
+            // ARGB32, network byte order (big-endian): A R G B
+            data[idx] = (alpha * 255.0) as u8;
+            data[idx + 1] = (alpha * R) as u8;
+            data[idx + 2] = (alpha * G) as u8;
+            data[idx + 3] = (alpha * B) as u8;
+        }
+    }
+
+    Icon {
+        width: SIZE,
+        height: SIZE,
+        data,
+    }
+}
+
+/// Generate a small horizontal dash overlay icon (ARGB32) for DND mode.
+/// Grey (#888888), positioned at bottom-left — visually distinct from the
+/// red badge dot at bottom-right.
+fn generate_dnd_dash_overlay() -> Icon {
+    const SIZE: i32 = 22;
+    // Dash dimensions and position (bottom-left corner)
+    const DASH_W: f32 = 6.0;
+    const DASH_H: f32 = 2.0;
+    const DASH_X: f32 = 1.0; // left margin
+    const DASH_Y: f32 = SIZE as f32 - DASH_H - 2.0; // bottom margin
+    // Muted grey: #888888
+    const R: f32 = 0x88 as f32;
+    const G: f32 = 0x88 as f32;
+    const B: f32 = 0x88 as f32;
+
+    let mut data = vec![0u8; (SIZE * SIZE * 4) as usize];
+
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let fx = x as f32 + 0.5;
+            let fy = y as f32 + 0.5;
+
+            // Anti-aliased rounded rectangle (pill shape)
+            let corner_r = DASH_H / 2.0;
+            // Clamp to the straight segment for distance calculation
+            let cx = fx.clamp(DASH_X + corner_r, DASH_X + DASH_W - corner_r);
+            let cy = DASH_Y + corner_r; // vertical centre
+            let dx = fx - cx;
+            let dy = fy - cy;
+            let dist = (dx * dx + dy * dy).sqrt();
+
+            let alpha = if dist <= corner_r - 0.5 {
+                1.0
+            } else if dist <= corner_r + 0.5 {
+                corner_r + 0.5 - dist
+            } else {
+                continue;
+            };
+
+            let idx = ((y * SIZE + x) * 4) as usize;
+            data[idx] = (alpha * 255.0) as u8;
+            data[idx + 1] = (alpha * R) as u8;
+            data[idx + 2] = (alpha * G) as u8;
+            data[idx + 3] = (alpha * B) as u8;
+        }
+    }
+
+    Icon {
+        width: SIZE,
+        height: SIZE,
+        data,
+    }
+}
+
+/// Generate a combined overlay with both the red badge dot (bottom-right)
+/// and the grey DND dash (bottom-left).
+fn generate_combined_overlay() -> Icon {
+    let dot = generate_red_dot_overlay();
+    let dash = generate_dnd_dash_overlay();
+
+    // Both are the same size; composite by taking the non-transparent pixel
+    let mut data = dot.data;
+    for (i, &b) in dash.data.iter().enumerate() {
+        if i % 4 == 0 && b > 0 {
+            // This pixel has alpha in the dash — copy the whole pixel
+            data[i] = dash.data[i];
+            data[i + 1] = dash.data[i + 1];
+            data[i + 2] = dash.data[i + 2];
+            data[i + 3] = dash.data[i + 3];
+        }
+    }
+
+    Icon {
+        width: dot.width,
+        height: dot.height,
+        data,
+    }
+}
+
 /// Run the tray icon lifecycle: spawn with retry, sync state, and respawn
 /// when signalled (e.g. after suspend/resume) or when duplicate registrations
 /// are detected (caused by ksni auto-re-registering with the SNI watcher).
@@ -232,7 +368,8 @@ pub async fn run_tray_lifecycle(
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let badge = state.badge_count.load(Ordering::Relaxed);
+                    let raw_badge = state.badge_count.load(Ordering::Relaxed);
+                    let badge = if state.is_badges_enabled() { raw_badge } else { 0 };
                     let visible = state.visible.load(Ordering::Relaxed);
                     let dnd = state.dnd.load(Ordering::Relaxed);
 
@@ -357,7 +494,7 @@ mod tests {
     use super::*;
 
     fn make_test_state() -> Arc<DaemonState> {
-        Arc::new(DaemonState::new(false, false, true))
+        Arc::new(DaemonState::new(false, false, true, true))
     }
 
     #[test]
