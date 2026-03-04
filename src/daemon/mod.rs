@@ -160,7 +160,6 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
         chrome_info.path,
         match chrome_info.launch_method {
             chrome::LaunchMethod::Direct => "direct",
-            chrome::LaunchMethod::Flatpak => "flatpak",
             chrome::LaunchMethod::AppImage => "appimage",
         }
     );

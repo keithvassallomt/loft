@@ -27,7 +27,7 @@ pub fn install_service(definition: &ServiceDefinition) -> Result<()> {
 pub fn uninstall_service(definition: &ServiceDefinition, delete_data: bool) -> Result<()> {
     remove_desktop_entry(definition)?;
 
-    // Remove autostart entry (XDG path; portal cleanup is best-effort)
+    // Remove autostart entry
     let _ = set_autostart(definition, false);
 
     // Remove app and tray icons from XDG icon theme

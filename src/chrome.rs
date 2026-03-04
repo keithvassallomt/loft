@@ -16,7 +16,6 @@ pub struct ChromeInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub enum LaunchMethod {
     Direct,
-    Flatpak,
     AppImage,
 }
 
@@ -92,21 +91,7 @@ pub fn detect_all_chrome() -> Vec<ChromeInfo> {
         }
     }
 
-    // 3. Flatpak
-    if let Ok(output) = Command::new("flatpak")
-        .args(["info", "com.google.Chrome"])
-        .output()
-    {
-        if output.status.success() {
-            add(ChromeInfo {
-                display_name: "Google Chrome (Flatpak)".to_string(),
-                path: "com.google.Chrome".to_string(),
-                launch_method: LaunchMethod::Flatpak,
-            });
-        }
-    }
-
-    // 4. AppImage scan
+    // 3. AppImage scan
     if let Some(home) = dirs::home_dir() {
         let scan_dirs = [home.join("Applications"), home.join(".local/bin")];
         for dir in &scan_dirs {
@@ -142,11 +127,6 @@ fn display_name_for_binary(name: &str) -> String {
     }
 }
 
-/// Check if we're running inside a Flatpak sandbox.
-pub fn is_flatpak() -> bool {
-    Path::new("/.flatpak-info").exists()
-}
-
 /// Build the Chrome command-line arguments for a service.
 ///
 /// Chrome 137+ removed `--load-extension` from branded builds, so we use
@@ -171,31 +151,9 @@ pub fn build_chrome_command(
     chrome: &ChromeInfo,
     args: &[String],
 ) -> Command {
-    match chrome.launch_method {
-        LaunchMethod::Direct | LaunchMethod::AppImage => {
-            let mut cmd = Command::new(&chrome.path);
-            cmd.args(args);
-            cmd
-        }
-        LaunchMethod::Flatpak => {
-            if is_flatpak() {
-                // Inside Flatpak: use flatpak-spawn --host
-                let mut cmd = Command::new("flatpak-spawn");
-                cmd.arg("--host")
-                    .arg("flatpak")
-                    .arg("run")
-                    .arg(&chrome.path);
-                cmd.args(args);
-                cmd
-            } else {
-                // Outside Flatpak: use flatpak run directly
-                let mut cmd = Command::new("flatpak");
-                cmd.arg("run").arg(&chrome.path);
-                cmd.args(args);
-                cmd
-            }
-        }
-    }
+    let mut cmd = Command::new(&chrome.path);
+    cmd.args(args);
+    cmd
 }
 
 fn is_executable(path: &Path) -> bool {
