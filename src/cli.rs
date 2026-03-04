@@ -19,6 +19,10 @@ pub struct Args {
     #[arg(short, long)]
     pub verbose: bool,
 
+    /// Run the combined tray icon process (internal)
+    #[arg(long, hide = true)]
+    pub tray: bool,
+
     /// Extra arguments (Chrome passes the extension origin to the NM host)
     #[arg(trailing_var_arg = true, hide = true)]
     pub extra: Vec<String>,
@@ -49,7 +53,15 @@ mod tests {
         let args = Args::try_parse_from(["loft"]).unwrap();
         assert!(args.service.is_none());
         assert!(!args.native_messaging);
+        assert!(!args.tray);
         assert!(!args.verbose);
+    }
+
+    #[test]
+    fn test_tray() {
+        let args = Args::try_parse_from(["loft", "--tray"]).unwrap();
+        assert!(args.tray);
+        assert!(args.service.is_none());
     }
 
     #[test]

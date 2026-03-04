@@ -72,11 +72,13 @@ impl Tray for LoftTray {
     fn overlay_icon_pixmap(&self) -> Vec<Icon> {
         let has_badge = self.badge_count > 0;
         let has_dnd = self.dnd;
-        match (has_badge, has_dnd) {
-            (true, true) => vec![generate_combined_overlay()],
-            (true, false) => vec![generate_red_dot_overlay()],
-            (false, true) => vec![generate_dnd_dash_overlay()],
-            (false, false) => vec![],
+        // DND suppresses the badge indicator — the dash replaces it
+        if has_dnd {
+            vec![generate_dnd_dash_overlay()]
+        } else if has_badge {
+            vec![generate_red_dot_overlay()]
+        } else {
+            vec![]
         }
     }
 
@@ -221,14 +223,14 @@ fn generate_red_dot_overlay() -> Icon {
 }
 
 /// Generate a small horizontal dash overlay icon (ARGB32) for DND mode.
-/// Grey (#888888), positioned at bottom-left — visually distinct from the
-/// red badge dot at bottom-right.
+/// Grey (#888888), positioned at bottom-right (same corner as the badge dot,
+/// which is hidden during DND).
 fn generate_dnd_dash_overlay() -> Icon {
     const SIZE: i32 = 22;
-    // Dash dimensions and position (bottom-left corner)
+    // Dash dimensions and position (bottom-right corner)
     const DASH_W: f32 = 6.0;
     const DASH_H: f32 = 2.0;
-    const DASH_X: f32 = 1.0; // left margin
+    const DASH_X: f32 = SIZE as f32 - DASH_W - 1.0; // right margin
     const DASH_Y: f32 = SIZE as f32 - DASH_H - 2.0; // bottom margin
     // Muted grey: #888888
     const R: f32 = 0x88 as f32;
@@ -274,36 +276,12 @@ fn generate_dnd_dash_overlay() -> Icon {
     }
 }
 
-/// Generate a combined overlay with both the red badge dot (bottom-right)
-/// and the grey DND dash (bottom-left).
-fn generate_combined_overlay() -> Icon {
-    let dot = generate_red_dot_overlay();
-    let dash = generate_dnd_dash_overlay();
-
-    // Both are the same size; composite by taking the non-transparent pixel
-    let mut data = dot.data;
-    for (i, &b) in dash.data.iter().enumerate() {
-        if i % 4 == 0 && b > 0 {
-            // This pixel has alpha in the dash — copy the whole pixel
-            data[i] = dash.data[i];
-            data[i + 1] = dash.data[i + 1];
-            data[i + 2] = dash.data[i + 2];
-            data[i + 3] = dash.data[i + 3];
-        }
-    }
-
-    Icon {
-        width: dot.width,
-        height: dot.height,
-        data,
-    }
-}
-
 /// Run the tray icon lifecycle: spawn with retry, sync state, and respawn
 /// when signalled (e.g. after suspend/resume) or when duplicate registrations
 /// are detected (caused by ksni auto-re-registering with the SNI watcher).
 ///
-/// This function runs forever (or until the tray cannot be spawned after retries).
+/// This function runs forever (or until the tray cannot be spawned after retries,
+/// or until `stop` is notified).
 pub async fn run_tray_lifecycle(
     state: Arc<DaemonState>,
     service_name: String,
@@ -311,6 +289,7 @@ pub async fn run_tray_lifecycle(
     tray_icon_name: String,
     icon_path: PathBuf,
     respawn: Arc<tokio::sync::Notify>,
+    stop: Arc<tokio::sync::Notify>,
 ) {
     let retry_delays = [0u64, 2, 4, 8, 16];
     let pid = std::process::id();
@@ -361,9 +340,13 @@ pub async fn run_tray_lifecycle(
 
         // Sync loop: push DaemonState → tray every 500ms, break on respawn signal
         // or when duplicate SNI registrations are detected.
+        // Only update ksni when state changes, to avoid menu redraws that break hover.
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
         let mut should_respawn = false;
         let mut dup_check_interval = tokio::time::interval(std::time::Duration::from_secs(10));
+        let mut prev_badge: u32 = u32::MAX; // force first update
+        let mut prev_visible = !state.visible.load(Ordering::Relaxed);
+        let mut prev_dnd = !state.dnd.load(Ordering::Relaxed);
 
         loop {
             tokio::select! {
@@ -373,15 +356,21 @@ pub async fn run_tray_lifecycle(
                     let visible = state.visible.load(Ordering::Relaxed);
                     let dnd = state.dnd.load(Ordering::Relaxed);
 
-                    let result = handle.update(|tray: &mut LoftTray| {
-                        tray.badge_count = badge;
-                        tray.visible = visible;
-                        tray.dnd = dnd;
-                    }).await;
+                    if badge != prev_badge || visible != prev_visible || dnd != prev_dnd {
+                        prev_badge = badge;
+                        prev_visible = visible;
+                        prev_dnd = dnd;
 
-                    if result.is_none() {
-                        tracing::warn!("Tray handle closed unexpectedly, respawning");
-                        break;
+                        let result = handle.update(|tray: &mut LoftTray| {
+                            tray.badge_count = badge;
+                            tray.visible = visible;
+                            tray.dnd = dnd;
+                        }).await;
+
+                        if result.is_none() {
+                            tracing::warn!("Tray handle closed unexpectedly, respawning");
+                            break;
+                        }
                     }
                 }
                 _ = dup_check_interval.tick() => {
@@ -398,6 +387,11 @@ pub async fn run_tray_lifecycle(
                 _ = respawn.notified() => {
                     should_respawn = true;
                     break;
+                }
+                _ = stop.notified() => {
+                    tracing::info!("Tray stop signal received");
+                    handle.shutdown().await;
+                    return;
                 }
             }
         }
@@ -494,7 +488,7 @@ mod tests {
     use super::*;
 
     fn make_test_state() -> Arc<DaemonState> {
-        Arc::new(DaemonState::new(false, false, true, true))
+        Arc::new(DaemonState::new(false, false, true, true, false))
     }
 
     #[test]

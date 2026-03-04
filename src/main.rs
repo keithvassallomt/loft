@@ -1,6 +1,7 @@
 mod autostart;
 mod chrome;
 mod cli;
+mod combined_tray;
 mod config;
 mod daemon;
 mod desktop;
@@ -19,6 +20,12 @@ fn main() -> Result<()> {
         tracing::info!("Starting native messaging relay");
         let rt = tokio::runtime::Runtime::new()?;
         return rt.block_on(daemon::messaging::run_relay());
+    }
+
+    if args.tray {
+        tracing::info!("Starting combined tray icon");
+        let rt = tokio::runtime::Runtime::new()?;
+        return rt.block_on(combined_tray::run());
     }
 
     if let Some(service_name) = args.service {

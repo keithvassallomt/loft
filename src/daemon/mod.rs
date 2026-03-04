@@ -1,3 +1,4 @@
+pub mod combined_tray;
 pub mod dbus;
 pub mod gnome_shell;
 pub mod messaging;
@@ -27,6 +28,10 @@ pub struct DaemonState {
     pub start_minimized: AtomicBool,
     pub show_titlebar: AtomicBool,
     pub badges_enabled: AtomicBool,
+    /// Whether to use the combined tray icon instead of per-service icons.
+    pub combine_tray: AtomicBool,
+    /// Notified when `combine_tray` changes, causing the tray lifecycle to switch modes.
+    pub tray_mode_changed: Notify,
     pub show_signal: Notify,
     pub chrome_pid: tokio::sync::Mutex<Option<u32>>,
     /// Broadcast channel for sending commands to the extension via native messaging.
@@ -34,7 +39,13 @@ pub struct DaemonState {
 }
 
 impl DaemonState {
-    pub fn new(dnd: bool, minimized: bool, show_titlebar: bool, badges_enabled: bool) -> Self {
+    pub fn new(
+        dnd: bool,
+        minimized: bool,
+        show_titlebar: bool,
+        badges_enabled: bool,
+        combine_tray: bool,
+    ) -> Self {
         let (cmd_tx, _) = tokio::sync::broadcast::channel(16);
         Self {
             visible: AtomicBool::new(false),
@@ -44,6 +55,8 @@ impl DaemonState {
             start_minimized: AtomicBool::new(minimized),
             show_titlebar: AtomicBool::new(show_titlebar),
             badges_enabled: AtomicBool::new(badges_enabled),
+            combine_tray: AtomicBool::new(combine_tray),
+            tray_mode_changed: Notify::new(),
             show_signal: Notify::new(),
             chrome_pid: tokio::sync::Mutex::new(None),
             cmd_tx,
@@ -126,6 +139,7 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
         minimized,
         service_config.show_titlebar,
         service_config.badges_enabled,
+        global_config.combine_tray_icons,
     ));
 
     // 3. Register D-Bus service
@@ -151,126 +165,25 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
         }
     );
 
-    // 5. Tray/panel icon backend
+    // 5. Tray/panel icon backend — switchable lifecycle
     let effective_backend = global_config.tray_backend.resolve();
     tracing::info!("Tray backend: {} (resolved: {})", global_config.tray_backend, effective_backend);
 
-    match effective_backend {
-        TrayBackend::GnomePanel => {
-            // Register panel icon with GNOME Shell extension (with retry —
-            // at login the extension may not be ready yet)
-            let svc_name = definition.name.to_string();
-            let display_name = definition.display_name.to_string();
-            let icon = definition.tray_icon_name();
-            let wm_class = definition.chrome_desktop_id.to_string();
+    // Spawn switchable tray lifecycle
+    let tray_handle = tokio::spawn(manage_tray_lifecycle(
+        Arc::clone(&state),
+        definition,
+        effective_backend,
+    ));
 
-            let retry_delays = [0u64, 2, 4, 8, 16];
-            let mut registered = false;
-            for (attempt, &delay_secs) in retry_delays.iter().enumerate() {
-                if delay_secs > 0 {
-                    tracing::info!(
-                        "GNOME panel icon unavailable, retrying in {}s (attempt {}/{})",
-                        delay_secs, attempt + 1, retry_delays.len()
-                    );
-                    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-                }
-                match gnome_shell::register_service(&svc_name, &display_name, &icon, &wm_class).await {
-                    Ok(()) => {
-                        tracing::info!("Registered GNOME panel icon for {}", display_name);
-                        registered = true;
-                        break;
-                    }
-                    Err(e) => {
-                        if attempt == retry_delays.len() - 1 {
-                            tracing::error!("Failed to register GNOME panel icon after {} attempts: {}", retry_delays.len(), e);
-                        } else {
-                            tracing::warn!("GNOME panel icon registration failed: {}", e);
-                        }
-                    }
-                }
+    // Listen for CombineTrayChanged D-Bus signal (live toggle from Manager)
+    {
+        let signal_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            if let Err(e) = listen_combine_tray_changed(signal_state).await {
+                tracing::debug!("CombineTrayChanged listener ended: {}", e);
             }
-
-            // Spawn sync task: push DaemonState → GNOME Shell panel icon
-            if registered {
-                let sync_state = Arc::clone(&state);
-                let sync_name = definition.name.to_string();
-                tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
-                    let mut last_badge: u32 = u32::MAX;
-                    let mut last_visible: bool = false;
-                    let mut last_dnd: bool = false;
-
-                    loop {
-                        interval.tick().await;
-
-                        if sync_state.quit_requested.load(Ordering::Relaxed) {
-                            break;
-                        }
-
-                        let raw_badge = sync_state.badge_count.load(Ordering::Relaxed);
-                        let badge = if sync_state.is_badges_enabled() { raw_badge } else { 0 };
-                        let visible = sync_state.visible.load(Ordering::Relaxed);
-                        let dnd = sync_state.dnd.load(Ordering::Relaxed);
-
-                        if badge != last_badge {
-                            last_badge = badge;
-                            if let Err(e) = gnome_shell::update_badge(&sync_name, badge).await {
-                                tracing::debug!("Failed to update panel badge: {}", e);
-                            }
-                        }
-                        if visible != last_visible {
-                            last_visible = visible;
-                            if let Err(e) = gnome_shell::update_visible(&sync_name, visible).await {
-                                tracing::debug!("Failed to update panel visible: {}", e);
-                            }
-                        }
-                        if dnd != last_dnd {
-                            last_dnd = dnd;
-                            if let Err(e) = gnome_shell::update_dnd(&sync_name, dnd).await {
-                                tracing::debug!("Failed to update panel DND: {}", e);
-                            }
-                        }
-                    }
-
-                    // Clean up panel icon on shutdown
-                    let _ = gnome_shell::unregister_service(&sync_name).await;
-                });
-            }
-
-            // Monitor for GNOME Shell extension restarts (covers suspend/resume:
-            // GNOME locks the screen on suspend, which disables then re-enables
-            // all extensions, destroying and recreating the panel). When the
-            // ShellHelper name reappears, re-register and sync current state.
-            tokio::spawn(monitor_shell_helper_restart(
-                Arc::clone(&state),
-                svc_name,
-                display_name,
-                icon,
-                wm_class,
-            ));
-        }
-        TrayBackend::Sni | TrayBackend::Auto => {
-            // SNI tray icon lifecycle (Auto should never reach here, but handle gracefully)
-            let icon_path = dirs::data_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
-                .join("loft/icons")
-                .join(definition.app_icon_filename);
-
-            let tray_respawn = Arc::new(tokio::sync::Notify::new());
-
-            tokio::spawn(tray::run_tray_lifecycle(
-                Arc::clone(&state),
-                definition.name.to_string(),
-                definition.display_name.to_string(),
-                definition.tray_icon_name(),
-                icon_path,
-                Arc::clone(&tray_respawn),
-            ));
-
-            // Monitor suspend/resume and watcher restarts to trigger tray respawn
-            tokio::spawn(monitor_suspend_resume(Arc::clone(&tray_respawn)));
-            tokio::spawn(monitor_watcher_restart(Arc::clone(&tray_respawn)));
-        }
+        });
     }
 
     // 6. Start native messaging socket server
@@ -331,7 +244,383 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
 
     // 8. Run Chrome lifecycle loop
     let manager = ChromeManager::new(chrome_info, definition, Arc::clone(&state));
-    manager.run_loop().await
+    let result = manager.run_loop().await;
+
+    // 9. Wait for tray lifecycle to clean up (unregister from combined tray, etc.)
+    //    Notify it so it wakes up and sees quit_requested.
+    state.tray_mode_changed.notify_waiters();
+    // Give the tray task a moment to unregister before the process exits
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tray_handle,
+    ).await;
+
+    result
+}
+
+/// Switchable tray lifecycle: runs either individual or combined tray mode,
+/// switching between them when the CombineTrayChanged signal is received.
+async fn manage_tray_lifecycle(
+    state: Arc<DaemonState>,
+    definition: &'static ServiceDefinition,
+    effective_backend: TrayBackend,
+) {
+    let mut was_combined = false;
+
+    loop {
+        if state.quit_requested.load(Ordering::Relaxed) {
+            break;
+        }
+
+        if state.combine_tray.load(Ordering::Relaxed) {
+            was_combined = true;
+            tracing::info!("Tray mode: combined");
+            run_combined_tray_client(Arc::clone(&state), definition).await;
+        } else {
+            was_combined = false;
+            match effective_backend {
+                TrayBackend::GnomePanel => {
+                    tracing::info!("Tray mode: GNOME panel (individual)");
+                    run_gnome_panel_icon(Arc::clone(&state), definition).await;
+                }
+                TrayBackend::Sni | TrayBackend::Auto => {
+                    tracing::info!("Tray mode: SNI (individual)");
+                    run_sni_tray_icon(Arc::clone(&state), definition).await;
+                }
+            }
+        }
+
+        // The inner functions (run_combined_tray_client, run_gnome_panel_icon,
+        // run_sni_tray_icon) already consume tray_mode_changed and return.
+        // Just loop back to re-check the current mode.
+    }
+
+    // Clean up on quit: if we were in combined mode, unregister from the tray
+    if was_combined {
+        let _ = combined_tray::unregister(definition.name).await;
+    }
+}
+
+/// Run the individual GNOME panel icon. Returns when `tray_mode_changed` fires
+/// or quit is requested.
+async fn run_gnome_panel_icon(state: Arc<DaemonState>, definition: &'static ServiceDefinition) {
+    let svc_name = definition.name.to_string();
+    let display_name = definition.display_name.to_string();
+    let icon = definition.tray_icon_name();
+    let wm_class = definition.chrome_desktop_id.to_string();
+
+    // Register with retry
+    let retry_delays = [0u64, 2, 4, 8, 16];
+    for (attempt, &delay_secs) in retry_delays.iter().enumerate() {
+        if delay_secs > 0 {
+            tracing::info!(
+                "GNOME panel icon unavailable, retrying in {}s (attempt {}/{})",
+                delay_secs,
+                attempt + 1,
+                retry_delays.len()
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+        }
+        match gnome_shell::register_service(&svc_name, &display_name, &icon, &wm_class).await {
+            Ok(()) => {
+                tracing::info!("Registered GNOME panel icon for {}", display_name);
+                break;
+            }
+            Err(e) => {
+                if attempt == retry_delays.len() - 1 {
+                    tracing::error!(
+                        "Failed to register GNOME panel icon after {} attempts: {}",
+                        retry_delays.len(),
+                        e
+                    );
+                } else {
+                    tracing::warn!("GNOME panel icon registration failed: {}", e);
+                }
+            }
+        }
+    }
+
+    // Spawn shell helper restart monitor (cancel on mode change)
+    let helper_state = Arc::clone(&state);
+    let helper_svc = svc_name.clone();
+    let helper_display = display_name.clone();
+    let helper_icon = icon.clone();
+    let helper_wm = wm_class.clone();
+    let helper_handle = tokio::spawn(monitor_shell_helper_restart(
+        helper_state,
+        helper_svc,
+        helper_display,
+        helper_icon,
+        helper_wm,
+    ));
+
+    // Sync loop: push DaemonState → GNOME Shell panel icon
+    let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+    let mut last_badge: u32 = u32::MAX;
+    let mut last_visible: bool = false;
+    let mut last_dnd: bool = false;
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                if state.quit_requested.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let raw_badge = state.badge_count.load(Ordering::Relaxed);
+                let badge = if state.is_badges_enabled() { raw_badge } else { 0 };
+                let visible = state.visible.load(Ordering::Relaxed);
+                let dnd = state.dnd.load(Ordering::Relaxed);
+
+                if badge != last_badge {
+                    last_badge = badge;
+                    let _ = gnome_shell::update_badge(&svc_name, badge).await;
+                }
+                if visible != last_visible {
+                    last_visible = visible;
+                    let _ = gnome_shell::update_visible(&svc_name, visible).await;
+                }
+                if dnd != last_dnd {
+                    last_dnd = dnd;
+                    let _ = gnome_shell::update_dnd(&svc_name, dnd).await;
+                }
+            }
+            _ = state.tray_mode_changed.notified() => {
+                break;
+            }
+        }
+    }
+
+    // Clean up
+    helper_handle.abort();
+    let _ = gnome_shell::unregister_service(&svc_name).await;
+}
+
+/// Run the individual SNI tray icon. Returns when `tray_mode_changed` fires
+/// or quit is requested.
+async fn run_sni_tray_icon(state: Arc<DaemonState>, definition: &'static ServiceDefinition) {
+    let icon_path = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
+        .join("loft/icons")
+        .join(definition.app_icon_filename);
+
+    let tray_respawn = Arc::new(tokio::sync::Notify::new());
+    let stop = Arc::new(tokio::sync::Notify::new());
+
+    let tray_handle = tokio::spawn(tray::run_tray_lifecycle(
+        Arc::clone(&state),
+        definition.name.to_string(),
+        definition.display_name.to_string(),
+        definition.tray_icon_name(),
+        icon_path,
+        Arc::clone(&tray_respawn),
+        Arc::clone(&stop),
+    ));
+
+    let suspend_handle = tokio::spawn(monitor_suspend_resume(Arc::clone(&tray_respawn)));
+    let watcher_handle = tokio::spawn(monitor_watcher_restart(Arc::clone(&tray_respawn)));
+
+    // Wait for mode change
+    state.tray_mode_changed.notified().await;
+
+    // Stop everything
+    stop.notify_waiters();
+    tray_handle.abort();
+    suspend_handle.abort();
+    watcher_handle.abort();
+}
+
+/// Register with the combined tray process and sync state to it.
+/// Returns when `tray_mode_changed` fires or quit is requested.
+async fn run_combined_tray_client(
+    state: Arc<DaemonState>,
+    definition: &'static ServiceDefinition,
+) {
+    let svc_name = definition.name;
+    let display_name = definition.display_name;
+    let icon = definition.tray_icon_name();
+    let wm_class = definition.chrome_desktop_id;
+
+    // Spawn tray process if needed and register
+    if let Err(e) = combined_tray::spawn_tray_if_needed().await {
+        tracing::error!("Failed to start combined tray: {}", e);
+    }
+
+    let visible = state.visible.load(Ordering::Relaxed);
+    let raw_badge = state.badge_count.load(Ordering::Relaxed);
+    let badge = if state.is_badges_enabled() { raw_badge } else { 0 };
+    let dnd = state.dnd.load(Ordering::Relaxed);
+
+    let mut registered = combined_tray::register(svc_name, display_name, &icon, wm_class, visible, badge, dnd).await.is_ok();
+    if !registered {
+        tracing::warn!("Initial registration with combined tray failed, will retry");
+    }
+
+    // Monitor combined tray D-Bus name — if it vanishes, re-spawn and re-register
+    let respawn_state = Arc::clone(&state);
+    let respawn_handle = tokio::spawn(async move {
+        monitor_combined_tray_restart(respawn_state, definition).await;
+    });
+
+    // Sync loop — use register() instead of update_state() so that if
+    // initial registration failed (tray not ready), the sync loop retries.
+    let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+    let mut last_badge: u32 = badge;
+    let mut last_visible: bool = visible;
+    let mut last_dnd: bool = dnd;
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                if state.quit_requested.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let raw_badge = state.badge_count.load(Ordering::Relaxed);
+                let badge = if state.is_badges_enabled() { raw_badge } else { 0 };
+                let visible = state.visible.load(Ordering::Relaxed);
+                let dnd = state.dnd.load(Ordering::Relaxed);
+
+                if !registered {
+                    // Retry registration (Register is idempotent)
+                    registered = combined_tray::register(
+                        svc_name, display_name, &icon, wm_class, visible, badge, dnd,
+                    ).await.is_ok();
+                    if registered {
+                        tracing::info!("Successfully registered with combined tray on retry");
+                        last_badge = badge;
+                        last_visible = visible;
+                        last_dnd = dnd;
+                    }
+                } else if badge != last_badge || visible != last_visible || dnd != last_dnd {
+                    last_badge = badge;
+                    last_visible = visible;
+                    last_dnd = dnd;
+                    let _ = combined_tray::update_state(svc_name, visible, badge, dnd).await;
+                }
+            }
+            _ = state.tray_mode_changed.notified() => {
+                break;
+            }
+        }
+    }
+
+    // Clean up
+    respawn_handle.abort();
+    let _ = combined_tray::unregister(svc_name).await;
+}
+
+/// Monitor the `chat.loft.Tray` D-Bus name. When it vanishes, re-spawn
+/// the combined tray process and re-register.
+async fn monitor_combined_tray_restart(
+    state: Arc<DaemonState>,
+    definition: &'static ServiceDefinition,
+) {
+    use futures_util::StreamExt;
+
+    let conn = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Cannot monitor combined tray: {}", e);
+            return;
+        }
+    };
+
+    let rule = "type='signal',sender='org.freedesktop.DBus',\
+                interface='org.freedesktop.DBus',\
+                member='NameOwnerChanged',\
+                arg0='chat.loft.Tray'";
+    if let Err(e) = conn
+        .call_method(
+            Some("org.freedesktop.DBus"),
+            "/org/freedesktop/DBus",
+            Some("org.freedesktop.DBus"),
+            "AddMatch",
+            &(rule,),
+        )
+        .await
+    {
+        tracing::warn!("Failed to subscribe to combined tray name changes: {}", e);
+        return;
+    }
+
+    let mut stream = zbus::MessageStream::from(&conn);
+    while let Some(Ok(msg)) = stream.next().await {
+        if state.quit_requested.load(Ordering::Relaxed) || !state.combine_tray.load(Ordering::Relaxed) {
+            break;
+        }
+        let member = msg.header().member().map(|m| m.as_str().to_string());
+        if member.as_deref() != Some("NameOwnerChanged") {
+            continue;
+        }
+        if let Ok((name, _old, new_owner)) = msg.body().deserialize::<(String, String, String)>() {
+            if name == "chat.loft.Tray" && new_owner.is_empty() {
+                // Tray vanished — re-spawn after a brief pause
+                tracing::info!("Combined tray vanished, re-spawning");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                if !state.combine_tray.load(Ordering::Relaxed) {
+                    break;
+                }
+                if let Err(e) = combined_tray::spawn_tray_if_needed().await {
+                    tracing::error!("Failed to re-spawn combined tray: {}", e);
+                    continue;
+                }
+                let visible = state.visible.load(Ordering::Relaxed);
+                let raw_badge = state.badge_count.load(Ordering::Relaxed);
+                let badge = if state.is_badges_enabled() { raw_badge } else { 0 };
+                let dnd = state.dnd.load(Ordering::Relaxed);
+                let _ = combined_tray::register(
+                    definition.name,
+                    definition.display_name,
+                    &definition.tray_icon_name(),
+                    definition.chrome_desktop_id,
+                    visible,
+                    badge,
+                    dnd,
+                )
+                .await;
+            }
+        }
+    }
+}
+
+/// Listen for the `CombineTrayChanged` D-Bus signal emitted by the Manager.
+/// Updates `DaemonState.combine_tray` and notifies the tray lifecycle to switch.
+async fn listen_combine_tray_changed(state: Arc<DaemonState>) -> anyhow::Result<()> {
+    use futures_util::StreamExt;
+
+    let conn = zbus::Connection::session().await?;
+
+    let rule = "type='signal',\
+                interface='chat.loft.Tray',\
+                member='CombineTrayChanged',\
+                path='/chat/loft/Tray'";
+    conn.call_method(
+        Some("org.freedesktop.DBus"),
+        "/org/freedesktop/DBus",
+        Some("org.freedesktop.DBus"),
+        "AddMatch",
+        &(rule,),
+    )
+    .await?;
+
+    let mut stream = zbus::MessageStream::from(&conn);
+    while let Some(Ok(msg)) = stream.next().await {
+        if state.quit_requested.load(Ordering::Relaxed) {
+            break;
+        }
+        let member = msg.header().member().map(|m| m.as_str().to_string());
+        if member.as_deref() != Some("CombineTrayChanged") {
+            continue;
+        }
+        if let Ok((enabled,)) = msg.body().deserialize::<(bool,)>() {
+            tracing::info!("CombineTrayChanged({}) signal received", enabled);
+            state.combine_tray.store(enabled, Ordering::Relaxed);
+            state.tray_mode_changed.notify_waiters();
+        }
+    }
+
+    Ok(())
 }
 
 /// Manages the Chrome process lifecycle: spawn, monitor, respawn, hide, quit.
@@ -367,7 +656,6 @@ impl ChromeManager {
                     tracing::info!("Quit requested, shutting down daemon");
                     return Ok(());
                 }
-                wait_for_show = false;
             }
 
             // Spawn Chrome

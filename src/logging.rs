@@ -17,6 +17,7 @@ pub fn init(args: &Args) -> Result<()> {
     let log_filename = match &args.service {
         Some(name) => format!("{}.log", name),
         None if args.native_messaging => "native-messaging.log".to_string(),
+        None if args.tray => "tray.log".to_string(),
         None => "loft.log".to_string(),
     };
 

@@ -13,6 +13,7 @@ pub fn install_service(definition: &ServiceDefinition) -> Result<()> {
     deploy_extension()?;
     deploy_gnome_shell_extension()?;
     ensure_icons_for(definition)?;
+    ensure_combined_icon()?;
     create_desktop_entry(definition)?;
     create_chrome_desktop_file(definition)?;
     setup_nm_host()?;
@@ -216,11 +217,11 @@ fn deploy_extension() -> Result<()> {
     Ok(())
 }
 
-/// Deploy the GNOME Shell extension to ~/.local/share/gnome-shell/extensions/loft-shell-helper@chat.loft/.
+/// Deploy the GNOME Shell extension to ~/.local/share/gnome-shell/extensions/loft-shell-helper@loft.chat/.
 fn deploy_gnome_shell_extension() -> Result<()> {
     let ext_dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-        .join("gnome-shell/extensions/loft-shell-helper@chat.loft");
+        .join("gnome-shell/extensions/loft-shell-helper@loft.chat");
     std::fs::create_dir_all(&ext_dir)
         .with_context(|| format!("Failed to create GNOME Shell extension dir {}", ext_dir.display()))?;
 
@@ -238,11 +239,11 @@ fn deploy_gnome_shell_extension() -> Result<()> {
 
     // Best-effort: enable the extension (requires gnome-extensions CLI)
     match std::process::Command::new("gnome-extensions")
-        .args(["enable", "loft-shell-helper@chat.loft"])
+        .args(["enable", "loft-shell-helper@loft.chat"])
         .output()
     {
         Ok(output) if output.status.success() => {
-            tracing::info!("Enabled GNOME Shell extension loft-shell-helper@chat.loft");
+            tracing::info!("Enabled GNOME Shell extension loft-shell-helper@loft.chat");
         }
         Ok(output) => {
             tracing::warn!(
@@ -415,6 +416,34 @@ fn remove_icons_from_theme(definition: &ServiceDefinition) {
         let _ = std::fs::remove_file(&svg_path);
         let _ = std::fs::remove_file(&png_path);
     }
+}
+
+/// Install the combined Loft icon into the XDG icon theme so the combined
+/// tray icon can be resolved by name (`loft-symbolic`).
+///
+/// Embeds `loft-symbolic.svg` and `loft.svg` from `assets/icons/` at compile time
+/// and writes them to `~/.local/share/icons/hicolor/scalable/apps/`.
+pub fn ensure_combined_icon() -> Result<()> {
+    let icons_base = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+        .join("icons/hicolor/scalable/apps");
+    std::fs::create_dir_all(&icons_base)?;
+
+    let symbolic_dest = icons_base.join("loft-symbolic.svg");
+    if !symbolic_dest.exists() {
+        std::fs::write(&symbolic_dest, include_str!("../assets/icons/loft-symbolic.svg"))
+            .with_context(|| format!("Failed to write {}", symbolic_dest.display()))?;
+        tracing::debug!("Installed loft-symbolic icon to {}", symbolic_dest.display());
+    }
+
+    let app_dest = icons_base.join("loft.svg");
+    if !app_dest.exists() {
+        std::fs::write(&app_dest, include_str!("../assets/icons/loft.svg"))
+            .with_context(|| format!("Failed to write {}", app_dest.display()))?;
+        tracing::debug!("Installed loft icon to {}", app_dest.display());
+    }
+
+    Ok(())
 }
 
 fn download_url(url: &str) -> Result<Vec<u8>> {

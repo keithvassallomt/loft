@@ -51,6 +51,9 @@ pub struct GlobalConfig {
     /// Tray icon backend: auto, gnome-panel, or sni
     #[serde(default)]
     pub tray_backend: TrayBackend,
+    /// Combine all service tray icons into a single Loft icon
+    #[serde(default)]
+    pub combine_tray_icons: bool,
 }
 
 /// Per-service config at ~/.config/loft/services/<name>.toml
@@ -147,6 +150,7 @@ mod tests {
         let config = GlobalConfig {
             chrome_path: Some("/usr/bin/google-chrome".to_string()),
             tray_backend: TrayBackend::GnomePanel,
+            combine_tray_icons: true,
         };
 
         let content = toml::to_string_pretty(&config).unwrap();
@@ -161,6 +165,7 @@ mod tests {
         let config = GlobalConfig::default();
         assert_eq!(config.chrome_path, None);
         assert_eq!(config.tray_backend, TrayBackend::Auto);
+        assert!(!config.combine_tray_icons);
     }
 
     #[test]
@@ -168,6 +173,7 @@ mod tests {
         let toml = "chrome_path = \"/usr/bin/google-chrome\"\n";
         let config: GlobalConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.tray_backend, TrayBackend::Auto);
+        assert!(!config.combine_tray_icons);
     }
 
     #[test]

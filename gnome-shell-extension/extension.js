@@ -61,6 +61,21 @@ const DBUS_IFACE = `<node>
       <arg name="name" type="s" direction="in"/>
       <arg name="visible" type="b" direction="in"/>
     </method>
+    <method name="RegisterCombined">
+      <arg name="icon_name" type="s" direction="in"/>
+    </method>
+    <method name="UnregisterCombined"/>
+    <method name="UpdateCombinedService">
+      <arg name="name" type="s" direction="in"/>
+      <arg name="display_name" type="s" direction="in"/>
+      <arg name="visible" type="b" direction="in"/>
+      <arg name="badge" type="u" direction="in"/>
+      <arg name="dnd" type="b" direction="in"/>
+      <arg name="wm_class" type="s" direction="in"/>
+    </method>
+    <method name="RemoveCombinedService">
+      <arg name="name" type="s" direction="in"/>
+    </method>
   </interface>
 </node>`;
 
@@ -86,6 +101,10 @@ export default class LoftShellHelper extends Extension {
     enable() {
         // Panel icon registry: service name → { indicator, badge, dndItem, showHideItem, wmClass }
         this._panelIcons = new Map();
+        // Combined icon state
+        this._combinedIndicator = null;
+        this._combinedServices = new Map(); // name → { displayName, visible, badge, dnd, wmClass }
+        this._combinedWatchId = null;
 
         // --- D-Bus interface for window focus/hide + panel icons ---
 
@@ -161,6 +180,14 @@ export default class LoftShellHelper extends Extension {
     }
 
     disable() {
+        // Destroy combined icon if present
+        if (this._combinedWatchId)
+            Gio.bus_unwatch_name(this._combinedWatchId);
+        this._combinedIndicator?.destroy();
+        this._combinedIndicator = null;
+        this._combinedServices?.clear();
+        this._combinedWatchId = null;
+
         // Destroy all panel icons and stop name watches
         for (const [name, entry] of this._panelIcons) {
             if (entry.watchId)
@@ -236,7 +263,7 @@ export default class LoftShellHelper extends Extension {
         });
         box.add_child(badge);
 
-        // Small grey dash at bottom-left for DND indicator.
+        // Small grey dash at bottom-right for DND indicator (replaces badge dot).
         const DASH_W = 8;
         const DASH_H = 2;
         const dndBadge = new St.Widget({
@@ -251,7 +278,7 @@ export default class LoftShellHelper extends Extension {
                 icon.y + icon.height - DOT_SIZE
             );
             dndBadge.set_position(
-                icon.x,
+                icon.x + icon.width - DASH_W,
                 icon.y + icon.height - DASH_H
             );
         });
@@ -315,6 +342,8 @@ export default class LoftShellHelper extends Extension {
             wmClass,
             dbusServiceName,
             watchId,
+            badgeCount: 0,
+            dndEnabled: false,
         });
     }
 
@@ -330,14 +359,19 @@ export default class LoftShellHelper extends Extension {
     _updateBadge(name, count) {
         const entry = this._panelIcons.get(name);
         if (!entry) return;
-        entry.badge.visible = count > 0;
+        entry.badgeCount = count;
+        // DND suppresses the badge — the dash replaces it
+        entry.badge.visible = count > 0 && !entry.dndEnabled;
     }
 
     _updateDnd(name, enabled) {
         const entry = this._panelIcons.get(name);
         if (!entry) return;
+        entry.dndEnabled = enabled;
         entry.dndItem.setToggleState(enabled);
         entry.dndBadge.visible = enabled;
+        // Hide badge when DND is on, restore when off
+        entry.badge.visible = entry.badgeCount > 0 && !enabled;
     }
 
     _updateVisible(name, visible) {
@@ -378,6 +412,193 @@ export default class LoftShellHelper extends Extension {
         } catch (e) {
             log(`Loft: Failed to call ${busName}.${method}: ${e}`);
         }
+    }
+
+    // ================================================================
+    // Combined panel icon management
+    // ================================================================
+
+    _registerCombined(iconName) {
+        // Remove existing combined indicator if any
+        if (this._combinedIndicator) {
+            this._combinedIndicator.destroy();
+            this._combinedIndicator = null;
+        }
+        if (this._combinedWatchId) {
+            Gio.bus_unwatch_name(this._combinedWatchId);
+            this._combinedWatchId = null;
+        }
+        this._combinedServices.clear();
+
+        const indicator = new PanelMenu.Button(0.0, 'loft-combined', false);
+
+        const box = new St.Widget({
+            layout_manager: new Clutter.BinLayout(),
+            x_expand: false,
+            y_expand: true,
+            style_class: 'panel-status-indicators-box',
+        });
+        indicator.add_child(box);
+
+        const icon = new St.Icon({
+            icon_name: iconName,
+            style_class: 'system-status-icon',
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+            x_expand: true,
+            y_expand: true,
+        });
+        box.add_child(icon);
+
+        // Badge dot
+        const DOT_SIZE = 6;
+        const badge = new St.Widget({
+            style: `background-color: #e01b24; border-radius: ${DOT_SIZE / 2}px; width: ${DOT_SIZE}px; height: ${DOT_SIZE}px;`,
+            visible: false,
+        });
+        box.add_child(badge);
+
+        // DND dash
+        const DASH_W = 8;
+        const DASH_H = 2;
+        const dndBadge = new St.Widget({
+            style: `background-color: #888888; border-radius: ${DASH_H / 2}px; width: ${DASH_W}px; height: ${DASH_H}px;`,
+            visible: false,
+        });
+        box.add_child(dndBadge);
+
+        icon.connect('notify::allocation', () => {
+            badge.set_position(
+                icon.x + icon.width - DOT_SIZE,
+                icon.y + icon.height - DOT_SIZE
+            );
+            dndBadge.set_position(
+                icon.x + icon.width - DASH_W,
+                icon.y + icon.height - DASH_H
+            );
+        });
+
+        Main.panel.addToStatusArea('loft-combined', indicator);
+
+        this._combinedIndicator = indicator;
+        this._combinedBadge = badge;
+        this._combinedDndBadge = dndBadge;
+
+        // Watch the combined tray D-Bus name — destroy if it exits
+        let nameAppeared = false;
+        this._combinedWatchId = Gio.bus_watch_name(
+            Gio.BusType.SESSION,
+            'chat.loft.Tray',
+            Gio.BusNameWatcherFlags.NONE,
+            () => { nameAppeared = true; },
+            () => {
+                if (nameAppeared)
+                    this._unregisterCombined();
+            }
+        );
+
+        // Build the menu (initially empty)
+        this._rebuildCombinedMenu();
+    }
+
+    _unregisterCombined() {
+        if (this._combinedWatchId) {
+            Gio.bus_unwatch_name(this._combinedWatchId);
+            this._combinedWatchId = null;
+        }
+        this._combinedIndicator?.destroy();
+        this._combinedIndicator = null;
+        this._combinedServices.clear();
+    }
+
+    _updateCombinedService(name, displayName, visible, badge, dnd, wmClass) {
+        const existing = this._combinedServices.get(name);
+        if (existing &&
+            existing.displayName === displayName &&
+            existing.visible === visible &&
+            existing.badge === badge &&
+            existing.dnd === dnd &&
+            existing.wmClass === wmClass) {
+            return; // No change, skip menu rebuild
+        }
+        this._combinedServices.set(name, { displayName, visible, badge, dnd, wmClass });
+        this._rebuildCombinedMenu();
+        this._updateCombinedBadges();
+    }
+
+    _removeCombinedService(name) {
+        this._combinedServices.delete(name);
+        this._rebuildCombinedMenu();
+        this._updateCombinedBadges();
+    }
+
+    _rebuildCombinedMenu() {
+        if (!this._combinedIndicator) return;
+
+        const menu = this._combinedIndicator.menu;
+        menu.removeAll();
+
+        let first = true;
+        for (const [name, svc] of this._combinedServices) {
+            if (!first)
+                menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            first = false;
+
+            const dbusName = this._dbusNameForService(name);
+
+            // Service header with unread indicator
+            const hasUnread = svc.badge > 0 && !svc.dnd;
+            const header = new PopupMenu.PopupMenuItem(svc.displayName, { reactive: false });
+            header.label.add_style_class_name('popup-menu-item-title');
+            if (hasUnread) {
+                const dot = new St.Label({ text: ' \u2022', style: 'color: #e01b24;' });
+                header.add_child(dot);
+            }
+            menu.addMenuItem(header);
+
+            // Show / Hide
+            const showHideItem = new PopupMenu.PopupMenuItem(svc.visible ? 'Hide' : 'Show');
+            showHideItem.connect('activate', () => {
+                this._callDaemonMethod(dbusName, 'Toggle');
+            });
+            menu.addMenuItem(showHideItem);
+
+            // DND toggle
+            const dndItem = new PopupMenu.PopupSwitchMenuItem('Do Not Disturb', svc.dnd);
+            dndItem.connect('toggled', (_item, state) => {
+                this._callDaemonMethod(dbusName, 'SetDnd', '(b)', [state]);
+            });
+            menu.addMenuItem(dndItem);
+
+            // Quit
+            const quitItem = new PopupMenu.PopupMenuItem('Quit');
+            quitItem.connect('activate', () => {
+                this._callDaemonMethod(dbusName, 'Quit');
+            });
+            menu.addMenuItem(quitItem);
+        }
+
+        if (this._combinedServices.size === 0) {
+            const noServices = new PopupMenu.PopupMenuItem('No services running', { reactive: false });
+            menu.addMenuItem(noServices);
+        }
+    }
+
+    _updateCombinedBadges() {
+        if (!this._combinedIndicator) return;
+
+        let anyBadge = false;
+        let allDnd = this._combinedServices.size > 0;
+
+        for (const [, svc] of this._combinedServices) {
+            if (svc.badge > 0 && !svc.dnd)
+                anyBadge = true;
+            if (!svc.dnd)
+                allDnd = false;
+        }
+
+        this._combinedBadge.visible = anyBadge && !allDnd;
+        this._combinedDndBadge.visible = allDnd;
     }
 
     // ================================================================
@@ -469,6 +690,34 @@ export default class LoftShellHelper extends Extension {
         if (method === 'UpdateVisible') {
             const [name, visible] = params.deep_unpack();
             this._updateVisible(name, visible);
+            invocation.return_value(null);
+            return;
+        }
+
+        // Combined icon methods
+        if (method === 'RegisterCombined') {
+            const [iconName] = params.deep_unpack();
+            this._registerCombined(iconName);
+            invocation.return_value(null);
+            return;
+        }
+
+        if (method === 'UnregisterCombined') {
+            this._unregisterCombined();
+            invocation.return_value(null);
+            return;
+        }
+
+        if (method === 'UpdateCombinedService') {
+            const [name, displayName, visible, badge, dnd, wmClass] = params.deep_unpack();
+            this._updateCombinedService(name, displayName, visible, badge, dnd, wmClass);
+            invocation.return_value(null);
+            return;
+        }
+
+        if (method === 'RemoveCombinedService') {
+            const [name] = params.deep_unpack();
+            this._removeCombinedService(name);
             invocation.return_value(null);
             return;
         }
