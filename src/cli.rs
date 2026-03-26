@@ -1,7 +1,7 @@
 use clap::{Parser, ValueEnum};
 
 #[derive(Parser)]
-#[command(name = "loft", about = "Linux desktop integration for Meta web apps")]
+#[command(name = "loft", about = "Linux desktop integration for web apps")]
 pub struct Args {
     /// Run a service daemon
     #[arg(long, value_enum)]
@@ -32,6 +32,7 @@ pub struct Args {
 pub enum ServiceName {
     Whatsapp,
     Messenger,
+    Slack,
 }
 
 impl std::fmt::Display for ServiceName {
@@ -39,6 +40,7 @@ impl std::fmt::Display for ServiceName {
         match self {
             ServiceName::Whatsapp => write!(f, "whatsapp"),
             ServiceName::Messenger => write!(f, "messenger"),
+            ServiceName::Slack => write!(f, "slack"),
         }
     }
 }
@@ -94,6 +96,12 @@ mod tests {
             Args::try_parse_from(["loft", "--service", "whatsapp", "--minimized"]).unwrap();
         assert!(matches!(args.service, Some(ServiceName::Whatsapp)));
         assert!(args.minimized);
+    }
+
+    #[test]
+    fn test_service_slack() {
+        let args = Args::try_parse_from(["loft", "--service", "slack"]).unwrap();
+        assert!(matches!(args.service, Some(ServiceName::Slack)));
     }
 
     #[test]

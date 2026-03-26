@@ -31,6 +31,8 @@ pub enum ExtensionMessage {
     WindowShown,
     /// Content script titlebar button requests hide-to-tray.
     HideRequest,
+    /// Content script requests opening a URL in the default browser.
+    OpenUrl { url: String },
 }
 
 /// Messages sent from the daemon to the Chrome extension.
@@ -196,6 +198,23 @@ async fn handle_relay_connection(
                     Ok(ExtensionMessage::HideRequest) => {
                         tracing::info!("Extension titlebar hide request");
                         state.request_hide();
+                    }
+                    Ok(ExtensionMessage::OpenUrl { url }) => {
+                        // Validate URL scheme before passing to xdg-open
+                        if url.starts_with("https://") || url.starts_with("http://") {
+                            tracing::info!("Opening URL in default browser: {}", url);
+                            if let Err(e) = std::process::Command::new("xdg-open")
+                                .arg(&url)
+                                .stdin(std::process::Stdio::null())
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null())
+                                .spawn()
+                            {
+                                tracing::warn!("Failed to open URL: {}", e);
+                            }
+                        } else {
+                            tracing::warn!("Rejected non-HTTP URL: {}", url);
+                        }
                     }
                     Ok(ExtensionMessage::WindowHidden) => {
                         tracing::info!("Extension reports window hidden (user closed)");

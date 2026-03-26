@@ -33,6 +33,8 @@
     service = "whatsapp";
   } else if (url.startsWith("https://facebook.com/messages") || url.startsWith("https://www.facebook.com/messages")) {
     service = "messenger";
+  } else if (url.startsWith("https://app.slack.com")) {
+    service = "slack";
   }
 
   if (!service) return;
@@ -249,6 +251,7 @@
   const SERVICE_DISPLAY_NAMES = {
     whatsapp: "WhatsApp",
     messenger: "Messenger",
+    slack: "Slack",
   };
 
   // First-run speech bubble
@@ -354,6 +357,29 @@
     setInterval(scanWhatsAppUnreads, 2000);
     setTimeout(scanWhatsAppUnreads, 3000);
   }
+
+  // Slack: extract unread count from the page title, e.g. "(3) Slack | workspace"
+  if (service === "slack") {
+    function scanSlackUnreads() {
+      let count = 0;
+      const match = document.title.match(/^\((\d+)\)/);
+      if (match) count = parseInt(match[1], 10);
+      if (count !== lastBadgeCount) {
+        lastBadgeCount = count;
+        safeSendMessage({ type: "badge_update", count });
+      }
+    }
+
+    // Watch <title> mutations for instant detection
+    const titleEl = document.querySelector("title");
+    if (titleEl) {
+      const titleObserver = new MutationObserver(scanSlackUnreads);
+      titleObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
+    }
+    setInterval(scanSlackUnreads, 2000);
+    setTimeout(scanSlackUnreads, 3000);
+  }
+
   // Messenger: badge count is handled by scanForUnreadMessages() below.
 
   // ================================================================
@@ -638,7 +664,43 @@
     });
   }
 
-  // Relay notifications from MAIN world override to background script
+  // ================================================================
+  // External link interception — open in default browser via daemon
+  // ================================================================
+  const SERVICE_DOMAINS = {
+    whatsapp: ["web.whatsapp.com"],
+    messenger: ["facebook.com", "www.facebook.com"],
+    slack: ["app.slack.com", "slack.com"],
+  };
+
+  const allowedDomains = SERVICE_DOMAINS[service] || [];
+
+  function isInternalUrl(href) {
+    try {
+      const linkUrl = new URL(href, window.location.origin);
+      // Same-page anchors and javascript: are always internal
+      if (linkUrl.protocol === "javascript:" || linkUrl.protocol === "blob:") return true;
+      if (linkUrl.origin === window.location.origin) return true;
+      return allowedDomains.some((d) => linkUrl.hostname === d || linkUrl.hostname.endsWith("." + d));
+    } catch {
+      return true; // Malformed URL — don't intercept
+    }
+  }
+
+  document.addEventListener("click", (e) => {
+    // Walk up from the click target to find the nearest <a>
+    const anchor = e.target.closest("a[href]");
+    if (!anchor) return;
+    const href = anchor.href;
+    if (!href) return;
+    if (isInternalUrl(href)) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    safeSendMessage({ type: "open_url", url: href });
+  }, true);
+
+  // Relay messages from MAIN world to background script
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     if (event.data && event.data.__loft_notification) {
@@ -648,6 +710,10 @@
         body: event.data.body,
         icon: event.data.icon,
       });
+    }
+    // Relay window.open() interceptions from notification-override.js
+    if (event.data && event.data.__loft_open_url) {
+      safeSendMessage({ type: "open_url", url: event.data.url });
     }
   });
 

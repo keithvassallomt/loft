@@ -82,7 +82,8 @@ function isLoftTab(url) {
     url &&
     (url.startsWith("https://web.whatsapp.com") ||
       url.startsWith("https://facebook.com/messages") ||
-      url.startsWith("https://www.facebook.com/messages"))
+      url.startsWith("https://www.facebook.com/messages") ||
+      url.startsWith("https://app.slack.com"))
   );
 }
 
@@ -90,6 +91,7 @@ function detectServiceFromUrl(url) {
   if (!url) return null;
   if (url.startsWith("https://web.whatsapp.com")) return "whatsapp";
   if (url.startsWith("https://facebook.com/messages") || url.startsWith("https://www.facebook.com/messages")) return "messenger";
+  if (url.startsWith("https://app.slack.com")) return "slack";
   return null;
 }
 
@@ -289,6 +291,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "zoom_in" || msg.type === "zoom_out") {
     if (sender.tab) {
       adjustZoom(sender.tab.id, msg.type === "zoom_in" ? 0.1 : -0.1);
+    }
+    return false;
+  }
+
+  // Handle open_url: forward to daemon for xdg-open
+  if (msg.type === "open_url") {
+    if (port) {
+      port.postMessage({ type: "open_url", url: msg.url });
     }
     return false;
   }

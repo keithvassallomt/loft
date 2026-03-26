@@ -85,6 +85,38 @@
     }
   };
 
+  // Intercept window.open() to route external URLs to the default browser
+  // via the daemon (xdg-open) instead of opening a new Chrome window.
+  const origWindowOpen = window.open;
+  const isWhatsApp = window.location.href.startsWith("https://web.whatsapp.com");
+  const isSlack = window.location.href.startsWith("https://app.slack.com");
+
+  const internalDomains = isMessenger
+    ? ["facebook.com", "www.facebook.com"]
+    : isWhatsApp
+    ? ["web.whatsapp.com"]
+    : isSlack
+    ? ["app.slack.com", "slack.com"]
+    : [];
+
+  function isInternalOrigin(url) {
+    try {
+      const parsed = new URL(url, window.location.origin);
+      if (parsed.origin === window.location.origin) return true;
+      return internalDomains.some((d) => parsed.hostname === d || parsed.hostname.endsWith("." + d));
+    } catch {
+      return true;
+    }
+  }
+
+  window.open = function (url, target, features) {
+    if (url && !isInternalOrigin(url)) {
+      window.postMessage({ __loft_open_url: true, url: url }, "*");
+      return null;
+    }
+    return origWindowOpen.call(this, url, target, features);
+  };
+
   // Override document.visibilityState so the page thinks it is hidden
   // when the window loses focus. Without this, WhatsApp never fires
   // new Notification() because --app= mode keeps visibilityState "visible"
