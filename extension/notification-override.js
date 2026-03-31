@@ -44,14 +44,25 @@
     );
   }
 
-  // Silent stub that looks like Notification but never shows anything.
+  // Silent stub that suppresses visible notifications.  Slack inspects
+  // Notification.prototype before deciding to call the constructor, so the
+  // prototype must be the real one.  Slack then tries to assign event
+  // handlers (.onclick etc.) on the returned object — the native setters
+  // throw "Illegal invocation" on a non-native instance, but Slack catches
+  // that error internally.  No native notification is created; the relay
+  // via chrome.notifications (with avatar) is the only visible notification.
   function SilentNotification(title, options = {}) {
     relayMetadata(title, options);
   }
-  SilentNotification.permission = OrigNotification.permission;
+  Object.defineProperty(SilentNotification, 'name', { value: 'Notification', configurable: true });
+  SilentNotification.toString = () => 'function Notification() { [native code] }';
+  Object.defineProperty(SilentNotification, 'permission', {
+    get() { return OrigNotification.permission; },
+    enumerable: true,
+    configurable: true,
+  });
   SilentNotification.requestPermission = OrigNotification.requestPermission.bind(OrigNotification);
-  SilentNotification.prototype = Object.create(EventTarget.prototype);
-  SilentNotification.prototype.close = function () {};
+  SilentNotification.prototype = OrigNotification.prototype;
 
   const isSlackNotif = window.location.href.startsWith("https://app.slack.com");
 
@@ -66,10 +77,16 @@
     // skip the native notification when DND is active.
     function LoftNotification(title, options = {}) {
       relayMetadata(title, options);
-      if (loftDnd) return Object.create(SilentNotification.prototype);
+      if (loftDnd) return;
       return new OrigNotification(title, options);
     }
-    LoftNotification.permission = OrigNotification.permission;
+    Object.defineProperty(LoftNotification, 'name', { value: 'Notification', configurable: true });
+    LoftNotification.toString = () => 'function Notification() { [native code] }';
+    Object.defineProperty(LoftNotification, 'permission', {
+      get() { return OrigNotification.permission; },
+      enumerable: true,
+      configurable: true,
+    });
     LoftNotification.requestPermission = OrigNotification.requestPermission.bind(OrigNotification);
     LoftNotification.prototype = OrigNotification.prototype;
     window.Notification = LoftNotification;

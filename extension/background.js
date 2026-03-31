@@ -23,6 +23,10 @@ function syncDndToTab() {
 // Maps chrome.notifications ID → conversation href for click-to-navigate
 const notificationHrefs = new Map();
 
+// Tiny 1x1 PNG fallback for chrome.notifications (iconUrl is required).
+// Used when the notification source doesn't provide a valid https icon URL.
+const FALLBACK_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAA0lEQVQI12P4z8BQDwAEgAF/QualzQAAAABJRU5ErkJggg==";
+
 function connectNativeHost() {
   try {
     port = chrome.runtime.connectNative(NM_HOST_NAME);
@@ -311,7 +315,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         type: "basic",
         title: msg.sender || "Messenger",
         message: msg.body || "",
-        iconUrl: (msg.icon && msg.icon.startsWith("http")) ? msg.icon : "icons/icon128.png",
+        iconUrl: (msg.icon && msg.icon.startsWith("http")) ? msg.icon : FALLBACK_ICON,
       };
       chrome.notifications.create(notifId, opts, () => {
         if (chrome.runtime.lastError) {
@@ -324,22 +328,41 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   // Handle Slack notifications via chrome.notifications (native Notification
-  // API on Linux drops icon URLs, so we suppress and re-create here)
+  // API on Linux drops icon URLs, so we suppress and re-create here).
+  // chrome.notifications can't fetch Slack CDN images directly, so we
+  // download the avatar first and convert to a data URI.
   if (msg.type === "notification" && sender.tab && sender.tab.url &&
       sender.tab.url.startsWith("https://app.slack.com")) {
     if (!dndEnabled) {
       const notifId = "slack-" + Date.now();
-      const opts = {
-        type: "basic",
-        title: msg.title || "Slack",
-        message: msg.body || "",
-        iconUrl: (msg.icon && msg.icon.startsWith("http")) ? msg.icon : "icons/icon128.png",
-      };
-      chrome.notifications.create(notifId, opts, () => {
-        if (chrome.runtime.lastError) {
-          console.warn("Loft: Failed to create Slack notification:", chrome.runtime.lastError.message);
+      const iconSrc = (msg.icon && msg.icon.startsWith("http")) ? msg.icon : "";
+
+      (async () => {
+        let iconUrl = FALLBACK_ICON;
+        if (iconSrc) {
+          try {
+            const resp = await fetch(iconSrc);
+            const blob = await resp.blob();
+            const reader = new FileReader();
+            iconUrl = await new Promise((resolve) => {
+              reader.onloadend = () => resolve(reader.result);
+              reader.readAsDataURL(blob);
+            });
+          } catch {
+            // fetch failed — use fallback
+          }
         }
-      });
+        chrome.notifications.create(notifId, {
+          type: "basic",
+          title: msg.title || "Slack",
+          message: msg.body || "",
+          iconUrl: iconUrl,
+        }, () => {
+          if (chrome.runtime.lastError) {
+            console.warn("Loft: Failed to create Slack notification:", chrome.runtime.lastError.message);
+          }
+        });
+      })();
     }
     return false;
   }

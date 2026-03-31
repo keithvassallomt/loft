@@ -721,15 +721,46 @@
     safeSendMessage({ type: "open_url", url: href });
   }, true);
 
+  // Slack avatar lookup: search the sidebar for an unread conversation
+  // matching the sender name and extract the profile picture URL.
+  function findSlackAvatar(title) {
+    if (!title || service !== "slack") return "";
+    // Slack notification titles are e.g. "New message from Keith" or
+    // "Keith" — extract the actual name.
+    const nameMatch = title.match(/^New message from (.+)$/) ||
+                      title.match(/^New messages? in (.+)$/) ||
+                      title.match(/^(.+)$/);
+    const name = nameMatch ? nameMatch[1].trim() : title;
+    const channels = document.querySelectorAll(
+      '.p-channel_sidebar__channel--unread'
+    );
+    for (const ch of channels) {
+      const nameSpan = ch.querySelector('.p-channel_sidebar__name > span:first-child');
+      if (!nameSpan || nameSpan.textContent.trim() !== name) continue;
+      const img = ch.querySelector('.c-base_icon__width_only_container img[src*="slack-edge"]');
+      if (img && img.src.startsWith("https://")) {
+        // Upscale avatar: sidebar uses -24, replace with -128 for notifications
+        return img.src.replace(/-\d+$/, '-128');
+      }
+    }
+    return "";
+  }
+
   // Relay messages from MAIN world to background script
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     if (event.data && event.data.__loft_notification) {
+      let icon = event.data.icon;
+      // For Slack, the native Notification API doesn't include an icon.
+      // Look up the sender's avatar from the sidebar DOM.
+      if (!icon && service === "slack") {
+        icon = findSlackAvatar(event.data.title);
+      }
       safeSendMessage({
         type: "notification",
         title: event.data.title,
         body: event.data.body,
-        icon: event.data.icon,
+        icon: icon,
       });
     }
     // Relay window.open() interceptions from notification-override.js
