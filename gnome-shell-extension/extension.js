@@ -28,6 +28,7 @@ const DBUS_PATH = '/chat/loft/ShellHelper';
 const LOFT_WM_CLASSES = new Set([
     'chrome-web.whatsapp.com__-Default',
     'chrome-facebook.com__messages_-Default',
+    'chrome-app.slack.com__client_-Default',
 ]);
 
 const DBUS_IFACE = `<node>
@@ -385,6 +386,7 @@ export default class LoftShellHelper extends Extension {
         const map = {
             'whatsapp': 'WhatsApp',
             'messenger': 'Messenger',
+            'slack': 'Slack',
         };
         return map[name] || name;
     }

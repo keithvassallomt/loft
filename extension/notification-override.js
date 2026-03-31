@@ -53,8 +53,12 @@
   SilentNotification.prototype = Object.create(EventTarget.prototype);
   SilentNotification.prototype.close = function () {};
 
-  if (isMessenger) {
-    // Messenger: always silent (DOM scraping handles notifications in content.js)
+  const isSlackNotif = window.location.href.startsWith("https://app.slack.com");
+
+  if (isMessenger || isSlackNotif) {
+    // Messenger: DOM scraping handles notifications in content.js.
+    // Slack: suppress native notifications so background.js can re-create them
+    // via chrome.notifications (which renders icon URLs correctly on Linux).
     window.Notification = SilentNotification;
   } else {
     // WhatsApp: show native notifications unless per-service DND is on.
@@ -79,8 +83,8 @@
 
   ServiceWorkerRegistration.prototype.showNotification = function (title, options = {}) {
     relayMetadata(title, options);
-    // Only show the native notification when not Messenger and not DND
-    if (!isMessenger && !loftDnd) {
+    // Only show the native notification when not Messenger/Slack and not DND
+    if (!isMessenger && !isSlackNotif && !loftDnd) {
       return origShowNotification.call(this, title, options);
     }
   };

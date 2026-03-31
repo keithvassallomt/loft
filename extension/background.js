@@ -323,6 +323,27 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
+  // Handle Slack notifications via chrome.notifications (native Notification
+  // API on Linux drops icon URLs, so we suppress and re-create here)
+  if (msg.type === "notification" && sender.tab && sender.tab.url &&
+      sender.tab.url.startsWith("https://app.slack.com")) {
+    if (!dndEnabled) {
+      const notifId = "slack-" + Date.now();
+      const opts = {
+        type: "basic",
+        title: msg.title || "Slack",
+        message: msg.body || "",
+        iconUrl: (msg.icon && msg.icon.startsWith("http")) ? msg.icon : "icons/icon128.png",
+      };
+      chrome.notifications.create(notifId, opts, () => {
+        if (chrome.runtime.lastError) {
+          console.warn("Loft: Failed to create Slack notification:", chrome.runtime.lastError.message);
+        }
+      });
+    }
+    return false;
+  }
+
   if (port) {
     port.postMessage(msg);
   }

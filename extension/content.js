@@ -183,6 +183,8 @@
       for (const child of document.body.children) {
         if (child.id && child.id.startsWith('loft-')) continue;
         if (['STYLE', 'SCRIPT', 'LINK'].includes(child.tagName)) continue;
+        // Skip zero-height helper divs (e.g. Slack's empty absolute wrappers)
+        if (child.offsetHeight === 0) continue;
         return child;
       }
       return null;
@@ -191,6 +193,13 @@
     // Show/hide bar when mouse enters top edge of window
     let barVisible = false;
     let hideTimeout = null;
+    // Detect whether the app root uses fixed/absolute positioning.
+    // margin-top has no effect on fixed/absolute elements — use top instead.
+    function isFixedOrAbsolute(el) {
+      const pos = getComputedStyle(el).position;
+      return pos === 'fixed' || pos === 'absolute';
+    }
+
     function showBar() {
       if (hideTimeout) { clearTimeout(hideTimeout); hideTimeout = null; }
       if (barVisible || !titlebarEnabled) return;
@@ -198,9 +207,15 @@
       host.style.top = '0';
       const root = getAppRoot();
       if (root) {
-        root.style.setProperty('transition', 'margin-top 0.2s ease, max-height 0.2s ease', 'important');
-        root.style.setProperty('margin-top', TITLEBAR_HEIGHT + 'px', 'important');
-        root.style.setProperty('max-height', 'calc(100vh - ' + TITLEBAR_HEIGHT + 'px)', 'important');
+        if (isFixedOrAbsolute(root)) {
+          root.style.setProperty('transition', 'top 0.2s ease, height 0.2s ease', 'important');
+          root.style.setProperty('top', TITLEBAR_HEIGHT + 'px', 'important');
+          root.style.setProperty('height', 'calc(100vh - ' + TITLEBAR_HEIGHT + 'px)', 'important');
+        } else {
+          root.style.setProperty('transition', 'margin-top 0.2s ease, height 0.2s ease', 'important');
+          root.style.setProperty('margin-top', TITLEBAR_HEIGHT + 'px', 'important');
+          root.style.setProperty('height', 'calc(100vh - ' + TITLEBAR_HEIGHT + 'px)', 'important');
+        }
       }
     }
     function hideBar() {
@@ -209,13 +224,23 @@
       host.style.top = '-' + TITLEBAR_HEIGHT + 'px';
       const root = getAppRoot();
       if (root) {
-        root.style.setProperty('margin-top', '0', 'important');
-        root.style.setProperty('max-height', '100vh', 'important');
-        setTimeout(() => {
-          root.style.removeProperty('margin-top');
-          root.style.removeProperty('max-height');
-          root.style.removeProperty('transition');
-        }, 200);
+        if (isFixedOrAbsolute(root)) {
+          root.style.setProperty('top', '0', 'important');
+          root.style.setProperty('height', '100vh', 'important');
+          setTimeout(() => {
+            root.style.removeProperty('top');
+            root.style.removeProperty('height');
+            root.style.removeProperty('transition');
+          }, 200);
+        } else {
+          root.style.setProperty('margin-top', '0', 'important');
+          root.style.setProperty('height', '100vh', 'important');
+          setTimeout(() => {
+            root.style.removeProperty('margin-top');
+            root.style.removeProperty('height');
+            root.style.removeProperty('transition');
+          }, 200);
+        }
       }
     }
     function scheduleHide() {
@@ -358,24 +383,20 @@
     setTimeout(scanWhatsAppUnreads, 3000);
   }
 
-  // Slack: extract unread count from the page title, e.g. "(3) Slack | workspace"
+  // Slack: count sidebar items with unread dots (p-unread-dot class)
   if (service === "slack") {
     function scanSlackUnreads() {
-      let count = 0;
-      const match = document.title.match(/^\((\d+)\)/);
-      if (match) count = parseInt(match[1], 10);
+      const count = document.querySelectorAll('.p-channel_sidebar__channel--unread').length;
       if (count !== lastBadgeCount) {
         lastBadgeCount = count;
         safeSendMessage({ type: "badge_update", count });
       }
     }
 
-    // Watch <title> mutations for instant detection
-    const titleEl = document.querySelector("title");
-    if (titleEl) {
-      const titleObserver = new MutationObserver(scanSlackUnreads);
-      titleObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
-    }
+    const slackObserver = new MutationObserver(scanSlackUnreads);
+    slackObserver.observe(document.body, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ['class'],
+    });
     setInterval(scanSlackUnreads, 2000);
     setTimeout(scanSlackUnreads, 3000);
   }
@@ -719,9 +740,27 @@
 
   // Protect against accidental window close (e.g. muscle memory).
   // Shows Chrome's native "Leave site?" confirmation dialog.
+  // For Slack, only block once the user is in an active workspace (URL contains
+  // /client/T...) — the sign-in flow needs to navigate away freely.
+  let slackSignedIn = service === "slack"
+    ? /\/client\/T/.test(window.location.pathname)
+    : false;
+
   window.addEventListener("beforeunload", (event) => {
+    if (service === "slack" && !slackSignedIn) return;
     event.preventDefault();
   });
+
+  if (service === "slack" && !slackSignedIn) {
+    // Watch for navigation into a workspace (SPA routing updates the URL)
+    const navObserver = new MutationObserver(() => {
+      if (/\/client\/T/.test(window.location.pathname)) {
+        slackSignedIn = true;
+        navObserver.disconnect();
+      }
+    });
+    navObserver.observe(document.body, { childList: true, subtree: true });
+  }
 
   // Listen for daemon messages (e.g., DND changes, titlebar config)
   chrome.runtime.onMessage.addListener((msg) => {
