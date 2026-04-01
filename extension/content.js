@@ -404,23 +404,24 @@
     setTimeout(scanSlackUnreads, 3000);
   }
 
-  // Telegram: parse unread count from document title — "Telegram Web (N)"
+  // Telegram: count sidebar badges (unread conversation indicators)
   if (service === "telegram") {
     function scanTelegramUnreads() {
       let count = 0;
-      const match = document.title.match(/\((\d+)\)/);
-      if (match) count = parseInt(match[1], 10);
+      for (const el of document.querySelectorAll('.chat-badge-transition')) {
+        // Skip action buttons (e.g. "Open" for bots) — only count numeric badges
+        if (/^\d+$/.test(el.textContent.trim())) count++;
+      }
       if (count !== lastBadgeCount) {
         lastBadgeCount = count;
         safeSendMessage({ type: "badge_update", count });
       }
     }
 
-    const titleEl = document.querySelector('title');
-    if (titleEl) {
-      const tgObserver = new MutationObserver(scanTelegramUnreads);
-      tgObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
-    }
+    const tgObserver = new MutationObserver(scanTelegramUnreads);
+    tgObserver.observe(document.body, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ['class'],
+    });
     setInterval(scanTelegramUnreads, 2000);
     setTimeout(scanTelegramUnreads, 3000);
   }

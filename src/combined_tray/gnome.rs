@@ -137,6 +137,9 @@ pub async fn run_combined_gnome_panel(state: Arc<CombinedTrayState>) -> Result<(
     // that cause hover highlight flashing.
     let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
     let mut empty_since: Option<std::time::Instant> = None;
+    // Grace period: don't exit for being empty until daemons have had time to register.
+    let startup = std::time::Instant::now();
+    let startup_grace = std::time::Duration::from_secs(10);
     let mut prev_snapshots: std::collections::HashMap<String, (String, bool, u32, bool, String)> =
         std::collections::HashMap::new();
 
@@ -195,9 +198,9 @@ pub async fn run_combined_gnome_panel(state: Arc<CombinedTrayState>) -> Result<(
 
         prev_snapshots = current_snapshots;
 
-        // Exit after 3 seconds with no registered services
+        // Exit after 3 seconds with no registered services (but not during startup grace)
         if let Some(since) = empty_since {
-            if since.elapsed() > std::time::Duration::from_secs(3) {
+            if startup.elapsed() > startup_grace && since.elapsed() > std::time::Duration::from_secs(3) {
                 tracing::info!("No services registered for 3 seconds, exiting");
                 let _ = unregister_combined().await;
                 return Ok(());

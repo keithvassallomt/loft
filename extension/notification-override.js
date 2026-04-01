@@ -67,7 +67,7 @@
   const isSlackNotif = window.location.href.startsWith("https://app.slack.com");
   const isTelegram = window.location.href.startsWith("https://web.telegram.org");
 
-  if (isMessenger || isSlackNotif || isTelegram) {
+  if (isMessenger || isSlackNotif) {
     // Messenger: DOM scraping handles notifications in content.js.
     // Slack: suppress native notifications so background.js can re-create them
     // via chrome.notifications (which renders icon URLs correctly on Linux).
@@ -102,7 +102,7 @@
   ServiceWorkerRegistration.prototype.showNotification = function (title, options = {}) {
     relayMetadata(title, options);
     // Only show the native notification when not Messenger/Slack and not DND
-    if (!isMessenger && !isSlackNotif && !isTelegram && !loftDnd) {
+    if (!isMessenger && !isSlackNotif && !loftDnd) {
       return origShowNotification.call(this, title, options);
     }
   };

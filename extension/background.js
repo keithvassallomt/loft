@@ -369,44 +369,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
-  // Handle Telegram notifications via chrome.notifications (same approach as
-  // Slack — suppress native, re-create with avatar via data URI).
-  if (msg.type === "notification" && sender.tab && sender.tab.url &&
-      sender.tab.url.startsWith("https://web.telegram.org")) {
-    if (!dndEnabled) {
-      const notifId = "telegram-" + Date.now();
-      const iconSrc = (msg.icon && msg.icon.startsWith("http")) ? msg.icon : "";
-
-      (async () => {
-        let iconUrl = FALLBACK_ICON;
-        if (iconSrc) {
-          try {
-            const resp = await fetch(iconSrc);
-            const blob = await resp.blob();
-            const reader = new FileReader();
-            iconUrl = await new Promise((resolve) => {
-              reader.onloadend = () => resolve(reader.result);
-              reader.readAsDataURL(blob);
-            });
-          } catch {
-            // fetch failed — use fallback
-          }
-        }
-        chrome.notifications.create(notifId, {
-          type: "basic",
-          title: msg.title || "Telegram",
-          message: msg.body || "",
-          iconUrl: iconUrl,
-        }, () => {
-          if (chrome.runtime.lastError) {
-            console.warn("Loft: Failed to create Telegram notification:", chrome.runtime.lastError.message);
-          }
-        });
-      })();
-    }
-    return false;
-  }
-
   if (port) {
     port.postMessage(msg);
   }
