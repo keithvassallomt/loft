@@ -23,10 +23,22 @@ impl ServiceDefinition {
         format!("loft-{}", self.name)
     }
 
-    /// XDG icon theme name for the tray icon (e.g. `"loft-whatsapp-symbolic"`).
-    /// The `-symbolic` suffix tells GNOME to recolour the icon to match the panel theme.
+    /// XDG icon theme name for the tray icon.
+    ///
+    /// On GNOME, returns `"loft-whatsapp-symbolic"` — the `-symbolic` suffix tells
+    /// GNOME to recolour the icon to match the panel theme.
+    ///
+    /// On KDE and other desktops, returns `"loft-whatsapp"` (the coloured app icon)
+    /// because those DEs don't recolour symbolic icons and the black fill is
+    /// invisible on dark panels.
     pub fn tray_icon_name(&self) -> String {
-        format!("loft-{}-symbolic", self.name)
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+        let is_gnome = desktop.split(':').any(|d| d.eq_ignore_ascii_case("GNOME"));
+        if is_gnome {
+            format!("loft-{}-symbolic", self.name)
+        } else {
+            format!("loft-{}", self.name)
+        }
     }
 }
 

@@ -53,6 +53,14 @@ impl Tray for LoftTray {
         self.tray_icon_name.clone()
     }
 
+    fn icon_theme_path(&self) -> String {
+        dirs::data_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
+            .join("icons")
+            .to_string_lossy()
+            .to_string()
+    }
+
     fn category(&self) -> ksni::Category {
         ksni::Category::Communications
     }
@@ -146,8 +154,15 @@ impl Tray for LoftTray {
     }
 }
 
-/// Load a PNG/ICO file and convert to ARGB32 for the tray icon.
+/// Load a raster image file and convert to ARGB32 for the tray icon pixmap fallback.
+/// SVG files are not supported by the `image` crate — the DE resolves those via
+/// the `icon_name` property instead, so a missing pixmap is harmless.
 fn load_icon(path: &PathBuf) -> Vec<Icon> {
+    // Skip SVG files — they can't be decoded as raster images.
+    if path.extension().and_then(|e| e.to_str()) == Some("svg") {
+        tracing::debug!("Skipping pixmap for SVG icon {}, relying on icon_name", path.display());
+        return vec![];
+    }
     match std::fs::read(path) {
         Ok(data) => match image::load_from_memory(&data) {
             Ok(img) => {

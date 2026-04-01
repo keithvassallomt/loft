@@ -488,8 +488,11 @@ fn setup_nm_host() -> Result<()> {
     // a wrapper script that passes --native-messaging to the loft binary.
     let wrapper_path = data_dir().join("nm-host.sh");
     std::fs::create_dir_all(wrapper_path.parent().unwrap())?;
+    // If running inside a Flatpak sandbox, use flatpak-spawn to call the
+    // host loft binary; otherwise exec it directly.
     let wrapper_content = format!(
-        "#!/bin/sh\nexec \"{}\" --native-messaging \"$@\"\n",
+        "#!/bin/sh\nif [ -f /.flatpak-info ]; then\n  exec flatpak-spawn --host \"{}\" --native-messaging \"$@\"\nelse\n  exec \"{}\" --native-messaging \"$@\"\nfi\n",
+        loft_binary.display(),
         loft_binary.display()
     );
     std::fs::write(&wrapper_path, &wrapper_content)

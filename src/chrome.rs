@@ -158,32 +158,23 @@ fn display_name_for_binary(name: &str) -> String {
 
 /// Build the Chrome command-line arguments for a service.
 ///
-/// For native Chrome 137+, uses `--remote-debugging-pipe` + CDP
-/// `Extensions.loadUnpacked` (since `--load-extension` was removed from
-/// branded builds).
-///
-/// For Flatpak Chrome, CDP pipe forwarding through the sandbox is unreliable,
-/// so we use `--load-extension` + `--disable-extensions-except` directly
-/// (re-enabled by `--enable-unsafe-extension-debugging`).
+/// Uses `--remote-debugging-pipe` + CDP `Extensions.loadUnpacked` to load the
+/// extension (since `--load-extension` was removed from branded Chrome 137+).
+/// The pipe fds (3/4) are set up via `pre_exec` in the daemon's spawn logic.
 pub fn build_chrome_args(
     service: &ServiceDefinition,
     profile_path: &Path,
     _launch_method: &LaunchMethod,
 ) -> Vec<String> {
-    let mut args = vec![
+    vec![
         format!("--app={}", service.url),
         format!("--user-data-dir={}", profile_path.display()),
         format!("--class=loft-{}", service.name),
         "--enable-unsafe-extension-debugging".to_string(),
         "--no-first-run".to_string(),
         "--no-default-browser-check".to_string(),
-    ];
-
-    // All launch methods use --remote-debugging-pipe for CDP extension loading.
-    // For Flatpak, the pipe fds are forwarded into the sandbox via --forward-fd.
-    args.push("--remote-debugging-pipe".to_string());
-
-    args
+        "--remote-debugging-pipe".to_string(),
+    ]
 }
 
 /// Build a Command to launch Chrome based on the detection method.
@@ -195,13 +186,20 @@ pub fn build_chrome_command(
         LaunchMethod::Flatpak => {
             let mut cmd = Command::new("flatpak");
             // Flatpak args go before the app ID; Chrome args go after.
-            // --forward-fd=3/4 passes the CDP debugging pipe fds into the
-            // sandbox. Do NOT add "--" — Chrome treats it as "end of options"
+            // Do NOT add "--" — Chrome treats it as "end of options"
             // and opens everything after it as URL tabs.
+            //
+            // Grant access to the Loft data dir so Chrome can see the
+            // extension and write to the profile inside the sandbox.
+            // --talk-name=org.freedesktop.Flatpak allows flatpak-spawn --host
+            // in the NM host script to call the loft binary on the host.
+            let loft_data = dirs::data_dir()
+                .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+                .join("loft");
             cmd.args([
                 "run",
-                "--forward-fd=3",
-                "--forward-fd=4",
+                &format!("--filesystem={}", loft_data.display()),
+                "--talk-name=org.freedesktop.Flatpak",
                 &chrome.path,
             ]);
             cmd.args(args);

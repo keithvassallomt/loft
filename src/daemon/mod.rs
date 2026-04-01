@@ -726,7 +726,8 @@ impl ChromeManager {
         // Chrome 137+ removed --load-extension from branded builds, so we use
         // --remote-debugging-pipe + CDP Extensions.loadUnpacked instead.
         // Chrome reads commands from fd 3, writes responses to fd 4.
-        // For Flatpak, --forward-fd=3/4 passes these fds into the sandbox.
+        // The pre_exec dup2 sets these fds in the child process — for Flatpak,
+        // the fds are inherited by the flatpak process and passed into the sandbox.
         let (daemon_read_fd, daemon_write_fd, chrome_read_fd, chrome_write_fd) = unsafe {
             let mut pipe_in = [0i32; 2]; // daemon writes -> Chrome reads on fd 3
             let mut pipe_out = [0i32; 2]; // Chrome writes on fd 4 -> daemon reads
