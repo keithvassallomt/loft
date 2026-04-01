@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>chat.loft.Loft</id>
+
+  <name>Loft</name>
+  <summary>Desktop integration for messaging apps on Linux</summary>
+
+  <developer id="chat.loft">
+    <name>Keith Vassallo</name>
+  </developer>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <description>
+    <p>
+      Loft provides full desktop integration for WhatsApp, Facebook Messenger,
+      Slack and Telegram on Linux, including voice and video calling, system tray
+      icons, badge counts, and close-to-tray behavior.
+    </p>
+    <p>
+      Unlike Electron wrappers, Loft uses your real Google Chrome installation
+      for full WebRTC and codec support, while a Rust daemon provides the system
+      integration that Chrome alone cannot.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">chat.loft.Loft.desktop</launchable>
+
+  <url type="homepage">https://github.com/keithvassallomt/loft</url>
+  <url type="bugtracker">https://github.com/keithvassallomt/loft/issues</url>
+  <url type="vcs-browse">https://github.com/keithvassallomt/loft</url>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#4a90d9</color>
+    <color type="primary" scheme_preference="dark">#1a5fb4</color>
+  </branding>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/manager.png</image>
+      <caption>Loft Manager showing available services</caption>
+    </screenshot>
+  </screenshots>
+
+  <releases>
+    <release version="0.1.0" date="2026-04-01">
+      <description>
+        <p>Initial release with WhatsApp, Messenger, Slack and Telegram support.</p>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-audio">intense</content_attribute>
+    <content_attribute id="social-contacts">intense</content_attribute>
+  </content_rating>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+</component>

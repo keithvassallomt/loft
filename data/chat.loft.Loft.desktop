@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Loft
+GenericName=Messaging
+Comment=Desktop integration for messaging apps on Linux
+Exec=loft
+Icon=chat.loft.Loft
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=WhatsApp;Messenger;Slack;Telegram;Chat;
+StartupNotify=true

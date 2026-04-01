@@ -31,7 +31,11 @@ fn main() -> Result<()> {
     if let Some(service_name) = args.service {
         tracing::info!("Starting service daemon: {}", service_name);
         let rt = tokio::runtime::Runtime::new()?;
-        return rt.block_on(daemon::run(service_name, args.minimized));
+        let result = rt.block_on(daemon::run(service_name, args.minimized));
+        if let Err(ref e) = result {
+            tracing::error!("Daemon exited with error: {:#}", e);
+        }
+        return result;
     }
 
     tracing::info!("Starting Loft manager");

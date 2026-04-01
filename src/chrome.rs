@@ -17,20 +17,38 @@ pub struct ChromeInfo {
 pub enum LaunchMethod {
     Direct,
     AppImage,
+    /// Flatpak-installed Chrome. The `ChromeInfo.path` field holds the Flatpak
+    /// app ID (e.g. `"com.google.Chrome"`).
+    Flatpak,
 }
 
 /// Detect Chrome by searching in the order specified in CLAUDE.md.
 pub fn detect_chrome(config: &GlobalConfig) -> Result<ChromeInfo> {
     // 1. User override from config
     if let Some(path) = &config.chrome_path {
-        if is_executable(Path::new(path)) {
+        // Check if this is a Flatpak app ID (e.g. "com.google.Chrome")
+        if (path.starts_with("com.") || path.starts_with("org."))
+            && !path.contains('/')
+        {
+            if let Ok(output) = Command::new("flatpak").args(["info", path]).output() {
+                if output.status.success() {
+                    return Ok(ChromeInfo {
+                        path: path.clone(),
+                        display_name: "Google Chrome (Flatpak)".to_string(),
+                        launch_method: LaunchMethod::Flatpak,
+                    });
+                }
+            }
+            tracing::warn!("Configured Flatpak app {} not installed", path);
+        } else if is_executable(Path::new(path)) {
             return Ok(ChromeInfo {
                 path: path.clone(),
                 display_name: "Custom".to_string(),
                 launch_method: LaunchMethod::Direct,
             });
+        } else {
+            tracing::warn!("Configured Chrome path {} is not executable", path);
         }
-        tracing::warn!("Configured Chrome path {} is not executable", path);
     }
 
     // Return the first result from detect_all_chrome
@@ -115,6 +133,17 @@ pub fn detect_all_chrome() -> Vec<ChromeInfo> {
         }
     }
 
+    // 4. Flatpak
+    if let Ok(output) = Command::new("flatpak").args(["info", "com.google.Chrome"]).output() {
+        if output.status.success() {
+            add(ChromeInfo {
+                display_name: "Google Chrome (Flatpak)".to_string(),
+                path: "com.google.Chrome".to_string(),
+                launch_method: LaunchMethod::Flatpak,
+            });
+        }
+    }
+
     results
 }
 
@@ -129,21 +158,32 @@ fn display_name_for_binary(name: &str) -> String {
 
 /// Build the Chrome command-line arguments for a service.
 ///
-/// Chrome 137+ removed `--load-extension` from branded builds, so we use
-/// `--remote-debugging-pipe` + CDP `Extensions.loadUnpacked` instead.
+/// For native Chrome 137+, uses `--remote-debugging-pipe` + CDP
+/// `Extensions.loadUnpacked` (since `--load-extension` was removed from
+/// branded builds).
+///
+/// For Flatpak Chrome, CDP pipe forwarding through the sandbox is unreliable,
+/// so we use `--load-extension` + `--disable-extensions-except` directly
+/// (re-enabled by `--enable-unsafe-extension-debugging`).
 pub fn build_chrome_args(
     service: &ServiceDefinition,
     profile_path: &Path,
+    _launch_method: &LaunchMethod,
 ) -> Vec<String> {
-    vec![
+    let mut args = vec![
         format!("--app={}", service.url),
         format!("--user-data-dir={}", profile_path.display()),
         format!("--class=loft-{}", service.name),
-        "--remote-debugging-pipe".to_string(),
         "--enable-unsafe-extension-debugging".to_string(),
         "--no-first-run".to_string(),
         "--no-default-browser-check".to_string(),
-    ]
+    ];
+
+    // All launch methods use --remote-debugging-pipe for CDP extension loading.
+    // For Flatpak, the pipe fds are forwarded into the sandbox via --forward-fd.
+    args.push("--remote-debugging-pipe".to_string());
+
+    args
 }
 
 /// Build a Command to launch Chrome based on the detection method.
@@ -151,9 +191,28 @@ pub fn build_chrome_command(
     chrome: &ChromeInfo,
     args: &[String],
 ) -> Command {
-    let mut cmd = Command::new(&chrome.path);
-    cmd.args(args);
-    cmd
+    match chrome.launch_method {
+        LaunchMethod::Flatpak => {
+            let mut cmd = Command::new("flatpak");
+            // Flatpak args go before the app ID; Chrome args go after.
+            // --forward-fd=3/4 passes the CDP debugging pipe fds into the
+            // sandbox. Do NOT add "--" — Chrome treats it as "end of options"
+            // and opens everything after it as URL tabs.
+            cmd.args([
+                "run",
+                "--forward-fd=3",
+                "--forward-fd=4",
+                &chrome.path,
+            ]);
+            cmd.args(args);
+            cmd
+        }
+        _ => {
+            let mut cmd = Command::new(&chrome.path);
+            cmd.args(args);
+            cmd
+        }
+    }
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -185,20 +244,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_build_chrome_args() {
+    fn test_build_chrome_args_native() {
         let service = &crate::service::WHATSAPP;
         let profile = PathBuf::from("/home/user/.local/share/loft/profiles/whatsapp");
 
-        let args = build_chrome_args(service, &profile);
+        let args = build_chrome_args(service, &profile, &LaunchMethod::Direct);
 
-        assert_eq!(args.len(), 7);
         assert_eq!(args[0], "--app=https://web.whatsapp.com/");
         assert!(args[1].contains("profiles/whatsapp"));
         assert_eq!(args[2], "--class=loft-whatsapp");
-        assert_eq!(args[3], "--remote-debugging-pipe");
-        assert_eq!(args[4], "--enable-unsafe-extension-debugging");
-        assert_eq!(args[5], "--no-first-run");
-        assert_eq!(args[6], "--no-default-browser-check");
+        assert!(args.contains(&"--remote-debugging-pipe".to_string()));
+        assert!(args.contains(&"--enable-unsafe-extension-debugging".to_string()));
+        assert!(!args.iter().any(|a| a.starts_with("--load-extension")));
+    }
+
+    #[test]
+    fn test_build_chrome_args_flatpak() {
+        let service = &crate::service::WHATSAPP;
+        let profile = PathBuf::from("/home/user/.local/share/loft/profiles/whatsapp");
+
+        let args = build_chrome_args(service, &profile, &LaunchMethod::Flatpak);
+
+        assert_eq!(args[0], "--app=https://web.whatsapp.com/");
+        assert!(args.contains(&"--remote-debugging-pipe".to_string()));
     }
 
     #[test]

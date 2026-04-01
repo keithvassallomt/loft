@@ -23,7 +23,27 @@ toml = "0.9"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tungstenite = "0.29"
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/loft", dest = "/usr/bin/loft", mode = "0755" },
+    { source = "data/chat.loft.Loft.desktop", dest = "/usr/share/applications/chat.loft.Loft.desktop", mode = "0644" },
+    { source = "data/chat.loft.Loft.metainfo.xml", dest = "/usr/share/metainfo/chat.loft.Loft.metainfo.xml", mode = "0644" },
+    { source = "assets/icons/loft.svg", dest = "/usr/share/icons/hicolor/scalable/apps/chat.loft.Loft.svg", mode = "0644" },
+]
+
+[package.metadata.deb]
+maintainer = "Keith Vassallo"
+section = "net"
+depends = "$auto"
+assets = [
+    ["target/release/loft", "usr/bin/", "755"],
+    ["data/chat.loft.Loft.desktop", "usr/share/applications/", "644"],
+    ["data/chat.loft.Loft.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["assets/icons/loft.svg", "usr/share/icons/hicolor/scalable/apps/chat.loft.Loft.svg", "644"],
+]

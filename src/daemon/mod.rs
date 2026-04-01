@@ -163,6 +163,7 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
         match chrome_info.launch_method {
             chrome::LaunchMethod::Direct => "direct",
             chrome::LaunchMethod::AppImage => "appimage",
+            chrome::LaunchMethod::Flatpak => "flatpak",
         }
     );
 
@@ -718,13 +719,14 @@ impl ChromeManager {
         // there is no download shelf, so silent downloads confuse users).
         set_chrome_download_prompt(&profile);
 
-        let args = chrome::build_chrome_args(self.definition, &profile);
+        let args = chrome::build_chrome_args(self.definition, &profile, &self.chrome_info.launch_method);
         let mut cmd = chrome::build_chrome_command(&self.chrome_info, &args);
 
         // Set up CDP pipes for loading the extension.
         // Chrome 137+ removed --load-extension from branded builds, so we use
         // --remote-debugging-pipe + CDP Extensions.loadUnpacked instead.
         // Chrome reads commands from fd 3, writes responses to fd 4.
+        // For Flatpak, --forward-fd=3/4 passes these fds into the sandbox.
         let (daemon_read_fd, daemon_write_fd, chrome_read_fd, chrome_write_fd) = unsafe {
             let mut pipe_in = [0i32; 2]; // daemon writes -> Chrome reads on fd 3
             let mut pipe_out = [0i32; 2]; // Chrome writes on fd 4 -> daemon reads
@@ -768,7 +770,6 @@ impl ChromeManager {
             (daemon_read_fd, daemon_write_fd, chrome_read_fd, chrome_write_fd)
         };
 
-        // Spawn Chrome
         let child = tokio::process::Command::from(cmd)
             .spawn()
             .context("Failed to spawn Chrome")?;
