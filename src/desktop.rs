@@ -28,7 +28,7 @@ pub fn uninstall_service(definition: &ServiceDefinition, delete_data: bool) -> R
     remove_desktop_entry(definition)?;
 
     // Remove autostart entry
-    let _ = set_autostart(definition, false);
+    let _ = set_autostart(definition, false, false);
 
     // Remove app and tray icons from XDG icon theme
     remove_icons_from_theme(definition);
@@ -558,7 +558,7 @@ fn any_service_installed() -> bool {
 // Autostart
 // ============================================================
 
-pub fn set_autostart(definition: &ServiceDefinition, enabled: bool) -> Result<()> {
+pub fn set_autostart(definition: &ServiceDefinition, enabled: bool, start_hidden: bool) -> Result<()> {
     let autostart_dir = dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("~/.config"))
         .join("autostart");
@@ -568,18 +568,20 @@ pub fn set_autostart(definition: &ServiceDefinition, enabled: bool) -> Result<()
         std::fs::create_dir_all(&autostart_dir)?;
         let loft_binary =
             std::env::current_exe().context("Could not determine loft binary path")?;
+        let minimized_flag = if start_hidden { " --minimized" } else { "" };
         let content = format!(
             "[Desktop Entry]\n\
              Type=Application\n\
              Name={name}\n\
              Comment={name} (Loft)\n\
-             Exec={exec} --service {service}\n\
+             Exec={exec} --service {service}{minimized}\n\
              Icon={icon}\n\
              Terminal=false\n\
              X-GNOME-Autostart-enabled=true\n",
             name = definition.display_name,
             exec = loft_binary.display(),
             service = definition.name,
+            minimized = minimized_flag,
             icon = definition.app_icon_name(),
         );
         std::fs::write(&path, content)?;

@@ -247,10 +247,18 @@ fn create_detail_page(
     let autostart_row = libadwaita::SwitchRow::new();
     autostart_row.set_title("Start at Login");
 
+    // Start Hidden toggle (created before autostart handler so it can be referenced)
+    let start_hidden_row = libadwaita::SwitchRow::new();
+    start_hidden_row.set_title("Start Hidden");
+    start_hidden_row.set_subtitle("Start with the window hidden in the tray");
+    start_hidden_row.set_active(config.start_hidden);
+    start_hidden_row.set_sensitive(config.autostart);
+
     let suppress = Rc::new(Cell::new(false));
     autostart_row.set_active(config.autostart);
 
     let suppress_clone = suppress.clone();
+    let start_hidden_row_ref = start_hidden_row.clone();
     autostart_row.connect_active_notify(move |switch| {
         if suppress_clone.get() {
             return;
@@ -259,9 +267,26 @@ fn create_detail_page(
         let enabled = switch.is_active();
         let switch_clone = switch.clone();
         let suppress_inner = suppress_clone.clone();
+        let hidden_row = start_hidden_row_ref.clone();
         let window = switch
             .root()
             .and_then(|r| r.downcast::<gtk4::Window>().ok());
+
+        // Enable/disable the Start Hidden row based on autostart state
+        hidden_row.set_sensitive(enabled);
+        if !enabled {
+            hidden_row.set_active(false);
+            // Persist start_hidden = false when autostart is disabled
+            let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
+            cfg.start_hidden = false;
+            if let Err(e) = cfg.save(&definition.name) {
+                tracing::error!(
+                    "Failed to save start_hidden for {}: {}",
+                    definition.display_name,
+                    e
+                );
+            }
+        }
 
         glib::spawn_future_local(async move {
             let result =
@@ -275,6 +300,8 @@ fn create_detail_page(
                 );
                 suppress_inner.set(true);
                 switch_clone.set_active(!enabled);
+                // Revert Start Hidden row sensitivity on failure
+                hidden_row.set_sensitive(!enabled);
                 suppress_inner.set(false);
             }
         });
@@ -282,18 +309,9 @@ fn create_detail_page(
 
     startup_group.add(&autostart_row);
 
-    // Start Hidden toggle
-    let start_hidden_row = libadwaita::SwitchRow::new();
-    start_hidden_row.set_title("Start Hidden");
-    start_hidden_row.set_subtitle("Start with the window hidden in the tray");
-    start_hidden_row.set_active(config.start_hidden);
-
     start_hidden_row.connect_active_notify(move |switch| {
         let enabled = switch.is_active();
-        let cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
-        let autostart_enabled = cfg.autostart;
-
-        let mut cfg = cfg;
+        let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
         cfg.start_hidden = enabled;
         if let Err(e) = cfg.save(&definition.name) {
             tracing::error!(
@@ -303,8 +321,8 @@ fn create_detail_page(
             );
         }
 
-        // Regenerate the autostart entry so it picks up the new setting
-        if autostart_enabled {
+        // Regenerate the autostart entry so it picks up the new --minimized flag
+        if cfg.autostart {
             let window = switch
                 .root()
                 .and_then(|r| r.downcast::<gtk4::Window>().ok());

@@ -11,10 +11,11 @@ pub async fn set_autostart(
     enabled: bool,
     _window: Option<&impl gtk4::prelude::IsA<gtk4::Native>>,
 ) -> Result<()> {
-    crate::desktop::set_autostart(definition, enabled)?;
+    let config = ServiceConfig::load(&definition.name).unwrap_or_default();
+    crate::desktop::set_autostart(definition, enabled, config.start_hidden)?;
 
     // Persist to config only after the effectful operation succeeds
-    let mut config = ServiceConfig::load(&definition.name).unwrap_or_default();
+    let mut config = config;
     config.autostart = enabled;
     config.save(&definition.name)?;
 

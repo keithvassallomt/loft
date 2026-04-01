@@ -133,7 +133,9 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
     }
 
     // 2. Shared state
-    let minimized = minimized || service_config.start_hidden;
+    // start_hidden config is only applied via the autostart .desktop file's
+    // --minimized flag, so manual launches from the app icon show the window.
+    let minimized = minimized;
     let state = Arc::new(DaemonState::new(
         service_config.do_not_disturb,
         minimized,
