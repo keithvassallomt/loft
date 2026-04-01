@@ -387,6 +387,16 @@
   }
 
   // Slack: count sidebar items with unread dots (p-unread-dot class)
+  // Slack: hide "download app" banner
+  if (service === "slack") {
+    if (!document.getElementById('loft-slack-fix')) {
+      const style = document.createElement('style');
+      style.id = 'loft-slack-fix';
+      style.textContent = '[data-qa="workspace-banner-download-app"] { display: none !important; }';
+      document.head.appendChild(style);
+    }
+  }
+
   if (service === "slack") {
     function scanSlackUnreads() {
       const count = document.querySelectorAll('.p-channel_sidebar__channel--unread').length;
@@ -747,26 +757,76 @@
     safeSendMessage({ type: "open_url", url: href });
   }, true);
 
-  // Slack avatar lookup: search the sidebar for an unread conversation
-  // matching the sender name and extract the profile picture URL.
-  function findSlackAvatar(title) {
-    if (!title || service !== "slack") return "";
-    // Slack notification titles are e.g. "New message from Keith" or
-    // "Keith" — extract the actual name.
-    const nameMatch = title.match(/^New message from (.+)$/) ||
-                      title.match(/^New messages? in (.+)$/) ||
-                      title.match(/^(.+)$/);
-    const name = nameMatch ? nameMatch[1].trim() : title;
-    const channels = document.querySelectorAll(
-      '.p-channel_sidebar__channel--unread'
-    );
-    for (const ch of channels) {
-      const nameSpan = ch.querySelector('.p-channel_sidebar__name > span:first-child');
-      if (!nameSpan || nameSpan.textContent.trim() !== name) continue;
-      const img = ch.querySelector('.c-base_icon__width_only_container img[src*="slack-edge"]');
+  // Slack avatar cache: maps display name → avatar URL.
+  // Built up over time by scanning rendered messages so avatars are available
+  // even when the notification's channel isn't the active view.
+  const slackAvatarCache = new Map();
+
+  function scanSlackAvatars() {
+    if (service !== "slack") return;
+    const msgs = document.querySelectorAll('[data-msg-ts]');
+    for (const msg of msgs) {
+      const nameBtn = msg.querySelector('[data-qa="message_sender_name"]');
+      if (!nameBtn) continue;
+      const name = nameBtn.textContent.trim();
+      if (!name || slackAvatarCache.has(name)) continue;
+      const img = msg.querySelector('.c-base_icon__width_only_container img[src*="slack-edge"]');
       if (img && img.src.startsWith("https://")) {
-        // Upscale avatar: sidebar uses -24, replace with -128 for notifications
-        return img.src.replace(/-\d+$/, '-128');
+        slackAvatarCache.set(name, img.src.replace(/-\d+$/, '-128'));
+      }
+    }
+  }
+
+  if (service === "slack") {
+    // Scan on DOM changes to populate cache as user browses channels
+    const avatarObserver = new MutationObserver(scanSlackAvatars);
+    avatarObserver.observe(document.body, { childList: true, subtree: true });
+    setTimeout(scanSlackAvatars, 3000);
+  }
+
+  // Slack avatar lookup: find the sender's profile picture URL.
+  // Tries: (1) exact message element via tag, (2) avatar cache, (3) sidebar.
+  function findSlackAvatar(title, tag) {
+    if (service !== "slack") return "";
+
+    // Precise lookup via message timestamp (tag = "tag_<ts>")
+    if (tag) {
+      const ts = tag.replace(/^tag_/, "");
+      const msgEl = document.querySelector('[data-msg-ts="' + ts + '"]');
+      if (msgEl) {
+        const img = msgEl.querySelector('.c-base_icon__width_only_container img[src*="slack-edge"]');
+        if (img && img.src.startsWith("https://")) {
+          return img.src.replace(/-\d+$/, '-128');
+        }
+      }
+    }
+
+    // Extract sender name from notification body or title
+    let senderName = "";
+    // Channel notifications: body is "Keith: message text"
+    // DM notifications: title is "New message from Keith"
+    if (title) {
+      const fromMatch = title.match(/^New message from (.+)$/);
+      if (fromMatch) senderName = fromMatch[1].trim();
+    }
+
+    // Cache lookup
+    if (senderName && slackAvatarCache.has(senderName)) {
+      return slackAvatarCache.get(senderName);
+    }
+
+    // Fallback: search sidebar for sender name (DMs)
+    if (senderName) {
+      const channels = document.querySelectorAll(
+        '.p-channel_sidebar__channel--unread'
+      );
+      for (const ch of channels) {
+        const nameSpan = ch.querySelector('.p-channel_sidebar__name > span:first-child');
+        if (!nameSpan || nameSpan.textContent.trim() !== senderName) continue;
+        const img = ch.querySelector('.c-base_icon__width_only_container img[src*="slack-edge"]');
+        if (img && img.src.startsWith("https://")) {
+          return img.src.replace(/-\d+$/, '-128');
+        }
       }
     }
     return "";
@@ -778,9 +838,19 @@
     if (event.data && event.data.__loft_notification) {
       let icon = event.data.icon;
       // For Slack, the native Notification API doesn't include an icon.
-      // Look up the sender's avatar from the sidebar DOM.
+      // Look up the sender's avatar from the message DOM or sidebar.
       if (!icon && service === "slack") {
-        icon = findSlackAvatar(event.data.title);
+        icon = findSlackAvatar(event.data.title, event.data.tag);
+        // For channel notifications, try extracting sender from body ("Keith: msg")
+        if (!icon && event.data.body) {
+          const colonIdx = event.data.body.indexOf(": ");
+          if (colonIdx > 0) {
+            const sender = event.data.body.substring(0, colonIdx);
+            if (slackAvatarCache.has(sender)) {
+              icon = slackAvatarCache.get(sender);
+            }
+          }
+        }
       }
       safeSendMessage({
         type: "notification",

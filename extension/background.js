@@ -23,9 +23,29 @@ function syncDndToTab() {
 // Maps chrome.notifications ID → conversation href for click-to-navigate
 const notificationHrefs = new Map();
 
-// Tiny 1x1 PNG fallback for chrome.notifications (iconUrl is required).
-// Used when the notification source doesn't provide a valid https icon URL.
-const FALLBACK_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQABNjN9GQAAAAlwSFlzAAAWJQAAFiUBSVIk8AAAAA0lEQVQI12P4z8BQDwAEgAF/QualzQAAAABJRU5ErkJggg==";
+// Fallback icon for chrome.notifications (iconUrl is required).
+// Generated lazily via OffscreenCanvas because chrome.notifications rejects
+// tiny data-URI PNGs ("Unable to download all specified images").
+let _fallbackIconCache = null;
+async function getFallbackIcon() {
+  if (_fallbackIconCache) return _fallbackIconCache;
+  try {
+    const canvas = new OffscreenCanvas(48, 48);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#555";
+    ctx.fillRect(0, 0, 48, 48);
+    const blob = await canvas.convertToBlob({ type: "image/png" });
+    const reader = new FileReader();
+    _fallbackIconCache = await new Promise((resolve) => {
+      reader.onloadend = () => resolve(reader.result);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    // OffscreenCanvas not available — use a larger valid PNG
+    _fallbackIconCache = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAARklEQVRoge3OMQEAAAgDoGl/aAXCBx5gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAICXGm3AAAHPxuhPAAAAAElFTkSuQmCC";
+  }
+  return _fallbackIconCache;
+}
 
 function connectNativeHost() {
   try {
@@ -313,18 +333,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "dom_notification") {
     if (!dndEnabled) {
       const notifId = msg.href || ("msg-" + Date.now());
-      const opts = {
-        type: "basic",
-        title: msg.sender || "Messenger",
-        message: msg.body || "",
-        iconUrl: (msg.icon && msg.icon.startsWith("http")) ? msg.icon : FALLBACK_ICON,
-      };
-      chrome.notifications.create(notifId, opts, () => {
-        if (chrome.runtime.lastError) {
-          console.warn("Loft: Failed to create notification:", chrome.runtime.lastError.message);
-        }
-      });
       notificationHrefs.set(notifId, msg.href);
+      (async () => {
+        let iconUrl = (msg.icon && msg.icon.startsWith("http")) ? msg.icon : "";
+        if (!iconUrl) iconUrl = await getFallbackIcon();
+        chrome.notifications.create(notifId, {
+          type: "basic",
+          title: msg.sender || "Messenger",
+          message: msg.body || "",
+          iconUrl: iconUrl,
+        }, () => {
+          if (chrome.runtime.lastError) {
+            console.warn("Loft: Failed to create notification:", chrome.runtime.lastError.message);
+          }
+        });
+      })();
     }
     return false;
   }
@@ -340,7 +363,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const iconSrc = (msg.icon && msg.icon.startsWith("http")) ? msg.icon : "";
 
       (async () => {
-        let iconUrl = FALLBACK_ICON;
+        let iconUrl = "";
         if (iconSrc) {
           try {
             const resp = await fetch(iconSrc);
@@ -350,10 +373,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
               reader.onloadend = () => resolve(reader.result);
               reader.readAsDataURL(blob);
             });
-          } catch {
-            // fetch failed — use fallback
+          } catch (e) {
+            console.warn("Loft: Slack icon fetch failed:", e);
           }
         }
+        if (!iconUrl) iconUrl = await getFallbackIcon();
         chrome.notifications.create(notifId, {
           type: "basic",
           title: msg.title || "Slack",

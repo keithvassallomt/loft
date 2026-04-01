@@ -39,6 +39,7 @@
         title: title,
         body: options.body || "",
         icon: safeIcon,
+        tag: options.tag || "",
       },
       "*"
     );
