@@ -17,7 +17,8 @@
     "https://facebook.com/messages/*",
     "https://www.facebook.com/messages/*",
     "https://app.slack.com/*",
-    "https://*.slack-edge.com/*"
+    "https://*.slack-edge.com/*",
+    "https://web.telegram.org/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -28,7 +29,8 @@
         "https://web.whatsapp.com/*",
         "https://facebook.com/messages/*",
         "https://www.facebook.com/messages/*",
-        "https://app.slack.com/*"
+        "https://app.slack.com/*",
+        "https://web.telegram.org/*"
       ],
       "js": ["notification-override.js"],
       "run_at": "document_start",
@@ -39,7 +41,8 @@
         "https://web.whatsapp.com/*",
         "https://facebook.com/messages/*",
         "https://www.facebook.com/messages/*",
-        "https://app.slack.com/*"
+        "https://app.slack.com/*",
+        "https://web.telegram.org/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"

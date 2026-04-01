@@ -29,6 +29,7 @@ const LOFT_WM_CLASSES = new Set([
     'chrome-web.whatsapp.com__-Default',
     'chrome-facebook.com__messages_-Default',
     'chrome-app.slack.com__client_-Default',
+    'chrome-web.telegram.org__a_-Default',
 ]);
 
 const DBUS_IFACE = `<node>
@@ -387,6 +388,7 @@ export default class LoftShellHelper extends Extension {
             'whatsapp': 'WhatsApp',
             'messenger': 'Messenger',
             'slack': 'Slack',
+            'telegram': 'Telegram',
         };
         return map[name] || name;
     }
@@ -540,44 +542,92 @@ export default class LoftShellHelper extends Extension {
         const menu = this._combinedIndicator.menu;
         menu.removeAll();
 
-        let first = true;
-        for (const [name, svc] of this._combinedServices) {
-            if (!first)
-                menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            first = false;
+        // "Loft Settings..." opens the manager GUI
+        const settingsItem = new PopupMenu.PopupMenuItem('Loft Settings\u2026');
+        settingsItem.connect('activate', () => {
+            try {
+                GLib.spawn_command_line_async('loft');
+            } catch (e) {
+                log(`Loft: Failed to launch manager: ${e}`);
+            }
+        });
+        menu.addMenuItem(settingsItem);
+        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
+        // One compact row per service: name + unread dot + [Show/Hide] [DND] [Quit]
+        for (const [name, svc] of this._combinedServices) {
             const dbusName = this._dbusNameForService(name);
 
-            // Service header with unread indicator
-            const hasUnread = svc.badge > 0 && !svc.dnd;
-            const header = new PopupMenu.PopupMenuItem(svc.displayName, { reactive: false });
-            header.label.add_style_class_name('popup-menu-item-title');
-            if (hasUnread) {
-                const dot = new St.Label({ text: ' \u2022', style: 'color: #e01b24;' });
-                header.add_child(dot);
+            const item = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
+
+            const row = new St.BoxLayout({
+                x_expand: true,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+            item.add_child(row);
+
+            // Service name
+            const label = new St.Label({
+                text: svc.displayName,
+                y_align: Clutter.ActorAlign.CENTER,
+                x_expand: true,
+            });
+            row.add_child(label);
+
+            // Unread dot
+            if (svc.badge > 0 && !svc.dnd) {
+                const dot = new St.Label({
+                    text: ' \u2022',
+                    style: 'color: #e01b24; font-size: 16px;',
+                    y_align: Clutter.ActorAlign.CENTER,
+                });
+                row.add_child(dot);
             }
-            menu.addMenuItem(header);
 
-            // Show / Hide
-            const showHideItem = new PopupMenu.PopupMenuItem(svc.visible ? 'Hide' : 'Show');
-            showHideItem.connect('activate', () => {
+            // Show/Hide icon button
+            const showHideIconName = svc.visible ? 'hide-window-symbolic' : 'show-window-symbolic';
+            const showHideIconFile = Gio.File.new_for_path(
+                GLib.build_filenamev([this.path, 'icons', `${showHideIconName}.svg`])
+            );
+            const showHideBtn = new St.Button({
+                child: new St.Icon({ gicon: new Gio.FileIcon({ file: showHideIconFile }), icon_size: 16 }),
+                style_class: 'button',
+                style: 'margin-left: 12px; padding: 2px 6px;',
+                can_focus: true,
+            });
+            showHideBtn.connect('clicked', () => {
                 this._callDaemonMethod(dbusName, 'Toggle');
+                menu.close();
             });
-            menu.addMenuItem(showHideItem);
+            row.add_child(showHideBtn);
 
-            // DND toggle
-            const dndItem = new PopupMenu.PopupSwitchMenuItem('Do Not Disturb', svc.dnd);
-            dndItem.connect('toggled', (_item, state) => {
-                this._callDaemonMethod(dbusName, 'SetDnd', '(b)', [state]);
+            // DND icon toggle
+            const dndIcon = svc.dnd ? 'notifications-disabled-symbolic' : 'preferences-system-notifications-symbolic';
+            const dndBtn = new St.Button({
+                child: new St.Icon({ icon_name: dndIcon, icon_size: 16 }),
+                style_class: 'button',
+                style: `margin-left: 4px; padding: 2px 6px;${svc.dnd ? ' opacity: 128;' : ''}`,
+                can_focus: true,
             });
-            menu.addMenuItem(dndItem);
+            dndBtn.connect('clicked', () => {
+                this._callDaemonMethod(dbusName, 'SetDnd', '(b)', [!svc.dnd]);
+            });
+            row.add_child(dndBtn);
 
-            // Quit
-            const quitItem = new PopupMenu.PopupMenuItem('Quit');
-            quitItem.connect('activate', () => {
+            // Quit icon button
+            const quitBtn = new St.Button({
+                child: new St.Icon({ icon_name: 'window-close-symbolic', icon_size: 16 }),
+                style_class: 'button',
+                style: 'margin-left: 4px; padding: 2px 6px;',
+                can_focus: true,
+            });
+            quitBtn.connect('clicked', () => {
                 this._callDaemonMethod(dbusName, 'Quit');
+                menu.close();
             });
-            menu.addMenuItem(quitItem);
+            row.add_child(quitBtn);
+
+            menu.addMenuItem(item);
         }
 
         if (this._combinedServices.size === 0) {

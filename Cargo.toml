@@ -2,7 +2,7 @@
 name = "loft"
 version = "0.1.0"
 edition = "2021"
-description = "Linux desktop integration layer for Meta web apps"
+description = "Linux desktop integration layer for messaging apps"
 license = "GPL-3.0-or-later"
 
 [dependencies]

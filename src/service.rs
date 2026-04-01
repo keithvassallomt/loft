@@ -43,7 +43,7 @@ pub const WHATSAPP: ServiceDefinition = ServiceDefinition {
 
 pub const MESSENGER: ServiceDefinition = ServiceDefinition {
     name: "messenger",
-    display_name: "Facebook Messenger",
+    display_name: "Messenger",
     url: "https://facebook.com/messages/",
     dbus_name: "Messenger",
     app_icon_url: "https://raw.githubusercontent.com/keithvassallomt/loft/main/assets/icons/messenger.svg",
@@ -63,13 +63,25 @@ pub const SLACK: ServiceDefinition = ServiceDefinition {
     chrome_desktop_id: "chrome-app.slack.com__client_-Default",
 };
 
-pub const ALL_SERVICES: &[&ServiceDefinition] = &[&WHATSAPP, &MESSENGER, &SLACK];
+pub const TELEGRAM: ServiceDefinition = ServiceDefinition {
+    name: "telegram",
+    display_name: "Telegram",
+    url: "https://web.telegram.org/a/",
+    dbus_name: "Telegram",
+    app_icon_url: "https://raw.githubusercontent.com/keithvassallomt/loft/main/assets/icons/telegram.svg",
+    app_icon_filename: "telegram.svg",
+    tray_icon_url: "https://raw.githubusercontent.com/keithvassallomt/loft/main/assets/icons/telegram-symbolic.svg",
+    chrome_desktop_id: "chrome-web.telegram.org__a_-Default",
+};
+
+pub const ALL_SERVICES: &[&ServiceDefinition] = &[&WHATSAPP, &MESSENGER, &SLACK, &TELEGRAM];
 
 pub fn get_definition(name: &ServiceName) -> &'static ServiceDefinition {
     match name {
         ServiceName::Whatsapp => &WHATSAPP,
         ServiceName::Messenger => &MESSENGER,
         ServiceName::Slack => &SLACK,
+        ServiceName::Telegram => &TELEGRAM,
     }
 }
 
@@ -105,5 +117,8 @@ mod tests {
 
         let slack = get_definition(&ServiceName::Slack);
         assert_eq!(slack.name, "slack");
+
+        let telegram = get_definition(&ServiceName::Telegram);
+        assert_eq!(telegram.name, "telegram");
     }
 }

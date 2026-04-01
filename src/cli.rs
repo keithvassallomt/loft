@@ -33,6 +33,7 @@ pub enum ServiceName {
     Whatsapp,
     Messenger,
     Slack,
+    Telegram,
 }
 
 impl std::fmt::Display for ServiceName {
@@ -41,6 +42,7 @@ impl std::fmt::Display for ServiceName {
             ServiceName::Whatsapp => write!(f, "whatsapp"),
             ServiceName::Messenger => write!(f, "messenger"),
             ServiceName::Slack => write!(f, "slack"),
+            ServiceName::Telegram => write!(f, "telegram"),
         }
     }
 }
@@ -102,6 +104,12 @@ mod tests {
     fn test_service_slack() {
         let args = Args::try_parse_from(["loft", "--service", "slack"]).unwrap();
         assert!(matches!(args.service, Some(ServiceName::Slack)));
+    }
+
+    #[test]
+    fn test_service_telegram() {
+        let args = Args::try_parse_from(["loft", "--service", "telegram"]).unwrap();
+        assert!(matches!(args.service, Some(ServiceName::Telegram)));
     }
 
     #[test]

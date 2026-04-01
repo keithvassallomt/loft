@@ -235,6 +235,21 @@ fn deploy_gnome_shell_extension() -> Result<()> {
             .with_context(|| format!("Failed to write GNOME Shell extension file {}", name))?;
     }
 
+    // Deploy icon files used by the combined tray menu
+    let icons_dir = ext_dir.join("icons");
+    std::fs::create_dir_all(&icons_dir)
+        .with_context(|| format!("Failed to create GNOME Shell extension icons dir {}", icons_dir.display()))?;
+
+    let icons: &[(&str, &str)] = &[
+        ("show-window-symbolic.svg", include_str!("../gnome-shell-extension/icons/show-window-symbolic.svg")),
+        ("hide-window-symbolic.svg", include_str!("../gnome-shell-extension/icons/hide-window-symbolic.svg")),
+    ];
+
+    for (name, content) in icons {
+        std::fs::write(icons_dir.join(name), content)
+            .with_context(|| format!("Failed to write GNOME Shell extension icon {}", name))?;
+    }
+
     tracing::debug!("Deployed GNOME Shell extension to {}", ext_dir.display());
 
     // Best-effort: enable the extension (requires gnome-extensions CLI)

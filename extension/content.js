@@ -35,6 +35,8 @@
     service = "messenger";
   } else if (url.startsWith("https://app.slack.com")) {
     service = "slack";
+  } else if (url.startsWith("https://web.telegram.org")) {
+    service = "telegram";
   }
 
   if (!service) return;
@@ -277,6 +279,7 @@
     whatsapp: "WhatsApp",
     messenger: "Messenger",
     slack: "Slack",
+    telegram: "Telegram",
   };
 
   // First-run speech bubble
@@ -399,6 +402,27 @@
     });
     setInterval(scanSlackUnreads, 2000);
     setTimeout(scanSlackUnreads, 3000);
+  }
+
+  // Telegram: parse unread count from document title — "Telegram Web (N)"
+  if (service === "telegram") {
+    function scanTelegramUnreads() {
+      let count = 0;
+      const match = document.title.match(/\((\d+)\)/);
+      if (match) count = parseInt(match[1], 10);
+      if (count !== lastBadgeCount) {
+        lastBadgeCount = count;
+        safeSendMessage({ type: "badge_update", count });
+      }
+    }
+
+    const titleEl = document.querySelector('title');
+    if (titleEl) {
+      const tgObserver = new MutationObserver(scanTelegramUnreads);
+      tgObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
+    }
+    setInterval(scanTelegramUnreads, 2000);
+    setTimeout(scanTelegramUnreads, 3000);
   }
 
   // Messenger: badge count is handled by scanForUnreadMessages() below.
@@ -692,6 +716,7 @@
     whatsapp: ["web.whatsapp.com"],
     messenger: ["facebook.com", "www.facebook.com"],
     slack: ["app.slack.com", "slack.com"],
+    telegram: ["web.telegram.org", "telegram.org"],
   };
 
   const allowedDomains = SERVICE_DOMAINS[service] || [];
