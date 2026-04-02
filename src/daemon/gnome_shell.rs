@@ -132,22 +132,3 @@ pub async fn update_visible(name: &str, visible: bool) -> Result<()> {
         .await?;
     Ok(())
 }
-
-/// Check if the GNOME Shell extension's D-Bus name is available.
-pub async fn is_available() -> bool {
-    let connection = match zbus::Connection::session().await {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    let bus_name = match bus_name() {
-        Ok(n) => n,
-        Err(_) => return false,
-    };
-    let dbus = match zbus::fdo::DBusProxy::new(&connection).await {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
-    dbus.name_has_owner(BusName::from(bus_name))
-        .await
-        .unwrap_or(false)
-}

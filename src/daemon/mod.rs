@@ -209,9 +209,8 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
         let state = Arc::clone(&state);
         let cmd_tx = state.cmd_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = notifications::listen_for_actions(state, cmd_tx).await {
-                tracing::warn!("Notification action listener ended: {}", e);
-            }
+            let Err(e) = notifications::listen_for_actions(state, cmd_tx).await;
+            tracing::warn!("Notification action listener ended: {}", e);
         });
     }
 
