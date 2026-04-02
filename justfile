@@ -31,7 +31,7 @@ build-flatpak output=dist_dir:
     @echo ""
     @echo "Bundle: {{ output }}/Loft-{{ version }}.flatpak"
 
-# Generate Flathub submission files (manifest, metainfo, cargo-sources.json)
+# Generate FriendlyHub submission files (manifest, metainfo, cargo-sources.json)
 update-flatpak-submission output=("$HOME/Downloads/chat.loft.Loft"):
     #!/usr/bin/env bash
     set -euo pipefail
@@ -44,58 +44,18 @@ update-flatpak-submission output=("$HOME/Downloads/chat.loft.Loft"):
     echo "==> Copying metainfo..."
     cp data/chat.loft.Loft.metainfo.xml "$out/"
 
-    echo "==> Generating Flathub manifest..."
+    echo "==> Generating submission manifest..."
     # Determine the current commit for pinning
     commit=$(git rev-parse HEAD)
     tag=$(git describe --tags --exact-match 2>/dev/null || echo "")
 
-    cat > "$out/chat.loft.Loft.yml" << MANIFEST
-    app-id: chat.loft.Loft
-    runtime: org.gnome.Platform
-    runtime-version: '49'
-    sdk: org.gnome.Sdk
-    sdk-extensions:
-      - org.freedesktop.Sdk.Extension.rust-stable
-    command: loft
-
-    finish-args:
-      - --share=ipc
-      - --socket=fallback-x11
-      - --socket=wayland
-      - --device=dri
-      - --share=network
-      - --socket=pulseaudio
-      - --talk-name=org.kde.StatusNotifierWatcher
-      - --talk-name=org.freedesktop.Notifications
-      - --own-name=chat.loft.*
-      - --talk-name=org.freedesktop.Flatpak
-      - --filesystem=home
-
-    build-options:
-      append-path: /usr/lib/sdk/rust-stable/bin
-      env:
-        CARGO_HOME: /run/build/loft/cargo
-        CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-
-    modules:
-      - name: loft
-        buildsystem: simple
-        build-commands:
-          - cargo --offline fetch --manifest-path Cargo.toml --verbose
-          - cargo --offline build --release --verbose
-          - install -Dm755 target/release/loft /app/bin/loft
-          - install -Dm644 data/chat.loft.Loft.desktop /app/share/applications/chat.loft.Loft.desktop
-          - install -Dm644 data/chat.loft.Loft.metainfo.xml /app/share/metainfo/chat.loft.Loft.metainfo.xml
-          - install -Dm644 assets/icons/loft.svg /app/share/icons/hicolor/scalable/apps/chat.loft.Loft.svg
-        sources:
-          - type: git
-            url: {{ upstream_repo }}
-            $(if [ -n "$tag" ]; then echo "tag: $tag"; else echo "commit: $commit"; fi)
-          - cargo-sources.json
-    MANIFEST
-
-    # Remove leading whitespace from heredoc
-    sed -i 's/^    //' "$out/chat.loft.Loft.yml"
+    # Start from the project manifest and replace the dir source with a git source
+    cp chat.loft.Loft.yml "$out/chat.loft.Loft.yml"
+    if [ -n "$tag" ]; then
+        sed -i '/^      - type: dir$/,/^        path: \.$/c\      - type: git\n        url: {{ upstream_repo }}\n        tag: '"$tag" "$out/chat.loft.Loft.yml"
+    else
+        sed -i '/^      - type: dir$/,/^        path: \.$/c\      - type: git\n        url: {{ upstream_repo }}\n        commit: '"$commit" "$out/chat.loft.Loft.yml"
+    fi
 
     echo ""
     echo "Submission files in: $out/"
@@ -113,7 +73,7 @@ setup:
 
 # Install Flatpak SDK (needed for build-flatpak)
 setup-flatpak:
-    flatpak install --user flathub org.gnome.Sdk//49 org.gnome.Platform//49 org.freedesktop.Sdk.Extension.rust-stable//25.08
+    flatpak install --user flathub org.gnome.Sdk//50 org.gnome.Platform//50 org.freedesktop.Sdk.Extension.rust-stable//25.08
 
 # Internal: build AppImage from the release binary
 _appimage:
