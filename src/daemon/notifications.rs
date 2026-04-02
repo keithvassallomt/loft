@@ -11,11 +11,12 @@ use tokio::sync::Mutex;
 /// keep the connection alive for the lifetime of the daemon.
 static CONN: OnceLock<Mutex<Option<zbus::Connection>>> = OnceLock::new();
 
-/// Maps notification ID → conversation href (for click-to-navigate).
-static NOTIF_HREFS: OnceLock<Mutex<HashMap<u32, String>>> = OnceLock::new();
+/// Tracks notification IDs sent by THIS daemon instance, so we only
+/// respond to ActionInvoked signals for our own notifications.
+static SENT_IDS: OnceLock<Mutex<HashMap<u32, Option<String>>>> = OnceLock::new();
 
-fn notif_hrefs() -> &'static Mutex<HashMap<u32, String>> {
-    NOTIF_HREFS.get_or_init(|| Mutex::new(HashMap::new()))
+fn sent_ids() -> &'static Mutex<HashMap<u32, Option<String>>> {
+    SENT_IDS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 async fn get_connection() -> Result<zbus::Connection> {
@@ -89,12 +90,9 @@ pub async fn send(
         notification_id, display_name, summary, body
     );
 
-    // Store href for click-to-navigate
-    if let Some(href) = href {
-        if !href.is_empty() {
-            notif_hrefs().lock().await.insert(notification_id, href.to_string());
-        }
-    }
+    // Track this notification ID so we only handle ActionInvoked for our own
+    let href_val = href.filter(|h| !h.is_empty()).map(|h| h.to_string());
+    sent_ids().lock().await.insert(notification_id, href_val);
 
     Ok(notification_id)
 }
@@ -192,54 +190,67 @@ async fn download_avatar(url: &str) -> Result<PathBuf> {
 pub async fn listen_for_actions(
     state: Arc<super::DaemonState>,
     cmd_tx: tokio::sync::broadcast::Sender<super::messaging::DaemonMessage>,
-) -> Result<()> {
+) -> Result<std::convert::Infallible> {
     use futures_util::StreamExt;
 
     let conn = get_connection().await?;
 
-    // Add match rule for ActionInvoked signal
-    let rule = zbus::MatchRule::builder()
+    // Listen for both ActionInvoked (click) and NotificationClosed (dismiss)
+    let action_rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .interface("org.freedesktop.Notifications")?
         .member("ActionInvoked")?
         .build();
+    let close_rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .interface("org.freedesktop.Notifications")?
+        .member("NotificationClosed")?
+        .build();
 
-    let mut stream = zbus::MessageStream::for_match_rule(rule, &conn, None).await?;
+    let mut action_stream = zbus::MessageStream::for_match_rule(action_rule, &conn, None).await?;
+    let mut close_stream = zbus::MessageStream::for_match_rule(close_rule, &conn, None).await?;
 
-    tracing::info!("Listening for notification ActionInvoked signals");
+    tracing::info!("Listening for notification action signals");
 
-    while let Some(msg) = stream.next().await {
-        let msg = match msg {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!("Error receiving notification signal: {}", e);
-                continue;
-            }
-        };
-
-        // ActionInvoked signal has (uint32 id, string action_key)
-        let (notif_id, action): (u32, String) = match msg.body().deserialize() {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        tracing::info!("Notification {} action: {}", notif_id, action);
-
-        if action == "default" {
-            // Show the window
-            state.request_show();
-
-            // Check if there's a conversation href to navigate to
-            let href = notif_hrefs().lock().await.remove(&notif_id);
-            if let Some(href) = href {
-                // Send navigate command to extension via broadcast
-                let nav_msg = super::messaging::DaemonMessage::NavigateToConversation {
-                    url: href,
+    loop {
+        tokio::select! {
+            Some(msg) = action_stream.next() => {
+                let msg = match msg {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::warn!("Error receiving action signal: {}", e);
+                        continue;
+                    }
                 };
-                let _ = cmd_tx.send(nav_msg);
+
+                let (notif_id, action): (u32, String) = match msg.body().deserialize() {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+
+                tracing::info!("Notification {} action: {}", notif_id, action);
+
+                if action == "default" {
+                    // Only handle notifications we sent
+                    let entry = sent_ids().lock().await.remove(&notif_id);
+                    let Some(href) = entry else { continue };
+
+                    state.request_show();
+
+                    if let Some(url) = href {
+                        let nav_msg = super::messaging::DaemonMessage::NavigateToConversation { url };
+                        let _ = cmd_tx.send(nav_msg);
+                    }
+                }
+            }
+            Some(msg) = close_stream.next() => {
+                // Clean up stale entries when notifications are dismissed
+                if let Ok(msg) = msg {
+                    if let Ok((notif_id, _reason)) = msg.body().deserialize::<(u32, u32)>() {
+                        sent_ids().lock().await.remove(&notif_id);
+                    }
+                }
             }
         }
     }
-
-    Ok(())
 }
