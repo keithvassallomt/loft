@@ -205,15 +205,19 @@ async fn handle_relay_connection(
                     }
                     Ok(ExtensionMessage::Notification { title, body, icon }) => {
                         tracing::debug!("Notification: {} - {}", title, body);
-                        let svc = service_name.to_string();
-                        let disp = display_name.to_string();
-                        tokio::spawn(async move {
-                            if let Err(e) = super::notifications::send(
-                                &svc, &disp, &title, &body, icon.as_deref(), None,
-                            ).await {
-                                tracing::warn!("Failed to send D-Bus notification: {}", e);
-                            }
-                        });
+                        if state.visible.load(Ordering::Relaxed) {
+                            tracing::debug!("Suppressing notification (window visible)");
+                        } else {
+                            let svc = service_name.to_string();
+                            let disp = display_name.to_string();
+                            tokio::spawn(async move {
+                                if let Err(e) = super::notifications::send(
+                                    &svc, &disp, &title, &body, icon.as_deref(), None,
+                                ).await {
+                                    tracing::warn!("Failed to send D-Bus notification: {}", e);
+                                }
+                            });
+                        }
                     }
                     Ok(ExtensionMessage::DomNotification { sender, body, icon, href }) => {
                         tracing::debug!("DOM notification: {} - {}", sender, body);

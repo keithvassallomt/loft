@@ -1,6 +1,6 @@
 app-id: chat.loft.Loft
 runtime: org.gnome.Platform
-runtime-version: '49'
+runtime-version: '50'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
@@ -16,7 +16,6 @@ finish-args:
   - --talk-name=org.kde.StatusNotifierWatcher
   - --talk-name=org.freedesktop.Notifications
   - --own-name=chat.loft.*
-  # Required to launch Chrome on the host
   - --talk-name=org.freedesktop.Flatpak
   - --filesystem=home
 

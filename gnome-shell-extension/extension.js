@@ -25,12 +25,14 @@ const DBUS_PATH = '/chat/loft/ShellHelper';
 
 // WM_CLASS values for Loft-managed Chrome app windows.
 // Chrome in --app= mode sets WM_CLASS to "chrome-<sanitised_url>-<profile>".
-const LOFT_WM_CLASSES = new Set([
+// Stored as an array at module scope (no object instantiation) and converted
+// to a Set instance property in enable() for O(1) lookups.
+const LOFT_WM_CLASS_LIST = [
     'chrome-web.whatsapp.com__-Default',
     'chrome-facebook.com__messages_-Default',
     'chrome-app.slack.com__client_-Default',
     'chrome-web.telegram.org__a_-Default',
-]);
+];
 
 const DBUS_IFACE = `<node>
   <interface name="${DBUS_NAME}">
@@ -86,27 +88,33 @@ const _origIsOverviewWindow = Workspace.prototype._isOverviewWindow;
 const _origAppSwitcherInit = AppSwitcherPopup.prototype._init;
 const _origGetRunning = Shell.AppSystem.prototype.get_running;
 
-function _isLoftWindow(win) {
+function _isLoftWindow(win, wmClasses) {
     let meta = win;
     if (win.get_meta_window)
         meta = win.get_meta_window();
     const wmClass = meta.get_wm_class?.() ?? '';
-    return LOFT_WM_CLASSES.has(wmClass);
+    return wmClasses.has(wmClass);
 }
 
-function _isMinimizedLoftWindow(win) {
+function _isMinimizedLoftWindow(win, wmClasses) {
     const wmClass = win.get_wm_class?.() ?? '';
-    return LOFT_WM_CLASSES.has(wmClass) && win.minimized;
+    return wmClasses.has(wmClass) && win.minimized;
 }
 
 export default class LoftShellHelper extends Extension {
     enable() {
+        // Build the WM_CLASS lookup Set as an instance property (not module scope)
+        this._loftWmClasses = new Set(LOFT_WM_CLASS_LIST);
+
         // Panel icon registry: service name → { indicator, badge, dndItem, showHideItem, wmClass }
         this._panelIcons = new Map();
         // Combined icon state
         this._combinedIndicator = null;
         this._combinedServices = new Map(); // name → { displayName, visible, badge, dnd, wmClass }
         this._combinedWatchId = null;
+
+        // Pending dash-rebuild timeouts (must be cancelled in disable)
+        this._pendingDashTimeouts = new Set();
 
         // --- D-Bus interface for window focus/hide + panel icons ---
 
@@ -130,6 +138,9 @@ export default class LoftShellHelper extends Extension {
 
         // --- Hide minimized Loft windows from alt-tab, overview, and dock ---
 
+        // Capture the instance reference for use in patched prototypes
+        const wmClasses = this._loftWmClasses;
+
         // Alt-Tab: AppSwitcherPopup._init builds the app/window list.
         // After the original _init runs, filter out minimized Loft windows
         // from each app's cachedWindows, and remove apps with no remaining windows.
@@ -140,7 +151,7 @@ export default class LoftShellHelper extends Extension {
             for (const item of [...this._items]) {
                 const before = item.cachedWindows.length;
                 item.cachedWindows = item.cachedWindows.filter(
-                    w => !_isMinimizedLoftWindow(w)
+                    w => !_isMinimizedLoftWindow(w, wmClasses)
                 );
                 // If all windows were filtered out, remove this app entry
                 if (before > 0 && item.cachedWindows.length === 0)
@@ -153,7 +164,7 @@ export default class LoftShellHelper extends Extension {
             const show = _origIsOverviewWindow.call(this, win);
             if (!show)
                 return false;
-            if (!_isLoftWindow(win))
+            if (!_isLoftWindow(win, wmClasses))
                 return true;
             let meta = win;
             if (win.get_meta_window)
@@ -169,34 +180,45 @@ export default class LoftShellHelper extends Extension {
                 const windows = app.get_windows();
                 if (windows.length === 0)
                     return true;
-                return !windows.every(w => _isMinimizedLoftWindow(w));
+                return !windows.every(w => _isMinimizedLoftWindow(w, wmClasses));
             });
         };
 
         // Trigger a dock rebuild when a Loft window is minimized/unminimized,
         // since the app's running state doesn't actually change.
-        this._minimizeId = global.window_manager.connect('minimize',
-            (wm, actor) => this._notifyDashIfLoft(actor.meta_window));
-        this._unminimizeId = global.window_manager.connect('unminimize',
-            (wm, actor) => this._notifyDashIfLoft(actor.meta_window));
+        // Use connectObject() for automatic cleanup via disconnectObject() in disable().
+        global.window_manager.connectObject(
+            'minimize', (wm, actor) => this._notifyDashIfLoft(actor.meta_window),
+            'unminimize', (wm, actor) => this._notifyDashIfLoft(actor.meta_window),
+            this
+        );
     }
 
     disable() {
+        // Cancel all pending dash-rebuild timeouts
+        for (const id of this._pendingDashTimeouts)
+            GLib.Source.remove(id);
+        this._pendingDashTimeouts = null;
+
         // Destroy combined icon if present
         if (this._combinedWatchId)
             Gio.bus_unwatch_name(this._combinedWatchId);
         this._combinedIndicator?.destroy();
         this._combinedIndicator = null;
         this._combinedServices?.clear();
+        this._combinedServices = null;
         this._combinedWatchId = null;
+        this._combinedBadge = null;
+        this._combinedDndBadge = null;
 
         // Destroy all panel icons and stop name watches
-        for (const [name, entry] of this._panelIcons) {
+        for (const [, entry] of this._panelIcons) {
             if (entry.watchId)
                 Gio.bus_unwatch_name(entry.watchId);
             entry.indicator?.destroy();
         }
         this._panelIcons.clear();
+        this._panelIcons = null;
 
         // Restore original prototypes
         Workspace.prototype._isOverviewWindow = _origIsOverviewWindow;
@@ -204,14 +226,7 @@ export default class LoftShellHelper extends Extension {
         Shell.AppSystem.prototype.get_running = _origGetRunning;
 
         // Disconnect minimize/unminimize handlers
-        if (this._minimizeId) {
-            global.window_manager.disconnect(this._minimizeId);
-            this._minimizeId = null;
-        }
-        if (this._unminimizeId) {
-            global.window_manager.disconnect(this._unminimizeId);
-            this._unminimizeId = null;
-        }
+        global.window_manager.disconnectObject(this);
 
         // Release D-Bus
         if (this._dbusId) {
@@ -222,6 +237,9 @@ export default class LoftShellHelper extends Extension {
             Gio.bus_unown_name(this._nameId);
             this._nameId = null;
         }
+
+        // Release WM_CLASS set
+        this._loftWmClasses = null;
     }
 
     // ================================================================
@@ -414,7 +432,7 @@ export default class LoftShellHelper extends Extension {
                 null        // callback (fire-and-forget)
             );
         } catch (e) {
-            log(`Loft: Failed to call ${busName}.${method}: ${e}`);
+            console.error(`Loft: Failed to call ${busName}.${method}: ${e}`);
         }
     }
 
@@ -548,7 +566,7 @@ export default class LoftShellHelper extends Extension {
             try {
                 GLib.spawn_command_line_async('loft');
             } catch (e) {
-                log(`Loft: Failed to launch manager: ${e}`);
+                console.error(`Loft: Failed to launch manager: ${e}`);
             }
         });
         menu.addMenuItem(settingsItem);
@@ -659,7 +677,7 @@ export default class LoftShellHelper extends Extension {
 
     _notifyDashIfLoft(win) {
         const wmClass = win.get_wm_class?.() ?? '';
-        if (!LOFT_WM_CLASSES.has(wmClass))
+        if (!this._loftWmClasses.has(wmClass))
             return;
         const tracker = Shell.WindowTracker.get_default();
         const app = tracker.get_window_app(win);
@@ -667,10 +685,12 @@ export default class LoftShellHelper extends Extension {
             return;
         // Short delay to let the minimize/unminimize animation settle,
         // then poke the app-state-changed signal so the dash rebuilds.
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+        const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+            this._pendingDashTimeouts?.delete(id);
             Shell.AppSystem.get_default().emit('app-state-changed', app);
             return GLib.SOURCE_REMOVE;
         });
+        this._pendingDashTimeouts?.add(id);
     }
 
     _findWindow(wmClass) {

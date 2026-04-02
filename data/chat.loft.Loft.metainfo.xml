@@ -20,14 +20,14 @@
     </p>
     <p>
       Unlike Electron wrappers, Loft uses your real Google Chrome installation
-      for full WebRTC and codec support, while a Rust daemon provides the system
-      integration that Chrome alone cannot.
+      for full WebRTC and codec support, whilst a backend daemon ensures functional
+      system integration on both GNOME and KDE Plasma.
     </p>
   </description>
 
   <launchable type="desktop-id">chat.loft.Loft.desktop</launchable>
 
-  <url type="homepage">https://github.com/keithvassallomt/loft</url>
+  <url type="homepage">https://loft.chat</url>
   <url type="bugtracker">https://github.com/keithvassallomt/loft/issues</url>
   <url type="vcs-browse">https://github.com/keithvassallomt/loft</url>
 
@@ -44,18 +44,14 @@
   </screenshots>
 
   <releases>
-    <release version="0.1.0" date="2026-04-01">
+    <release version="0.1.0" date="2026-04-02">
       <description>
         <p>Initial release with WhatsApp, Messenger, Slack and Telegram support.</p>
       </description>
     </release>
   </releases>
 
-  <content_rating type="oars-1.1">
-    <content_attribute id="social-chat">intense</content_attribute>
-    <content_attribute id="social-audio">intense</content_attribute>
-    <content_attribute id="social-contacts">intense</content_attribute>
-  </content_rating>
+  <content_rating type="oars-1.1" />
 
   <supports>
     <control>pointing</control>

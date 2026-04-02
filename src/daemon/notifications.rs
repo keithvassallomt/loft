@@ -60,6 +60,15 @@ pub async fn send(
         );
     }
 
+    // GNOME Shell requires the desktop-entry hint to associate the notification
+    // with a known app.  Without it, notifications appear only in the message
+    // tray and never pop up as banners.
+    let desktop_entry = format!("loft-{}", service_name);
+    hints.insert(
+        "desktop-entry",
+        zbus::zvariant::Value::from(desktop_entry),
+    );
+
     let actions: Vec<&str> = vec!["default", "Open"];
 
     let reply = conn

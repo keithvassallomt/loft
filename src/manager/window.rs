@@ -34,6 +34,7 @@ pub fn build_window(app: &libadwaita::Application) {
     let window = libadwaita::ApplicationWindow::builder()
         .application(app)
         .title("Loft")
+        .icon_name("loft")
         .default_width(500)
         .default_height(550)
         .build();

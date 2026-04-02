@@ -124,6 +124,41 @@ fn create_desktop_entry(definition: &ServiceDefinition) -> Result<()> {
     Ok(())
 }
 
+/// Install the manager's own .desktop file so GNOME can associate the
+/// running app window with an icon in the dock/overview.
+/// The file is named after the GTK application ID (`chat.loft.Manager.desktop`).
+pub fn ensure_manager_desktop_entry() -> Result<()> {
+    let apps_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+        .join("applications");
+    let path = apps_dir.join("chat.loft.Manager.desktop");
+
+    if path.exists() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(&apps_dir)?;
+    let loft_binary = std::env::current_exe().context("Could not determine loft binary path")?;
+
+    let content = format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=Loft\n\
+         Comment=Manage Loft web app services\n\
+         Exec={exec}\n\
+         Icon=loft\n\
+         Terminal=false\n\
+         Categories=Network;InstantMessaging;\n\
+         StartupWMClass=loft\n",
+        exec = loft_binary.display(),
+    );
+
+    std::fs::write(&path, &content)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+    tracing::debug!("Installed manager .desktop file: {}", path.display());
+    Ok(())
+}
+
 fn remove_desktop_entry(definition: &ServiceDefinition) -> Result<()> {
     let path = desktop_entry_path(definition);
     if path.exists() {
