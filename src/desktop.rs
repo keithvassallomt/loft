@@ -296,6 +296,7 @@ pub fn ensure_icons() {
 /// Download app icon and tray icon for a single service (skips if already present).
 fn ensure_icons_for(definition: &ServiceDefinition) -> Result<()> {
     fetch_app_icon(definition)?;
+    fetch_app_icon_png(definition)?;
     install_app_icon_to_theme(definition)?;
     fetch_tray_icon(definition)?;
     Ok(())
@@ -326,6 +327,31 @@ fn fetch_app_icon(definition: &ServiceDefinition) -> Result<()> {
     }
 
     tracing::debug!("Saved app icon to {}", icon_path.display());
+    Ok(())
+}
+
+/// Download the PNG version of the app icon (used for SNI tray pixmaps on KDE).
+/// The PNG URL is derived from the SVG URL by replacing the extension.
+fn fetch_app_icon_png(definition: &ServiceDefinition) -> Result<()> {
+    if !definition.app_icon_filename.ends_with(".svg") {
+        return Ok(()); // Already a raster format
+    }
+
+    let icon_dir = data_dir().join("icons");
+    let png_filename = definition.app_icon_filename.replace(".svg", ".png");
+    let png_path = icon_dir.join(&png_filename);
+
+    if png_path.exists() {
+        return Ok(());
+    }
+
+    let png_url = definition.app_icon_url.replace(".svg", ".png");
+    tracing::info!("Fetching PNG app icon from {}", png_url);
+    let bytes = download_url(&png_url)?;
+    std::fs::write(&png_path, &bytes)
+        .with_context(|| format!("Failed to save PNG icon to {}", png_path.display()))?;
+
+    tracing::debug!("Saved PNG app icon to {}", png_path.display());
     Ok(())
 }
 
@@ -456,6 +482,59 @@ pub fn ensure_combined_icon() -> Result<()> {
         std::fs::write(&app_dest, include_str!("../assets/icons/loft.svg"))
             .with_context(|| format!("Failed to write {}", app_dest.display()))?;
         tracing::debug!("Installed loft icon to {}", app_dest.display());
+    }
+
+    // Also install the PNG version for SNI pixmap (KDE/non-GNOME).
+    let png_dir = data_dir().join("icons");
+    std::fs::create_dir_all(&png_dir)?;
+    let png_dest = png_dir.join("loft.png");
+    if !png_dest.exists() {
+        std::fs::write(&png_dest, include_bytes!("../assets/icons/loft.png"))
+            .with_context(|| format!("Failed to write {}", png_dest.display()))?;
+        tracing::debug!("Installed loft PNG icon to {}", png_dest.display());
+    }
+
+    // Install show/hide window icons for tray menu items.
+    // These must go into the active icon theme's actions directory (not hicolor/apps)
+    // for KDE's KIconLoader to apply color scheme recoloring.
+    install_action_icon("loft-show-window-symbolic",
+        include_str!("../gnome-shell-extension/icons/show-window-symbolic.svg"))?;
+    install_action_icon("loft-hide-window-symbolic",
+        include_str!("../gnome-shell-extension/icons/hide-window-symbolic.svg"))?;
+
+    Ok(())
+}
+
+/// Install an SVG icon into both breeze and breeze-dark action icon directories
+/// so KDE's KIconLoader applies color scheme recoloring.
+fn install_action_icon(name: &str, svg_content: &str) -> Result<()> {
+    let system_themes = PathBuf::from("/usr/share/icons");
+    let user_themes = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+        .join("icons");
+
+    // Install into user's local icon directories for each theme that exists
+    for theme in &["breeze", "breeze-dark", "hicolor"] {
+        // Check if the theme exists (either system or user)
+        let theme_exists = system_themes.join(theme).exists()
+            || user_themes.join(theme).exists();
+        if !theme_exists {
+            continue;
+        }
+
+        let dir = if *theme == "hicolor" {
+            user_themes.join(format!("{}/scalable/actions", theme))
+        } else {
+            user_themes.join(format!("{}/actions/16", theme))
+        };
+        std::fs::create_dir_all(&dir)?;
+
+        let dest = dir.join(format!("{}.svg", name));
+        if !dest.exists() {
+            std::fs::write(&dest, svg_content)
+                .with_context(|| format!("Failed to write {}", dest.display()))?;
+            tracing::debug!("Installed action icon to {}", dest.display());
+        }
     }
 
     Ok(())

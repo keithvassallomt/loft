@@ -1,6 +1,7 @@
 pub mod combined_tray;
 pub mod dbus;
 pub mod gnome_shell;
+pub mod kwin;
 pub mod messaging;
 pub mod tray;
 
@@ -34,6 +35,9 @@ pub struct DaemonState {
     pub tray_mode_changed: Notify,
     pub show_signal: Notify,
     pub chrome_pid: tokio::sync::Mutex<Option<u32>>,
+    /// CDP pipe file descriptors (read_fd, write_fd). Closing these triggers
+    /// a clean Chrome shutdown (Chrome exits on pipe EOF).
+    pub cdp_pipe_fds: std::sync::Mutex<Option<(i32, i32)>>,
     /// Broadcast channel for sending commands to the extension via native messaging.
     pub cmd_tx: tokio::sync::broadcast::Sender<messaging::DaemonMessage>,
 }
@@ -59,6 +63,7 @@ impl DaemonState {
             tray_mode_changed: Notify::new(),
             show_signal: Notify::new(),
             chrome_pid: tokio::sync::Mutex::new(None),
+            cdp_pipe_fds: std::sync::Mutex::new(None),
             cmd_tx,
         }
     }
@@ -98,12 +103,13 @@ impl DaemonState {
 
     pub fn request_quit(&self) {
         self.quit_requested.store(true, Ordering::Relaxed);
-        // Kill Chrome's entire process group (negative pid) so renderer,
-        // GPU, crashpad, and other helper processes all receive SIGTERM.
-        if let Ok(guard) = self.chrome_pid.try_lock() {
-            if let Some(pid) = *guard {
+        // Close CDP pipe fds to trigger a clean Chrome shutdown.
+        // Chrome exits gracefully on pipe EOF, avoiding the "crashed" dialog.
+        if let Ok(mut guard) = self.cdp_pipe_fds.lock() {
+            if let Some((read_fd, write_fd)) = guard.take() {
                 unsafe {
-                    libc::kill(-(pid as i32), libc::SIGTERM);
+                    libc::close(read_fd);
+                    libc::close(write_fd);
                 }
             }
         }
@@ -208,14 +214,26 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
                         match gnome_shell::focus_window(&wm_class).await {
                             Ok(true) => tracing::debug!("GNOME Shell focused window"),
                             Ok(false) => tracing::debug!("GNOME Shell: window not found"),
-                            Err(e) => tracing::debug!("GNOME Shell helper unavailable: {}", e),
+                            Err(_) => {
+                                match kwin::focus_window(&wm_class).await {
+                                    Ok(true) => tracing::debug!("KWin focused window"),
+                                    Ok(false) => tracing::debug!("KWin: window not found"),
+                                    Err(e) => tracing::debug!("KWin helper unavailable: {}", e),
+                                }
+                            }
                         }
                     }
                     Ok(messaging::DaemonMessage::HideWindow) => {
                         match gnome_shell::hide_window(&wm_class).await {
                             Ok(true) => tracing::debug!("GNOME Shell hid window"),
                             Ok(false) => tracing::debug!("GNOME Shell: window not found"),
-                            Err(e) => tracing::debug!("GNOME Shell helper unavailable: {}", e),
+                            Err(_) => {
+                                match kwin::hide_window(&wm_class).await {
+                                    Ok(true) => tracing::debug!("KWin hid window"),
+                                    Ok(false) => tracing::debug!("KWin: window not found"),
+                                    Err(e) => tracing::debug!("KWin helper unavailable: {}", e),
+                                }
+                            }
                         }
                     }
                     Ok(_) => {}
@@ -679,7 +697,7 @@ impl ChromeManager {
                 ).await {
                     Ok(result) => { result?; break; }
                     Err(_) if self.state.quit_requested.load(Ordering::Relaxed) => {
-                        tracing::warn!("Chrome didn't exit after SIGTERM, sending SIGKILL");
+                        tracing::warn!("Chrome didn't exit after pipe close, sending SIGKILL");
                         if let Some(pid) = *self.state.chrome_pid.lock().await {
                             unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
                         }
@@ -690,6 +708,15 @@ impl ChromeManager {
                 }
             }
             *self.state.chrome_pid.lock().await = None;
+            // Clear pipe fds (Chrome already exited, fds are stale)
+            if let Ok(mut guard) = self.state.cdp_pipe_fds.lock() {
+                if let Some((read_fd, write_fd)) = guard.take() {
+                    unsafe {
+                        libc::close(read_fd);
+                        libc::close(write_fd);
+                    }
+                }
+            }
             self.state.visible.store(false, Ordering::Relaxed);
 
             let run_duration = start_time.elapsed();
@@ -787,6 +814,9 @@ impl ChromeManager {
             load_extension_via_cdp(daemon_read_fd, daemon_write_fd, &ext_path)
         })
         .await??;
+
+        // Store the CDP pipe fds so request_quit() can close them for a clean shutdown.
+        *self.state.cdp_pipe_fds.lock().unwrap() = Some((daemon_read_fd, daemon_write_fd));
 
         // Fix Chrome's auto-generated .desktop file for --app= mode.
         // Chrome overwrites e.g. "chrome-web.whatsapp.com__-Default.desktop"

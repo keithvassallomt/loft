@@ -12,6 +12,7 @@ use super::CombinedTrayState;
 /// We need owned data because ksni callbacks take `&mut Self`.
 #[derive(Clone, PartialEq)]
 pub(crate) struct ServiceSnapshot {
+    pub name: String,
     pub display_name: String,
     pub dbus_name: String,
     pub visible: bool,
@@ -28,11 +29,16 @@ pub struct CombinedLoftTray {
 }
 
 impl Tray for CombinedLoftTray {
+    const MENU_ON_ACTIVATE: bool = true;
+
     fn id(&self) -> String {
         "loft-combined".to_string()
     }
 
     fn icon_name(&self) -> String {
+        if !self.icon_data.is_empty() {
+            return String::new();
+        }
         self.tray_icon_name.clone()
     }
 
@@ -45,17 +51,16 @@ impl Tray for CombinedLoftTray {
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
-        self.icon_data.clone()
-    }
-
-    fn overlay_icon_pixmap(&self) -> Vec<Icon> {
-        if self.all_dnd {
-            vec![generate_dnd_dash_overlay()]
-        } else if self.has_unread {
-            vec![generate_red_dot_overlay()]
-        } else {
-            vec![]
+        if self.icon_data.is_empty() {
+            return vec![];
         }
+        let mut icon = self.icon_data[0].clone();
+        if self.all_dnd {
+            composite_overlay(&mut icon, &generate_dnd_dash_overlay());
+        } else if self.has_unread {
+            composite_overlay(&mut icon, &generate_red_dot_overlay());
+        }
+        vec![icon]
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
@@ -65,38 +70,85 @@ impl Tray for CombinedLoftTray {
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let mut items: Vec<MenuItem<Self>> = Vec::new();
 
+        // Loft Settings item at the top
+        items.push(
+            StandardItem {
+                label: "Loft Settings\u{2026}".to_string(), // ellipsis …
+                icon_name: "preferences-system".to_string(),
+                activate: Box::new(|_tray: &mut CombinedLoftTray| {
+                    let _ = std::process::Command::new("loft").spawn();
+                }),
+                ..Default::default()
+            }
+            .into(),
+        );
+        items.push(MenuItem::Separator);
+
+        // Quick show/hide toggles at the top
+        for svc in &self.services {
+            let dbus_name = svc.dbus_name.clone();
+            let (show_hide_label, show_hide_icon) = if svc.visible {
+                (format!("Hide {}", svc.display_name), "loft-hide-window-symbolic")
+            } else {
+                (format!("Show {}", svc.display_name), "loft-show-window-symbolic")
+            };
+
+            // Add unread indicator
+            let label = if svc.badge_count > 0 && !svc.dnd {
+                format!("{} \u{2022}", show_hide_label) // bullet •
+            } else {
+                show_hide_label
+            };
+
+            items.push(
+                StandardItem {
+                    label,
+                    icon_name: show_hide_icon.to_string(),
+                    icon_data: load_service_icon_png(&svc.name),
+                    activate: Box::new({
+                        let dbus_name = dbus_name.clone();
+                        move |_tray: &mut CombinedLoftTray| {
+                            call_service_method_fire_and_forget(&dbus_name, "Toggle");
+                        }
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+
+        if self.services.is_empty() {
+            items.push(
+                StandardItem {
+                    label: "No services running".to_string(),
+                    enabled: false,
+                    ..Default::default()
+                }
+                .into(),
+            );
+        }
+
+        // Service submenus with DND and Quit
+        if !self.services.is_empty() {
+            items.push(MenuItem::Separator);
+        }
+
         for (idx, svc) in self.services.iter().enumerate() {
             if idx > 0 {
                 items.push(MenuItem::Separator);
             }
 
             let dbus_name = svc.dbus_name.clone();
-            let show_hide_label = if svc.visible { "Hide" } else { "Show" };
-
-            // Add unread indicator to service name
-            let label = if svc.badge_count > 0 && !svc.dnd {
-                format!("{} \u{2022}", svc.display_name) // bullet •
-            } else {
-                svc.display_name.clone()
-            };
+            let icon_data = load_service_icon_png(&svc.name);
 
             items.push(
                 SubMenu {
-                    label,
+                    label: svc.display_name.clone(),
+                    icon_data,
                     submenu: vec![
-                        StandardItem {
-                            label: show_hide_label.to_string(),
-                            activate: Box::new({
-                                let dbus_name = dbus_name.clone();
-                                move |_tray: &mut CombinedLoftTray| {
-                                    call_service_method_fire_and_forget(&dbus_name, "Toggle");
-                                }
-                            }),
-                            ..Default::default()
-                        }
-                        .into(),
                         CheckmarkItem {
                             label: "Do Not Disturb".to_string(),
+                            icon_name: "notifications-disabled-symbolic".to_string(),
                             checked: svc.dnd,
                             activate: Box::new({
                                 let dbus_name = dbus_name.clone();
@@ -127,28 +179,17 @@ impl Tray for CombinedLoftTray {
             );
         }
 
-        if items.is_empty() {
-            items.push(
-                StandardItem {
-                    label: "No services running".to_string(),
-                    enabled: false,
-                    ..Default::default()
-                }
-                .into(),
-            );
-        }
-
         items
     }
 }
 
 /// Map service name → D-Bus name (e.g. "whatsapp" → "WhatsApp").
 fn dbus_name_for_service(name: &str) -> String {
-    match name {
-        "whatsapp" => "WhatsApp".to_string(),
-        "messenger" => "Messenger".to_string(),
-        _ => name.to_string(),
-    }
+    crate::service::ALL_SERVICES
+        .iter()
+        .find(|s| s.name == name)
+        .map(|s| s.dbus_name.to_string())
+        .unwrap_or_else(|| name.to_string())
 }
 
 /// Fire-and-forget D-Bus call to a per-service daemon.
@@ -162,7 +203,7 @@ fn call_service_method_fire_and_forget(dbus_name: &str, method: &'static str) {
             .enable_all()
             .build();
         if let Ok(rt) = rt {
-            let _ = rt.block_on(async {
+            if let Err(e) = rt.block_on(async {
                 let conn = zbus::Connection::session().await?;
                 conn.call_method(
                     Some(zbus::names::BusName::try_from(bus_name.as_str())
@@ -176,7 +217,9 @@ fn call_service_method_fire_and_forget(dbus_name: &str, method: &'static str) {
                 )
                 .await?;
                 Ok::<(), anyhow::Error>(())
-            });
+            }) {
+                tracing::error!("Combined tray D-Bus call {} failed: {}", method, e);
+            }
         }
     });
 }
@@ -210,16 +253,37 @@ fn call_service_set_dnd(dbus_name: &str, enabled: bool) {
     });
 }
 
-/// Load the combined Loft icon from the XDG theme data directory.
-fn load_combined_icon() -> Vec<Icon> {
-    let icon_path = dirs::data_dir()
+/// Load a service's PNG icon as raw bytes for use in submenu icon_data.
+fn load_service_icon_png(service_name: &str) -> Vec<u8> {
+    let png_path = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-        .join("icons/hicolor/scalable/apps/loft.svg");
+        .join(format!("loft/icons/{}.png", service_name));
+    std::fs::read(&png_path).unwrap_or_default()
+}
 
-    // SVG can't be directly converted to ARGB pixmap easily,
-    // so just return empty and rely on icon_name resolution
-    if icon_path.exists() {
-        tracing::debug!("Combined icon path exists: {}", icon_path.display());
+/// Load the combined Loft icon as a pixmap for the SNI tray.
+/// Tries the PNG version first (for KDE/non-GNOME), falls back to empty
+/// (GNOME resolves via icon_name instead).
+fn load_combined_icon() -> Vec<Icon> {
+    let png_path = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+        .join("loft/icons/loft.png");
+
+    if let Ok(data) = std::fs::read(&png_path) {
+        if let Ok(img) = image::load_from_memory(&data) {
+            let img = img.resize_exact(48, 48, image::imageops::FilterType::Lanczos3);
+            let rgba = img.to_rgba8();
+            let (w, h) = (rgba.width(), rgba.height());
+            let mut argb_data = rgba.into_raw();
+            for pixel in argb_data.chunks_exact_mut(4) {
+                pixel.rotate_right(1);
+            }
+            return vec![Icon {
+                width: w as i32,
+                height: h as i32,
+                data: argb_data,
+            }];
+        }
     }
     vec![]
 }
@@ -298,6 +362,7 @@ pub async fn run_combined_sni(state: Arc<CombinedTrayState>) -> Result<()> {
                     let snapshots: Vec<ServiceSnapshot> = services
                         .iter()
                         .map(|(name, s)| ServiceSnapshot {
+                            name: name.clone(),
                             display_name: s.display_name.clone(),
                             dbus_name: dbus_name_for_service(name),
                             visible: s.visible,
@@ -355,14 +420,32 @@ pub async fn run_combined_sni(state: Arc<CombinedTrayState>) -> Result<()> {
     }
 }
 
-// Reuse the overlay generators from daemon::tray
-// (duplicated here to avoid coupling the combined_tray module to daemon internals)
+/// Composite an overlay icon onto a base icon using alpha blending.
+/// Both icons must be the same size (ARGB32, network byte order).
+fn composite_overlay(base: &mut Icon, overlay: &Icon) {
+    assert_eq!(base.width, overlay.width);
+    assert_eq!(base.height, overlay.height);
+    for (base_px, over_px) in base.data.chunks_exact_mut(4).zip(overlay.data.chunks_exact(4)) {
+        let oa = over_px[0] as f32 / 255.0;
+        if oa == 0.0 {
+            continue;
+        }
+        let ba = base_px[0] as f32 / 255.0;
+        let out_a = oa + ba * (1.0 - oa);
+        if out_a > 0.0 {
+            for c in 1..4 {
+                base_px[c] = ((over_px[c] as f32 * oa + base_px[c] as f32 * ba * (1.0 - oa)) / out_a) as u8;
+            }
+        }
+        base_px[0] = (out_a * 255.0) as u8;
+    }
+}
 
 fn generate_red_dot_overlay() -> Icon {
-    const SIZE: i32 = 22;
-    const DOT_RADIUS: f32 = 3.5;
-    const DOT_CX: f32 = SIZE as f32 - DOT_RADIUS - 1.0;
-    const DOT_CY: f32 = SIZE as f32 - DOT_RADIUS - 1.0;
+    const SIZE: i32 = 48;
+    const DOT_RADIUS: f32 = 7.0;
+    const DOT_CX: f32 = SIZE as f32 - DOT_RADIUS - 2.0;
+    const DOT_CY: f32 = SIZE as f32 - DOT_RADIUS - 2.0;
     const R: f32 = 0xE0 as f32;
     const G: f32 = 0x1B as f32;
     const B: f32 = 0x24 as f32;
@@ -395,11 +478,11 @@ fn generate_red_dot_overlay() -> Icon {
 }
 
 fn generate_dnd_dash_overlay() -> Icon {
-    const SIZE: i32 = 22;
-    const DASH_W: f32 = 6.0;
-    const DASH_H: f32 = 2.0;
-    const DASH_X: f32 = SIZE as f32 - DASH_W - 1.0;
-    const DASH_Y: f32 = SIZE as f32 - DASH_H - 2.0;
+    const SIZE: i32 = 48;
+    const DASH_W: f32 = 13.0;
+    const DASH_H: f32 = 4.0;
+    const DASH_X: f32 = SIZE as f32 - DASH_W - 2.0;
+    const DASH_Y: f32 = SIZE as f32 - DASH_H - 4.0;
     const R: f32 = 0x88 as f32;
     const G: f32 = 0x88 as f32;
     const B: f32 = 0x88 as f32;

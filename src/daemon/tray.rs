@@ -50,15 +50,12 @@ impl Tray for LoftTray {
     }
 
     fn icon_name(&self) -> String {
+        // If we have pixmap data, return empty so KDE uses the pixmap
+        // instead of resolving a (potentially monochrome) theme icon.
+        if !self.icon_data.is_empty() {
+            return String::new();
+        }
         self.tray_icon_name.clone()
-    }
-
-    fn icon_theme_path(&self) -> String {
-        dirs::data_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
-            .join("icons")
-            .to_string_lossy()
-            .to_string()
     }
 
     fn category(&self) -> ksni::Category {
@@ -74,20 +71,16 @@ impl Tray for LoftTray {
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
-        self.icon_data.clone()
-    }
-
-    fn overlay_icon_pixmap(&self) -> Vec<Icon> {
-        let has_badge = self.badge_count > 0;
-        let has_dnd = self.dnd;
-        // DND suppresses the badge indicator — the dash replaces it
-        if has_dnd {
-            vec![generate_dnd_dash_overlay()]
-        } else if has_badge {
-            vec![generate_red_dot_overlay()]
-        } else {
-            vec![]
+        if self.icon_data.is_empty() {
+            return vec![];
         }
+        let mut icon = self.icon_data[0].clone();
+        if self.dnd {
+            composite_overlay(&mut icon, &generate_dnd_dash_overlay());
+        } else if self.badge_count > 0 {
+            composite_overlay(&mut icon, &generate_red_dot_overlay());
+        }
+        vec![icon]
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
@@ -102,10 +95,15 @@ impl Tray for LoftTray {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let show_hide_label = if self.visible { "Hide" } else { "Show" };
+        let (show_hide_label, show_hide_icon) = if self.visible {
+            ("Hide", "loft-hide-window-symbolic")
+        } else {
+            ("Show", "loft-show-window-symbolic")
+        };
         vec![
             StandardItem {
                 label: show_hide_label.to_string(),
+                icon_name: show_hide_icon.to_string(),
                 activate: Box::new(|tray: &mut LoftTray| {
                     if tray.visible {
                         tray.visible = false;
@@ -121,6 +119,7 @@ impl Tray for LoftTray {
             MenuItem::Separator,
             CheckmarkItem {
                 label: "Do Not Disturb".to_string(),
+                icon_name: "notifications-disabled-symbolic".to_string(),
                 checked: self.dnd,
                 activate: Box::new(|tray: &mut LoftTray| {
                     let new_dnd = !tray.dnd;
@@ -154,18 +153,20 @@ impl Tray for LoftTray {
     }
 }
 
-/// Load a raster image file and convert to ARGB32 for the tray icon pixmap fallback.
-/// SVG files are not supported by the `image` crate — the DE resolves those via
-/// the `icon_name` property instead, so a missing pixmap is harmless.
+/// Load a PNG/ICO file and convert to ARGB32 for the tray icon pixmap.
+/// If the path points to an SVG, tries the `.png` sibling instead.
 fn load_icon(path: &PathBuf) -> Vec<Icon> {
-    // Skip SVG files — they can't be decoded as raster images.
-    if path.extension().and_then(|e| e.to_str()) == Some("svg") {
-        tracing::debug!("Skipping pixmap for SVG icon {}, relying on icon_name", path.display());
-        return vec![];
-    }
-    match std::fs::read(path) {
+    // SVGs can't be decoded by the image crate — use the PNG version instead.
+    let actual_path = if path.extension().and_then(|e| e.to_str()) == Some("svg") {
+        path.with_extension("png")
+    } else {
+        path.clone()
+    };
+    match std::fs::read(&actual_path) {
         Ok(data) => match image::load_from_memory(&data) {
             Ok(img) => {
+                // Resize to 48x48 for tray icons
+                let img = img.resize_exact(48, 48, image::imageops::FilterType::Lanczos3);
                 let rgba = img.to_rgba8();
                 let (w, h) = (rgba.width(), rgba.height());
                 let mut argb_data = rgba.into_raw();
@@ -180,12 +181,12 @@ fn load_icon(path: &PathBuf) -> Vec<Icon> {
                 }]
             }
             Err(e) => {
-                tracing::warn!("Failed to decode icon {}: {}", path.display(), e);
+                tracing::warn!("Failed to decode icon {}: {}", actual_path.display(), e);
                 vec![]
             }
         },
         Err(e) => {
-            tracing::warn!("Failed to read icon {}: {}", path.display(), e);
+            tracing::warn!("Failed to read icon {}: {}", actual_path.display(), e);
             vec![]
         }
     }
@@ -193,12 +194,33 @@ fn load_icon(path: &PathBuf) -> Vec<Icon> {
 
 /// Generate a small red dot overlay icon (ARGB32) for the badge indicator.
 /// Matches the GNOME panel dot: #e01b24, positioned at bottom-right.
+/// Composite an overlay icon onto a base icon using alpha blending.
+/// Both icons must be the same size (ARGB32, network byte order).
+fn composite_overlay(base: &mut Icon, overlay: &Icon) {
+    assert_eq!(base.width, overlay.width);
+    assert_eq!(base.height, overlay.height);
+    for (base_px, over_px) in base.data.chunks_exact_mut(4).zip(overlay.data.chunks_exact(4)) {
+        let oa = over_px[0] as f32 / 255.0;
+        if oa == 0.0 {
+            continue;
+        }
+        let ba = base_px[0] as f32 / 255.0;
+        let out_a = oa + ba * (1.0 - oa);
+        if out_a > 0.0 {
+            for c in 1..4 {
+                base_px[c] = ((over_px[c] as f32 * oa + base_px[c] as f32 * ba * (1.0 - oa)) / out_a) as u8;
+            }
+        }
+        base_px[0] = (out_a * 255.0) as u8;
+    }
+}
+
 fn generate_red_dot_overlay() -> Icon {
-    const SIZE: i32 = 22;
-    const DOT_RADIUS: f32 = 3.5;
+    const SIZE: i32 = 48;
+    const DOT_RADIUS: f32 = 7.0;
     // Centre the dot in the bottom-right corner with a small margin
-    const DOT_CX: f32 = SIZE as f32 - DOT_RADIUS - 1.0;
-    const DOT_CY: f32 = SIZE as f32 - DOT_RADIUS - 1.0;
+    const DOT_CX: f32 = SIZE as f32 - DOT_RADIUS - 2.0;
+    const DOT_CY: f32 = SIZE as f32 - DOT_RADIUS - 2.0;
     // GNOME Adwaita red: #e01b24
     const R: f32 = 0xE0 as f32;
     const G: f32 = 0x1B as f32;
@@ -241,12 +263,12 @@ fn generate_red_dot_overlay() -> Icon {
 /// Grey (#888888), positioned at bottom-right (same corner as the badge dot,
 /// which is hidden during DND).
 fn generate_dnd_dash_overlay() -> Icon {
-    const SIZE: i32 = 22;
+    const SIZE: i32 = 48;
     // Dash dimensions and position (bottom-right corner)
-    const DASH_W: f32 = 6.0;
-    const DASH_H: f32 = 2.0;
-    const DASH_X: f32 = SIZE as f32 - DASH_W - 1.0; // right margin
-    const DASH_Y: f32 = SIZE as f32 - DASH_H - 2.0; // bottom margin
+    const DASH_W: f32 = 13.0;
+    const DASH_H: f32 = 4.0;
+    const DASH_X: f32 = SIZE as f32 - DASH_W - 2.0; // right margin
+    const DASH_Y: f32 = SIZE as f32 - DASH_H - 4.0; // bottom margin
     // Muted grey: #888888
     const R: f32 = 0x88 as f32;
     const G: f32 = 0x88 as f32;
