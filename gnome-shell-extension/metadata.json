@@ -3,7 +3,7 @@
   "name": "Loft Shell Helper",
   "description": "Window management helper for Loft — handles window activation and hides minimized Loft windows from alt-tab.",
   "shell-version": ["47", "48", "49", "50"],
-  "version-name": "1.0",
+  "version-name": "1.1",
   "url": "https://github.com/keithvassallomt/loft",
   "donations": {
     "github": "keithvassallomt"

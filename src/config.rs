@@ -44,19 +44,31 @@ impl fmt::Display for TrayBackend {
 }
 
 /// Global config at ~/.config/loft/config.toml
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct GlobalConfig {
     /// Custom Chrome binary path (overrides auto-detection)
     pub chrome_path: Option<String>,
     /// Tray icon backend: auto, gnome-panel, or sni
     #[serde(default)]
     pub tray_backend: TrayBackend,
-    /// Combine all service tray icons into a single Loft icon
-    #[serde(default)]
+    /// Combine all service tray icons into a single Loft icon.
+    /// Defaults to true on GNOME, false elsewhere.
+    #[serde(default = "default_combine_tray")]
     pub combine_tray_icons: bool,
     /// Don't prompt to install the GNOME Shell extension
     #[serde(default)]
     pub skip_extension_prompt: bool,
+}
+
+impl Default for GlobalConfig {
+    fn default() -> Self {
+        Self {
+            chrome_path: None,
+            tray_backend: TrayBackend::Auto,
+            combine_tray_icons: default_combine_tray(),
+            skip_extension_prompt: false,
+        }
+    }
 }
 
 /// Per-service config at ~/.config/loft/services/<name>.toml
@@ -74,6 +86,13 @@ pub struct ServiceConfig {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_combine_tray() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .split(':')
+        .any(|d| d.eq_ignore_ascii_case("GNOME"))
 }
 
 impl Default for ServiceConfig {
@@ -154,7 +173,7 @@ mod tests {
             chrome_path: Some("/usr/bin/google-chrome".to_string()),
             tray_backend: TrayBackend::GnomePanel,
             combine_tray_icons: true,
-            skip_extension_prompt: false,
+            skip_extension_prompt: true,
         };
 
         let content = toml::to_string_pretty(&config).unwrap();
@@ -169,7 +188,8 @@ mod tests {
         let config = GlobalConfig::default();
         assert_eq!(config.chrome_path, None);
         assert_eq!(config.tray_backend, TrayBackend::Auto);
-        assert!(!config.combine_tray_icons);
+        // combine_tray_icons defaults based on XDG_CURRENT_DESKTOP
+        assert_eq!(config.combine_tray_icons, default_combine_tray());
         assert!(!config.skip_extension_prompt);
     }
 
@@ -178,7 +198,8 @@ mod tests {
         let toml = "chrome_path = \"/usr/bin/google-chrome\"\n";
         let config: GlobalConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.tray_backend, TrayBackend::Auto);
-        assert!(!config.combine_tray_icons);
+        // combine_tray_icons defaults based on XDG_CURRENT_DESKTOP
+        assert_eq!(config.combine_tray_icons, default_combine_tray());
         assert!(!config.skip_extension_prompt);
     }
 

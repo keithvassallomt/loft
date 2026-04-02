@@ -560,13 +560,20 @@ export default class LoftShellHelper extends Extension {
         const menu = this._combinedIndicator.menu;
         menu.removeAll();
 
-        // "Loft Settings..." opens the manager GUI
+        // "Loft Settings..." opens the manager GUI via its .desktop file,
+        // which works for both native and Flatpak installs.
         const settingsItem = new PopupMenu.PopupMenuItem('Loft Settings\u2026');
         settingsItem.connect('activate', () => {
-            try {
-                GLib.spawn_command_line_async('loft');
-            } catch (e) {
-                console.error(`Loft: Failed to launch manager: ${e}`);
+            const appInfo = Gio.DesktopAppInfo.new('chat.loft.Loft.desktop')
+                ?? Gio.DesktopAppInfo.new('chat.loft.Manager.desktop');
+            if (appInfo) {
+                try {
+                    appInfo.launch([], null);
+                } catch (e) {
+                    console.error(`Loft: Failed to launch manager: ${e}`);
+                }
+            } else {
+                console.error('Loft: No .desktop file found for manager');
             }
         });
         menu.addMenuItem(settingsItem);

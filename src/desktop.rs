@@ -178,6 +178,11 @@ fn create_desktop_entry(definition: &ServiceDefinition) -> Result<()> {
 /// running app window with an icon in the dock/overview.
 /// The file is named after the GTK application ID (`chat.loft.Manager.desktop`).
 pub fn ensure_manager_desktop_entry() -> Result<()> {
+    // Flatpak already exports its own chat.loft.Loft.desktop — skip to avoid duplicates.
+    if crate::chrome::is_flatpak() {
+        return Ok(());
+    }
+
     let apps_dir = host_data_dir().join("applications");
     let path = apps_dir.join("chat.loft.Manager.desktop");
 
