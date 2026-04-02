@@ -12,7 +12,7 @@ const EXTENSION_ID: &str = "eofapmpkglkhhdjadegnleadgbjooljp";
 pub fn install_service(definition: &ServiceDefinition) -> Result<()> {
     deploy_extension()?;
     deploy_gnome_shell_extension()?;
-    ensure_icons_for(definition)?;
+    deploy_service_icons(definition)?;
     ensure_combined_icon()?;
     create_desktop_entry(definition)?;
     create_chrome_desktop_file(definition)?;
@@ -121,6 +121,18 @@ fn nm_host_manifest_path() -> PathBuf {
 // .desktop file management
 // ============================================================
 
+/// Return the Icon= value for .desktop files.
+/// Uses the absolute path if the icon file exists, otherwise falls back
+/// to the XDG theme name (e.g. `loft-whatsapp`).
+fn desktop_icon(definition: &ServiceDefinition) -> String {
+    let icon_path = data_dir().join("icons").join(definition.app_icon_filename);
+    if icon_path.exists() {
+        icon_path.display().to_string()
+    } else {
+        definition.app_icon_name()
+    }
+}
+
 /// Return the Exec= prefix for .desktop files.
 /// Inside Flatpak: `flatpak run chat.loft.Loft`
 /// Native: the path to the current binary.
@@ -135,7 +147,7 @@ fn desktop_exec() -> Result<String> {
 
 fn create_desktop_entry(definition: &ServiceDefinition) -> Result<()> {
     let exec = desktop_exec()?;
-    let icon_path = data_dir().join("icons").join(definition.app_icon_filename);
+    let icon = desktop_icon(definition);
 
     let content = format!(
         "[Desktop Entry]\n\
@@ -150,7 +162,7 @@ fn create_desktop_entry(definition: &ServiceDefinition) -> Result<()> {
         name = definition.display_name,
         exec = exec,
         service = definition.name,
-        icon = icon_path.display(),
+        icon = icon,
     );
 
     let path = desktop_entry_path(definition);
@@ -235,7 +247,7 @@ fn chrome_notification_desktop_path(definition: &ServiceDefinition) -> PathBuf {
 /// overwrites it on launch), see `daemon::mod.rs::fix_chrome_desktop_file`.
 pub fn create_chrome_desktop_file(definition: &ServiceDefinition) -> Result<()> {
     let exec = desktop_exec()?;
-    let icon_path = data_dir().join("icons").join(definition.app_icon_filename);
+    let icon = desktop_icon(definition);
 
     let content = format!(
         "[Desktop Entry]\n\
@@ -247,7 +259,7 @@ pub fn create_chrome_desktop_file(definition: &ServiceDefinition) -> Result<()> 
         name = definition.display_name,
         exec = exec,
         service = definition.name,
-        icon = icon_path.display(),
+        icon = icon,
     );
 
     let path = chrome_notification_desktop_path(definition);
@@ -321,8 +333,8 @@ fn deploy_gnome_shell_extension() -> Result<()> {
 
     tracing::debug!("Deployed GNOME Shell extension to {}", ext_dir.display());
 
-    // Best-effort: enable the extension (requires gnome-extensions CLI)
-    match std::process::Command::new("gnome-extensions")
+    // Best-effort: enable the extension (requires gnome-extensions CLI on the host)
+    match crate::chrome::host_command("gnome-extensions")
         .args(["enable", "loft-shell-helper@loft.chat"])
         .output()
     {
@@ -345,16 +357,16 @@ fn deploy_gnome_shell_extension() -> Result<()> {
 }
 
 // ============================================================
-// Icon fetching
+// Icon deployment (from embedded assets)
 // ============================================================
 
-/// Download all service icons (app + tray) if they are not already present.
+/// Deploy all service icons from embedded assets to disk.
 /// Call this once on manager startup so icons are available before any install.
 pub fn ensure_icons() {
     for definition in crate::service::ALL_SERVICES {
-        if let Err(e) = ensure_icons_for(definition) {
+        if let Err(e) = deploy_service_icons(definition) {
             tracing::warn!(
-                "Failed to fetch icons for {}: {}",
+                "Failed to deploy icons for {}: {}",
                 definition.display_name,
                 e
             );
@@ -362,184 +374,61 @@ pub fn ensure_icons() {
     }
 }
 
-/// Download app icon and tray icon for a single service (skips if already present).
-/// Continues past individual failures so a transient network error doesn't
-/// prevent other icon types from being fetched.
-fn ensure_icons_for(definition: &ServiceDefinition) -> Result<()> {
-    let mut last_err: Option<anyhow::Error> = None;
-
-    if let Err(e) = fetch_app_icon(definition) {
-        tracing::warn!("Failed to fetch app icon for {}: {}", definition.display_name, e);
-        last_err = Some(e);
-    }
-    if let Err(e) = fetch_app_icon_png(definition) {
-        tracing::warn!("Failed to fetch PNG icon for {}: {}", definition.display_name, e);
-        last_err = Some(e);
-    }
-    if let Err(e) = install_app_icon_to_theme(definition) {
-        tracing::warn!("Failed to install icon to theme for {}: {}", definition.display_name, e);
-        last_err = Some(e);
-    }
-    if let Err(e) = fetch_tray_icon(definition) {
-        tracing::warn!("Failed to fetch tray icon for {}: {}", definition.display_name, e);
-        last_err = Some(e);
-    }
-
-    match last_err {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
-}
-
-/// Download the application icon (for .desktop files, notifications, manager GUI).
-/// SVG files are saved as-is; other formats are decoded and re-saved as PNG.
-fn fetch_app_icon(definition: &ServiceDefinition) -> Result<()> {
+/// Deploy all icons for a single service from embedded assets.
+/// Writes the app icon SVG + PNG to the Loft data dir, and installs
+/// both the app icon and tray icon into the XDG icon theme.
+fn deploy_service_icons(definition: &ServiceDefinition) -> Result<()> {
+    // App icon SVG → ~/.local/share/loft/icons/<name>.svg
     let icon_dir = data_dir().join("icons");
     std::fs::create_dir_all(&icon_dir)?;
-    let icon_path = icon_dir.join(definition.app_icon_filename);
 
-    if icon_path.exists() {
-        tracing::debug!("App icon already exists: {}", icon_path.display());
-        return Ok(());
+    let svg_path = icon_dir.join(definition.app_icon_filename);
+    if !svg_path.exists() {
+        std::fs::write(&svg_path, definition.app_icon_svg)
+            .with_context(|| format!("Failed to write {}", svg_path.display()))?;
     }
 
-    tracing::info!("Fetching app icon from {}", definition.app_icon_url);
-    let bytes = download_url(definition.app_icon_url)?;
-
-    if definition.app_icon_url.ends_with(".svg") {
-        std::fs::write(&icon_path, &bytes)
-            .with_context(|| format!("Failed to save SVG icon to {}", icon_path.display()))?;
-    } else {
-        let img = image::load_from_memory(&bytes).context("Failed to decode icon image")?;
-        img.save_with_format(&icon_path, image::ImageFormat::Png)
-            .with_context(|| format!("Failed to save icon to {}", icon_path.display()))?;
-    }
-
-    tracing::debug!("Saved app icon to {}", icon_path.display());
-    Ok(())
-}
-
-/// Download the PNG version of the app icon (used for SNI tray pixmaps on KDE).
-/// The PNG URL is derived from the SVG URL by replacing the extension.
-fn fetch_app_icon_png(definition: &ServiceDefinition) -> Result<()> {
-    if !definition.app_icon_filename.ends_with(".svg") {
-        return Ok(()); // Already a raster format
-    }
-
-    let icon_dir = data_dir().join("icons");
+    // App icon PNG → ~/.local/share/loft/icons/<name>.png (for SNI tray pixmaps)
     let png_filename = definition.app_icon_filename.replace(".svg", ".png");
     let png_path = icon_dir.join(&png_filename);
-
-    if png_path.exists() {
-        return Ok(());
+    if !png_path.exists() {
+        std::fs::write(&png_path, definition.app_icon_png)
+            .with_context(|| format!("Failed to write {}", png_path.display()))?;
     }
 
-    let png_url = definition.app_icon_url.replace(".svg", ".png");
-    tracing::info!("Fetching PNG app icon from {}", png_url);
-    let bytes = download_url(&png_url)?;
-    std::fs::write(&png_path, &bytes)
-        .with_context(|| format!("Failed to save PNG icon to {}", png_path.display()))?;
-
-    tracing::debug!("Saved PNG app icon to {}", png_path.display());
-    Ok(())
-}
-
-/// Install the app icon into the XDG icon theme so .desktop files and autostart
-/// entries can reference it by name (e.g. `loft-whatsapp`) rather than by path.
-///
-/// Copies from `~/.local/share/loft/icons/<file>` to
-/// `~/.local/share/icons/hicolor/scalable/apps/loft-<name>.svg` (or 48x48 PNG).
-fn install_app_icon_to_theme(definition: &ServiceDefinition) -> Result<()> {
-    let icon_name = definition.app_icon_name();
+    // App icon → XDG icon theme (scalable/apps/loft-<name>.svg)
     let icons_base = host_data_dir().join("icons/hicolor");
-
-    let is_svg = definition.app_icon_filename.ends_with(".svg");
-    let dest = if is_svg {
-        icons_base
-            .join("scalable/apps")
-            .join(format!("{}.svg", icon_name))
-    } else {
-        icons_base
-            .join("48x48/apps")
-            .join(format!("{}.png", icon_name))
-    };
-
-    if dest.exists() {
-        return Ok(());
+    let theme_dest = icons_base
+        .join("scalable/apps")
+        .join(format!("{}.svg", definition.app_icon_name()));
+    if !theme_dest.exists() {
+        std::fs::create_dir_all(theme_dest.parent().unwrap())?;
+        std::fs::write(&theme_dest, definition.app_icon_svg)
+            .with_context(|| format!("Failed to write {}", theme_dest.display()))?;
     }
 
-    let src = data_dir().join("icons").join(definition.app_icon_filename);
-    if !src.exists() {
-        return Ok(());
+    // Tray icon → XDG icon theme (scalable/apps/loft-<name>-symbolic.svg)
+    let tray_dest = icons_base
+        .join("scalable/apps")
+        .join(format!("loft-{}-symbolic.svg", definition.name));
+    if !tray_dest.exists() {
+        std::fs::create_dir_all(tray_dest.parent().unwrap())?;
+        std::fs::write(&tray_dest, definition.tray_icon_svg)
+            .with_context(|| format!("Failed to write {}", tray_dest.display()))?;
     }
 
-    std::fs::create_dir_all(dest.parent().unwrap())?;
-    std::fs::copy(&src, &dest)
-        .with_context(|| format!("Failed to install app icon to {}", dest.display()))?;
-
-    tracing::debug!("Installed app icon to theme: {}", dest.display());
-    Ok(())
-}
-
-/// Download the tray icon and install it into the XDG icon theme so the desktop
-/// environment can resolve it by name via the SNI `IconName` property.
-///
-/// SVG icons go to `~/.local/share/icons/hicolor/scalable/apps/loft-<name>.svg`.
-/// Non-SVG icons are decoded and saved as PNG to `~/.local/share/icons/hicolor/48x48/apps/`.
-fn fetch_tray_icon(definition: &ServiceDefinition) -> Result<()> {
-    let tray_icon_name = definition.tray_icon_name();
-    let icons_base = host_data_dir().join("icons/hicolor");
-
-    let is_svg = definition.tray_icon_url.ends_with(".svg");
-    let dest = if is_svg {
-        icons_base
-            .join("scalable/apps")
-            .join(format!("{}.svg", tray_icon_name))
-    } else {
-        icons_base
-            .join("48x48/apps")
-            .join(format!("{}.png", tray_icon_name))
-    };
-
-    if dest.exists() {
-        tracing::debug!("Tray icon already exists: {}", dest.display());
-        return Ok(());
-    }
-
-    tracing::info!("Fetching tray icon from {}", definition.tray_icon_url);
-    let bytes = download_url(definition.tray_icon_url)?;
-
-    std::fs::create_dir_all(dest.parent().unwrap())?;
-
-    if is_svg {
-        std::fs::write(&dest, &bytes)
-            .with_context(|| format!("Failed to save tray icon to {}", dest.display()))?;
-    } else {
-        let img = image::load_from_memory(&bytes).context("Failed to decode tray icon")?;
-        img.save_with_format(&dest, image::ImageFormat::Png)
-            .with_context(|| format!("Failed to save tray icon to {}", dest.display()))?;
-    }
-
-    tracing::debug!("Installed tray icon to {}", dest.display());
     Ok(())
 }
 
 /// Remove icons from the XDG icon theme directory (both app and tray).
 fn remove_icons_from_theme(definition: &ServiceDefinition) {
-    let icons_base = host_data_dir().join("icons/hicolor");
+    let icons_base = host_data_dir().join("icons/hicolor/scalable/apps");
 
-    // Remove both app icon and tray icon from theme
-    for name in [definition.app_icon_name(), definition.tray_icon_name()] {
-        let svg_path = icons_base
-            .join("scalable/apps")
-            .join(format!("{}.svg", name));
-        let png_path = icons_base
-            .join("48x48/apps")
-            .join(format!("{}.png", name));
+    let app_icon = icons_base.join(format!("{}.svg", definition.app_icon_name()));
+    let tray_icon = icons_base.join(format!("loft-{}-symbolic.svg", definition.name));
 
-        let _ = std::fs::remove_file(&svg_path);
-        let _ = std::fs::remove_file(&png_path);
-    }
+    let _ = std::fs::remove_file(&app_icon);
+    let _ = std::fs::remove_file(&tray_icon);
 }
 
 /// Install the combined Loft icon into the XDG icon theme so the combined
@@ -617,30 +506,6 @@ fn install_action_icon(name: &str, svg_content: &str) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn download_url(url: &str) -> Result<Vec<u8>> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Loft/1.0")
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .context("Failed to build HTTP client")?;
-
-    let mut last_err = None;
-    for attempt in 0..3 {
-        if attempt > 0 {
-            std::thread::sleep(std::time::Duration::from_secs(1 << attempt));
-        }
-        match client.get(url).send().and_then(|r| r.bytes()) {
-            Ok(bytes) => return Ok(bytes.to_vec()),
-            Err(e) => {
-                tracing::debug!("Download attempt {} for {} failed: {}", attempt + 1, url, e);
-                last_err = Some(e);
-            }
-        }
-    }
-
-    Err(last_err.unwrap()).with_context(|| format!("Failed to fetch {} after 3 attempts", url))
 }
 
 // ============================================================

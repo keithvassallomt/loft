@@ -218,9 +218,11 @@ pub fn build_chrome_command(
             ];
 
             if in_flatpak {
-                // Loft is Flatpak → Chrome is Flatpak: spawn on host
+                // Loft is Flatpak → Chrome is Flatpak: spawn on host.
+                // Forward CDP pipe fds (3/4) through both flatpak-spawn and flatpak run.
                 let mut cmd = Command::new("flatpak-spawn");
-                cmd.arg("--host").arg("flatpak");
+                cmd.args(["--host", "--forward-fd=3", "--forward-fd=4"]);
+                cmd.arg("flatpak");
                 cmd.args(flatpak_args);
                 cmd.arg(&chrome.path);
                 cmd.args(args);
@@ -236,9 +238,11 @@ pub fn build_chrome_command(
         }
         _ => {
             if in_flatpak {
-                // Loft is Flatpak → Chrome is native: spawn on host
+                // Loft is Flatpak → Chrome is native: spawn on host.
+                // Forward CDP pipe fds (3/4) so --remote-debugging-pipe works.
                 let mut cmd = Command::new("flatpak-spawn");
-                cmd.arg("--host").arg(&chrome.path);
+                cmd.args(["--host", "--forward-fd=3", "--forward-fd=4"]);
+                cmd.arg(&chrome.path);
                 cmd.args(args);
                 cmd
             } else {

@@ -28,6 +28,9 @@ fn service_icon(definition: &service::ServiceDefinition) -> gtk4::Image {
 }
 
 pub fn build_window(app: &libadwaita::Application) {
+    // Deploy all service icons from embedded assets (instant, no network)
+    desktop::ensure_icons();
+
     let window = libadwaita::ApplicationWindow::builder()
         .application(app)
         .title("Loft")
@@ -39,73 +42,17 @@ pub fn build_window(app: &libadwaita::Application) {
     // Setup window actions (preferences, about)
     setup_actions(&window);
 
-    // Check if icons need downloading
-    let icons_needed = service::ALL_SERVICES.iter().any(|def| {
-        let icon_path = dirs::data_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
-            .join("loft/icons")
-            .join(def.app_icon_filename);
-        !icon_path.exists()
-    });
-
-    if icons_needed {
-        // Show spinner while downloading
-        show_loading(&window);
-        window.present();
-
-        let win = window.clone();
-        let (tx, rx) = std::sync::mpsc::channel::<()>();
-        std::thread::spawn(move || {
-            desktop::ensure_icons();
-            let _ = tx.send(());
-        });
-        glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
-            if rx.try_recv().is_ok() {
-                finish_loading(&win);
-                glib::ControlFlow::Break
-            } else {
-                glib::ControlFlow::Continue
-            }
-        });
-    } else {
-        finish_loading(&window);
-        window.present();
-    }
-}
-
-fn show_loading(window: &libadwaita::ApplicationWindow) {
-    let toolbar_view = libadwaita::ToolbarView::new();
-    let header = libadwaita::HeaderBar::new();
-    header.pack_end(&create_menu_button());
-    toolbar_view.add_top_bar(&header);
-
-    let status = libadwaita::StatusPage::new();
-    status.set_title("Fetching Application Icons");
-    status.set_icon_name(Some("emblem-synchronizing-symbolic"));
-    status.set_vexpand(true);
-
-    let spinner = gtk4::Spinner::new();
-    spinner.set_spinning(true);
-    spinner.set_width_request(32);
-    spinner.set_height_request(32);
-    status.set_child(Some(&spinner));
-
-    toolbar_view.set_content(Some(&status));
-    window.set_content(Some(&toolbar_view));
-}
-
-/// Transition from loading/spinner to the real UI, then check GNOME extension.
-fn finish_loading(window: &libadwaita::ApplicationWindow) {
+    // Check if Chrome is available
     let global_config = GlobalConfig::load().unwrap_or_default();
     if chrome::detect_chrome(&global_config).is_err() {
-        show_chrome_not_found(window);
+        show_chrome_not_found(&window);
     } else {
-        show_main_content(window);
+        show_main_content(&window);
     }
 
     // On GNOME, check if the shell extension is installed
     if !global_config.skip_extension_prompt && is_gnome() {
-        check_gnome_extension(window);
+        check_gnome_extension(&window);
     }
 
     window.present();

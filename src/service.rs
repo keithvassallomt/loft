@@ -5,13 +5,14 @@ pub struct ServiceDefinition {
     pub display_name: &'static str,
     pub url: &'static str,
     pub dbus_name: &'static str,
-    /// URL for the application icon (used in .desktop files, manager GUI, notifications).
-    pub app_icon_url: &'static str,
+    /// App icon SVG, embedded at compile time.
+    pub app_icon_svg: &'static str,
+    /// App icon PNG, embedded at compile time (for SNI tray pixmaps on KDE).
+    pub app_icon_png: &'static [u8],
+    /// Symbolic tray icon SVG, embedded at compile time.
+    pub tray_icon_svg: &'static str,
     /// Local filename for the app icon, stored in `~/.local/share/loft/icons/`.
     pub app_icon_filename: &'static str,
-    /// URL for the system tray icon. Installed into the XDG icon theme so the
-    /// desktop environment renders it natively via the SNI `IconName` property.
-    pub tray_icon_url: &'static str,
     /// Chrome's auto-generated desktop entry ID for --app= mode notifications.
     /// Found by inspecting `dbus-monitor` or notification source names on GNOME.
     pub chrome_desktop_id: &'static str,
@@ -47,9 +48,10 @@ pub const WHATSAPP: ServiceDefinition = ServiceDefinition {
     display_name: "WhatsApp",
     url: "https://web.whatsapp.com/",
     dbus_name: "WhatsApp",
-    app_icon_url: "https://raw.githubusercontent.com/keithvassallomt/loft/main/assets/icons/whatsapp.svg",
+    app_icon_svg: include_str!("../assets/icons/whatsapp.svg"),
+    app_icon_png: include_bytes!("../assets/icons/whatsapp.png"),
+    tray_icon_svg: include_str!("../assets/icons/whatsapp-symbolic.svg"),
     app_icon_filename: "whatsapp.svg",
-    tray_icon_url: "https://raw.githubusercontent.com/keithvassallomt/loft/main/assets/icons/whatsapp-symbolic.svg",
     chrome_desktop_id: "chrome-web.whatsapp.com__-Default",
 };
 
@@ -58,9 +60,10 @@ pub const MESSENGER: ServiceDefinition = ServiceDefinition {
     display_name: "Messenger",
     url: "https://facebook.com/messages/",
     dbus_name: "Messenger",
-    app_icon_url: "https://raw.githubusercontent.com/keithvassallomt/loft/main/assets/icons/messenger.svg",
+    app_icon_svg: include_str!("../assets/icons/messenger.svg"),
+    app_icon_png: include_bytes!("../assets/icons/messenger.png"),
+    tray_icon_svg: include_str!("../assets/icons/messenger-symbolic.svg"),
     app_icon_filename: "messenger.svg",
-    tray_icon_url: "https://raw.githubusercontent.com/keithvassallomt/loft/main/assets/icons/messenger-symbolic.svg",
     chrome_desktop_id: "chrome-facebook.com__messages_-Default",
 };
 
@@ -69,9 +72,10 @@ pub const SLACK: ServiceDefinition = ServiceDefinition {
     display_name: "Slack",
     url: "https://app.slack.com/client/",
     dbus_name: "Slack",
-    app_icon_url: "https://raw.githubusercontent.com/keithvassallomt/loft/main/assets/icons/slack.svg",
+    app_icon_svg: include_str!("../assets/icons/slack.svg"),
+    app_icon_png: include_bytes!("../assets/icons/slack.png"),
+    tray_icon_svg: include_str!("../assets/icons/slack-symbolic.svg"),
     app_icon_filename: "slack.svg",
-    tray_icon_url: "https://raw.githubusercontent.com/keithvassallomt/loft/main/assets/icons/slack-symbolic.svg",
     chrome_desktop_id: "chrome-app.slack.com__client_-Default",
 };
 
@@ -80,9 +84,10 @@ pub const TELEGRAM: ServiceDefinition = ServiceDefinition {
     display_name: "Telegram",
     url: "https://web.telegram.org/a/",
     dbus_name: "Telegram",
-    app_icon_url: "https://raw.githubusercontent.com/keithvassallomt/loft/main/assets/icons/telegram.svg",
+    app_icon_svg: include_str!("../assets/icons/telegram.svg"),
+    app_icon_png: include_bytes!("../assets/icons/telegram.png"),
+    tray_icon_svg: include_str!("../assets/icons/telegram-symbolic.svg"),
     app_icon_filename: "telegram.svg",
-    tray_icon_url: "https://raw.githubusercontent.com/keithvassallomt/loft/main/assets/icons/telegram-symbolic.svg",
     chrome_desktop_id: "chrome-web.telegram.org__a_-Default",
 };
 
@@ -114,8 +119,15 @@ mod tests {
     fn test_all_services_have_valid_urls() {
         for service in ALL_SERVICES {
             assert!(service.url.starts_with("https://"));
-            assert!(service.app_icon_url.starts_with("https://"));
-            assert!(service.tray_icon_url.starts_with("https://"));
+        }
+    }
+
+    #[test]
+    fn test_all_services_have_embedded_icons() {
+        for service in ALL_SERVICES {
+            assert!(!service.app_icon_svg.is_empty());
+            assert!(!service.app_icon_png.is_empty());
+            assert!(!service.tray_icon_svg.is_empty());
         }
     }
 
