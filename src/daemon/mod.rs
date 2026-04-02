@@ -3,6 +3,7 @@ pub mod dbus;
 pub mod gnome_shell;
 pub mod kwin;
 pub mod messaging;
+pub mod notifications;
 pub mod tray;
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -198,9 +199,21 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
     let cmd_tx = state.cmd_tx.clone();
     tokio::spawn(messaging::start_socket_server(
         definition.name.to_string(),
+        definition.display_name.to_string(),
         Arc::clone(&state),
         cmd_tx,
     ));
+
+    // 6a. Listen for notification click actions (ActionInvoked D-Bus signal)
+    {
+        let state = Arc::clone(&state);
+        let cmd_tx = state.cmd_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = notifications::listen_for_actions(state, cmd_tx).await {
+                tracing::warn!("Notification action listener ended: {}", e);
+            }
+        });
+    }
 
     // 6b. Start GNOME Shell extension handler for window focus/hide
     //     (always runs — handles FocusWindow/HideWindow D-Bus calls regardless of tray backend)

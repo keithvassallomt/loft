@@ -24,6 +24,13 @@ pub enum ExtensionMessage {
         body: String,
         icon: Option<String>,
     },
+    /// Messenger DOM-scraped notification with sender, body, avatar, and conversation href.
+    DomNotification {
+        sender: String,
+        body: String,
+        icon: Option<String>,
+        href: Option<String>,
+    },
     /// Extension reports the user closed the window (X button).
     /// Chrome is still alive with a minimized background window.
     WindowHidden,
@@ -43,6 +50,7 @@ pub enum DaemonMessage {
     HideWindow,
     ShowWindow,
     TitlebarConfig { show: bool },
+    NavigateToConversation { url: String },
     Ping,
 }
 
@@ -134,6 +142,7 @@ fn socket_path(service_name: &str) -> PathBuf {
 /// Start the Unix socket server that listens for NM relay connections.
 pub async fn start_socket_server(
     service_name: String,
+    display_name: String,
     state: Arc<DaemonState>,
     cmd_tx: tokio::sync::broadcast::Sender<DaemonMessage>,
 ) -> Result<()> {
@@ -154,9 +163,11 @@ pub async fn start_socket_server(
         let (stream, _) = listener.accept().await?;
         let state = Arc::clone(&state);
         let cmd_rx = cmd_tx.subscribe();
+        let svc_name = service_name.clone();
+        let disp_name = display_name.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = handle_relay_connection(stream, state, cmd_rx).await {
+            if let Err(e) = handle_relay_connection(stream, state, cmd_rx, &svc_name, &disp_name).await {
                 tracing::debug!("Relay connection ended: {}", e);
             }
         });
@@ -168,6 +179,8 @@ async fn handle_relay_connection(
     stream: tokio::net::UnixStream,
     state: Arc<DaemonState>,
     mut cmd_rx: tokio::sync::broadcast::Receiver<DaemonMessage>,
+    service_name: &str,
+    display_name: &str,
 ) -> Result<()> {
     let (mut reader, mut writer) = stream.into_split();
 
@@ -190,10 +203,29 @@ async fn handle_relay_connection(
                         tracing::debug!("Badge update: {}", count);
                         state.badge_count.store(count, Ordering::Relaxed);
                     }
-                    Ok(ExtensionMessage::Notification { title, body, .. }) => {
-                        // Notification metadata from extension — Chrome shows
-                        // the native notification itself, we just log it.
+                    Ok(ExtensionMessage::Notification { title, body, icon }) => {
                         tracing::debug!("Notification: {} - {}", title, body);
+                        let svc = service_name.to_string();
+                        let disp = display_name.to_string();
+                        tokio::spawn(async move {
+                            if let Err(e) = super::notifications::send(
+                                &svc, &disp, &title, &body, icon.as_deref(), None,
+                            ).await {
+                                tracing::warn!("Failed to send D-Bus notification: {}", e);
+                            }
+                        });
+                    }
+                    Ok(ExtensionMessage::DomNotification { sender, body, icon, href }) => {
+                        tracing::debug!("DOM notification: {} - {}", sender, body);
+                        let svc = service_name.to_string();
+                        let disp = display_name.to_string();
+                        tokio::spawn(async move {
+                            if let Err(e) = super::notifications::send(
+                                &svc, &disp, &sender, &body, icon.as_deref(), href.as_deref(),
+                            ).await {
+                                tracing::warn!("Failed to send D-Bus notification: {}", e);
+                            }
+                        });
                     }
                     Ok(ExtensionMessage::HideRequest) => {
                         tracing::info!("Extension titlebar hide request");

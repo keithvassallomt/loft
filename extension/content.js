@@ -417,24 +417,205 @@
 
   // Telegram: count sidebar badges (unread conversation indicators)
   if (service === "telegram") {
+    const tgLoadTime = Date.now();
+    const TG_STARTUP_GRACE_MS = 15000;
+    // href-or-data-key → fingerprint of latest message preview
+    const tgNotifiedConversations = new Map();
+    let telegramDnd = false;
+
+    /**
+     * Find the chat list item (row) that contains a given badge element.
+     * Telegram Web A uses <a> with class "ListItem", Web K uses
+     * <a> or <div> with class containing "chatlist-chat".
+     */
+    function findTelegramChatRow(badgeEl) {
+      let el = badgeEl;
+      while (el && el !== document.body) {
+        if (el.tagName === "A" && el.getAttribute("href")) return el;
+        // Web K: chatlist rows are <a> inside .chatlist-chat
+        if (el.classList && (el.classList.contains("chatlist-chat") ||
+            el.classList.contains("ListItem"))) {
+          return el.querySelector("a[href]") || el;
+        }
+        el = el.parentElement;
+      }
+      return null;
+    }
+
+    /**
+     * Extract a unique key for a Telegram chat row.
+     */
+    function getTelegramChatKey(row) {
+      if (row.tagName === "A" && row.getAttribute("href")) {
+        return row.getAttribute("href");
+      }
+      // Fallback: use data-peer-id or similar attribute
+      const link = row.querySelector("a[href]");
+      if (link) return link.getAttribute("href");
+      return row.dataset.peerId || row.textContent.substring(0, 50);
+    }
+
+    /**
+     * Extract sender name, message preview, and avatar from a Telegram
+     * chat list row.
+     */
+    function extractTelegramData(row) {
+      // Chat name: h3.fullName inside .title
+      let senderName = "";
+      const fullName = row.querySelector("h3.fullName");
+      if (fullName) {
+        senderName = fullName.textContent.trim();
+      }
+
+      // Message preview: .last-message-summary span
+      let messagePreview = "";
+      const summary = row.querySelector(".last-message-summary");
+      if (summary) {
+        messagePreview = summary.textContent.trim();
+      }
+      // Strip "Draft: " prefix if present
+      messagePreview = messagePreview.replace(/^Draft:\s*/, "");
+      // Truncate long previews
+      if (messagePreview.length > 200) {
+        messagePreview = messagePreview.substring(0, 200) + "…";
+      }
+
+      // Avatar: Telegram uses blob: URLs — we fetch and convert to data URI
+      // in fetchTelegramAvatar(), so just return the blob URL here.
+      let avatarUrl = "";
+      const avatarImg = row.querySelector(".Avatar img");
+      if (avatarImg && avatarImg.src) {
+        avatarUrl = avatarImg.src;
+      }
+
+      return { senderName, messagePreview, avatarUrl };
+    }
+
+    /**
+     * Build a fingerprint from the message preview to detect changes.
+     */
+    function getTelegramFingerprint(row) {
+      const { senderName, messagePreview } = extractTelegramData(row);
+      return senderName + "|" + messagePreview;
+    }
+
+    // Cache blob: URL → data URI conversions so we only fetch once per avatar
+    const tgAvatarCache = new Map();
+
+    async function blobToDataUri(blobUrl) {
+      if (tgAvatarCache.has(blobUrl)) return tgAvatarCache.get(blobUrl);
+      try {
+        const resp = await fetch(blobUrl);
+        const blob = await resp.blob();
+        const dataUri = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        tgAvatarCache.set(blobUrl, dataUri);
+        return dataUri;
+      } catch {
+        return "";
+      }
+    }
+
+    async function sendTelegramNotification(sender, body, avatarUrl, href) {
+      let icon = "";
+      if (avatarUrl) {
+        icon = await blobToDataUri(avatarUrl);
+      }
+      safeSendMessage({
+        type: "dom_notification",
+        sender: sender,
+        body: body,
+        icon: icon,
+        href: href,
+      });
+    }
+
     function scanTelegramUnreads() {
       let count = 0;
-      for (const el of document.querySelectorAll('.chat-badge-transition')) {
+      const currentlyUnread = new Set();
+
+      for (const badge of document.querySelectorAll('.chat-badge-transition')) {
         // Skip action buttons (e.g. "Open" for bots) — only count numeric badges
-        if (/^\d+$/.test(el.textContent.trim())) count++;
+        if (!/^\d+$/.test(badge.textContent.trim())) continue;
+        count++;
+
+        const row = findTelegramChatRow(badge);
+        if (!row) continue;
+
+        // Skip muted chats — Telegram marks them with a muted icon
+        if (row.querySelector('.chat-muted-icon, .muted-icon, .icon-muted')) continue;
+
+        const key = getTelegramChatKey(row);
+        currentlyUnread.add(key);
+
+        const fingerprint = getTelegramFingerprint(row);
+        if (tgNotifiedConversations.get(key) === fingerprint) continue;
+
+        // Suppress during startup grace period
+        if (Date.now() - tgLoadTime < TG_STARTUP_GRACE_MS) {
+          tgNotifiedConversations.set(key, fingerprint);
+          continue;
+        }
+
+        if (telegramDnd) {
+          tgNotifiedConversations.set(key, fingerprint);
+          continue;
+        }
+
+        tgNotifiedConversations.set(key, fingerprint);
+
+        const { senderName, messagePreview, avatarUrl } = extractTelegramData(row);
+        if (!senderName && !messagePreview) continue;
+
+        // Convert blob: avatar to data URI before sending
+        sendTelegramNotification(senderName, messagePreview, avatarUrl, key);
       }
+
+      // Remove conversations that are no longer unread
+      for (const [key] of tgNotifiedConversations) {
+        if (!currentlyUnread.has(key)) {
+          tgNotifiedConversations.delete(key);
+        }
+      }
+
       if (count !== lastBadgeCount) {
         lastBadgeCount = count;
         safeSendMessage({ type: "badge_update", count });
       }
     }
 
-    const tgObserver = new MutationObserver(scanTelegramUnreads);
-    tgObserver.observe(document.body, {
-      childList: true, subtree: true, attributes: true, attributeFilter: ['class'],
+    // Observe DOM changes with debounce
+    let tgScanTimeout = null;
+    const tgDomObserver = new MutationObserver(() => {
+      if (tgScanTimeout) clearTimeout(tgScanTimeout);
+      tgScanTimeout = setTimeout(scanTelegramUnreads, 500);
     });
-    setInterval(scanTelegramUnreads, 2000);
-    setTimeout(scanTelegramUnreads, 3000);
+
+    function startTelegramObserver() {
+      if (document.body) {
+        tgDomObserver.observe(document.body, {
+          childList: true, subtree: true, attributes: true, attributeFilter: ['class'],
+        });
+        setTimeout(scanTelegramUnreads, 3000);
+        setTimeout(scanTelegramUnreads, 8000);
+        setTimeout(scanTelegramUnreads, 15000);
+        setInterval(scanTelegramUnreads, 10000);
+      } else {
+        setTimeout(startTelegramObserver, 500);
+      }
+    }
+    startTelegramObserver();
+
+    // Listen for DND changes
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg.type === "dnd_changed") {
+        telegramDnd = !!msg.enabled;
+      }
+    });
   }
 
   // Messenger: badge count is handled by scanForUnreadMessages() below.

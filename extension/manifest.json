@@ -10,7 +10,8 @@
     "offscreen",
     "scripting",
     "tabs",
-    "storage"
+    "storage",
+    "contentSettings"
   ],
   "host_permissions": [
     "https://web.whatsapp.com/*",

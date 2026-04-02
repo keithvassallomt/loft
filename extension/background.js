@@ -329,66 +329,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
-  // Handle Messenger DOM notifications locally (don't forward to daemon)
+  // Forward DOM-scraped notifications to daemon for D-Bus display
   if (msg.type === "dom_notification") {
-    if (!dndEnabled) {
-      const notifId = msg.href || ("msg-" + Date.now());
-      notificationHrefs.set(notifId, msg.href);
-      (async () => {
-        let iconUrl = (msg.icon && msg.icon.startsWith("http")) ? msg.icon : "";
-        if (!iconUrl) iconUrl = await getFallbackIcon();
-        chrome.notifications.create(notifId, {
-          type: "basic",
-          title: msg.sender || "Messenger",
-          message: msg.body || "",
-          iconUrl: iconUrl,
-        }, () => {
-          if (chrome.runtime.lastError) {
-            console.warn("Loft: Failed to create notification:", chrome.runtime.lastError.message);
-          }
-        });
-      })();
-    }
-    return false;
-  }
-
-  // Handle Slack notifications via chrome.notifications (native Notification
-  // API on Linux drops icon URLs, so we suppress and re-create here).
-  // chrome.notifications can't fetch Slack CDN images directly, so we
-  // download the avatar first and convert to a data URI.
-  if (msg.type === "notification" && sender.tab && sender.tab.url &&
-      sender.tab.url.startsWith("https://app.slack.com")) {
-    if (!dndEnabled) {
-      const notifId = "slack-" + Date.now();
-      const iconSrc = (msg.icon && msg.icon.startsWith("http")) ? msg.icon : "";
-
-      (async () => {
-        let iconUrl = "";
-        if (iconSrc) {
-          try {
-            const resp = await fetch(iconSrc);
-            const blob = await resp.blob();
-            const reader = new FileReader();
-            iconUrl = await new Promise((resolve) => {
-              reader.onloadend = () => resolve(reader.result);
-              reader.readAsDataURL(blob);
-            });
-          } catch (e) {
-            console.warn("Loft: Slack icon fetch failed:", e);
-          }
-        }
-        if (!iconUrl) iconUrl = await getFallbackIcon();
-        chrome.notifications.create(notifId, {
-          type: "basic",
-          title: msg.title || "Slack",
-          message: msg.body || "",
-          iconUrl: iconUrl,
-        }, () => {
-          if (chrome.runtime.lastError) {
-            console.warn("Loft: Failed to create Slack notification:", chrome.runtime.lastError.message);
-          }
-        });
-      })();
+    if (!dndEnabled && port) {
+      port.postMessage({
+        type: "dom_notification",
+        sender: msg.sender || "",
+        body: msg.body || "",
+        icon: (msg.icon && (msg.icon.startsWith("http") || msg.icon.startsWith("data:"))) ? msg.icon : "",
+        href: msg.href || "",
+      });
     }
     return false;
   }
@@ -491,9 +441,29 @@ async function injectContentScripts() {
 }
 
 
+// Block native notifications for services where the daemon handles them
+// via D-Bus.  Telegram and WhatsApp use service-worker push notifications
+// that our MAIN-world override cannot intercept, so we suppress them at
+// the Chrome content-settings level.
+function blockServiceWorkerNotifications() {
+  if (!chrome.contentSettings || !chrome.contentSettings.notifications) return;
+  // Block: services that use service-worker push (can't intercept in MAIN world)
+  chrome.contentSettings.notifications.set({
+    primaryPattern: "https://web.telegram.org/*",
+    setting: "block",
+  });
+  // Ensure WhatsApp is allowed — it uses page-level Notification() which
+  // our MAIN world override intercepts.  Clear any previous "block" setting.
+  chrome.contentSettings.notifications.set({
+    primaryPattern: "https://web.whatsapp.com/*",
+    setting: "allow",
+  });
+}
+
 // Connect on startup — detect the app window first so appUrl is set
 // before the NM host connection sends the ready message.
 detectAppWindow().then(() => {
+  blockServiceWorkerNotifications();
   connectNativeHost();
   ensureOffscreen();
   injectContentScripts();

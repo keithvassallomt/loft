@@ -65,34 +65,11 @@
   SilentNotification.requestPermission = OrigNotification.requestPermission.bind(OrigNotification);
   SilentNotification.prototype = OrigNotification.prototype;
 
-  const isSlackNotif = window.location.href.startsWith("https://app.slack.com");
-  const isTelegram = window.location.href.startsWith("https://web.telegram.org");
-
-  if (isMessenger || isSlackNotif) {
-    // Messenger: DOM scraping handles notifications in content.js.
-    // Slack: suppress native notifications so background.js can re-create them
-    // via chrome.notifications (which renders icon URLs correctly on Linux).
-    window.Notification = SilentNotification;
-  } else {
-    // WhatsApp: show native notifications unless per-service DND is on.
-    // Uses a function wrapper (not class extends) so we can conditionally
-    // skip the native notification when DND is active.
-    function LoftNotification(title, options = {}) {
-      relayMetadata(title, options);
-      if (loftDnd) return;
-      return new OrigNotification(title, options);
-    }
-    Object.defineProperty(LoftNotification, 'name', { value: 'Notification', configurable: true });
-    LoftNotification.toString = () => 'function Notification() { [native code] }';
-    Object.defineProperty(LoftNotification, 'permission', {
-      get() { return OrigNotification.permission; },
-      enumerable: true,
-      configurable: true,
-    });
-    LoftNotification.requestPermission = OrigNotification.requestPermission.bind(OrigNotification);
-    LoftNotification.prototype = OrigNotification.prototype;
-    window.Notification = LoftNotification;
-  }
+  // Suppress native notifications for all services — the daemon handles
+  // desktop notifications via D-Bus for full control over app name, icon,
+  // and avatar display.  Metadata is relayed via SilentNotification so the
+  // daemon can recreate them as rich D-Bus notifications.
+  window.Notification = SilentNotification;
 
   // Also wrap ServiceWorkerRegistration.prototype.showNotification, which
   // some services use instead of `new Notification()`.  Relay metadata to the
@@ -102,10 +79,7 @@
 
   ServiceWorkerRegistration.prototype.showNotification = function (title, options = {}) {
     relayMetadata(title, options);
-    // Only show the native notification when not Messenger/Slack and not DND
-    if (!isMessenger && !isSlackNotif && !loftDnd) {
-      return origShowNotification.call(this, title, options);
-    }
+    // All notifications are handled by the daemon via D-Bus — don't show native ones.
   };
 
   // Intercept window.open() to route external URLs to the default browser
@@ -113,6 +87,7 @@
   const origWindowOpen = window.open;
   const isWhatsApp = window.location.href.startsWith("https://web.whatsapp.com");
   const isSlack = window.location.href.startsWith("https://app.slack.com");
+  const isTelegram = window.location.href.startsWith("https://web.telegram.org");
 
   const internalDomains = isMessenger
     ? ["facebook.com", "www.facebook.com"]
