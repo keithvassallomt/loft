@@ -12,7 +12,7 @@ pub fn is_flatpak() -> bool {
 }
 
 /// Run a command on the host when inside Flatpak, or directly otherwise.
-fn host_command(program: &str) -> Command {
+pub fn host_command(program: &str) -> Command {
     if is_flatpak() {
         let mut cmd = Command::new("flatpak-spawn");
         cmd.arg("--host").arg(program);

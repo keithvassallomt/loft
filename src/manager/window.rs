@@ -122,17 +122,17 @@ fn is_gnome() -> bool {
 /// Check whether the Loft Shell Helper GNOME extension is installed.
 /// If not, show a dialog offering to install it from EGO.
 fn check_gnome_extension(window: &libadwaita::ApplicationWindow) {
-    // Check if extension directory exists
-    let ext_dir = dirs::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
-        .join("gnome-shell/extensions/loft-shell-helper@loft.chat");
+    // Check the host filesystem (bypasses Flatpak path remapping)
+    let ext_dir = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("~"))
+        .join(".local/share/gnome-shell/extensions/loft-shell-helper@loft.chat");
 
     if ext_dir.exists() {
         return;
     }
 
-    // Also check via gnome-extensions CLI (covers system-wide installs)
-    if let Ok(output) = std::process::Command::new("gnome-extensions")
+    // Also check via gnome-extensions CLI on the host
+    if let Ok(output) = chrome::host_command("gnome-extensions")
         .args(["info", "loft-shell-helper@loft.chat"])
         .output()
     {
