@@ -54,6 +54,9 @@ pub struct GlobalConfig {
     /// Combine all service tray icons into a single Loft icon
     #[serde(default)]
     pub combine_tray_icons: bool,
+    /// Don't prompt to install the GNOME Shell extension
+    #[serde(default)]
+    pub skip_extension_prompt: bool,
 }
 
 /// Per-service config at ~/.config/loft/services/<name>.toml
@@ -151,6 +154,7 @@ mod tests {
             chrome_path: Some("/usr/bin/google-chrome".to_string()),
             tray_backend: TrayBackend::GnomePanel,
             combine_tray_icons: true,
+            skip_extension_prompt: false,
         };
 
         let content = toml::to_string_pretty(&config).unwrap();
@@ -166,6 +170,7 @@ mod tests {
         assert_eq!(config.chrome_path, None);
         assert_eq!(config.tray_backend, TrayBackend::Auto);
         assert!(!config.combine_tray_icons);
+        assert!(!config.skip_extension_prompt);
     }
 
     #[test]
@@ -174,6 +179,7 @@ mod tests {
         let config: GlobalConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.tray_backend, TrayBackend::Auto);
         assert!(!config.combine_tray_icons);
+        assert!(!config.skip_extension_prompt);
     }
 
     #[test]

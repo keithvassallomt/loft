@@ -135,10 +135,7 @@ fn desktop_exec() -> Result<String> {
 
 fn create_desktop_entry(definition: &ServiceDefinition) -> Result<()> {
     let exec = desktop_exec()?;
-
-    // Use the icon theme name (installed by install_app_icon_to_theme)
-    // so the .desktop file works regardless of sandbox path remapping.
-    let icon = definition.app_icon_name();
+    let icon_path = data_dir().join("icons").join(definition.app_icon_filename);
 
     let content = format!(
         "[Desktop Entry]\n\
@@ -153,7 +150,7 @@ fn create_desktop_entry(definition: &ServiceDefinition) -> Result<()> {
         name = definition.display_name,
         exec = exec,
         service = definition.name,
-        icon = icon,
+        icon = icon_path.display(),
     );
 
     let path = desktop_entry_path(definition);
@@ -238,7 +235,7 @@ fn chrome_notification_desktop_path(definition: &ServiceDefinition) -> PathBuf {
 /// overwrites it on launch), see `daemon::mod.rs::fix_chrome_desktop_file`.
 pub fn create_chrome_desktop_file(definition: &ServiceDefinition) -> Result<()> {
     let exec = desktop_exec()?;
-    let icon = definition.app_icon_name();
+    let icon_path = data_dir().join("icons").join(definition.app_icon_filename);
 
     let content = format!(
         "[Desktop Entry]\n\
@@ -250,7 +247,7 @@ pub fn create_chrome_desktop_file(definition: &ServiceDefinition) -> Result<()> 
         name = definition.display_name,
         exec = exec,
         service = definition.name,
-        icon = icon,
+        icon = icon_path.display(),
     );
 
     let path = chrome_notification_desktop_path(definition);
