@@ -66,6 +66,34 @@ pub fn is_service_installed(definition: &ServiceDefinition) -> bool {
 // Paths
 // ============================================================
 
+/// Return the host XDG data directory, bypassing Flatpak's remapping.
+/// Inside a Flatpak, `dirs::data_dir()` returns `~/.var/app/<id>/data/`,
+/// but .desktop files, icons, and GNOME Shell extensions must go to
+/// `~/.local/share/` for the host desktop to find them.
+fn host_data_dir() -> PathBuf {
+    if crate::chrome::is_flatpak() {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("~"))
+            .join(".local/share")
+    } else {
+        dirs::data_dir().unwrap_or_else(|| PathBuf::from("~/.local/share"))
+    }
+}
+
+/// Return the host XDG config directory, bypassing Flatpak's remapping.
+fn host_config_dir() -> PathBuf {
+    if crate::chrome::is_flatpak() {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("~"))
+            .join(".config")
+    } else {
+        dirs::config_dir().unwrap_or_else(|| PathBuf::from("~/.config"))
+    }
+}
+
+/// Loft's own data directory (icons, extension, profiles, logs).
+/// This can stay in the sandbox — only Loft and Chrome (via explicit
+/// filesystem access) need it.
 fn data_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("~/.local/share"))
@@ -79,15 +107,13 @@ fn config_dir() -> PathBuf {
 }
 
 fn desktop_entry_path(definition: &ServiceDefinition) -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+    host_data_dir()
         .join("applications")
         .join(format!("loft-{}.desktop", definition.name))
 }
 
 fn nm_host_manifest_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
+    host_config_dir()
         .join("google-chrome/NativeMessagingHosts/chat.loft.host.json")
 }
 
@@ -95,9 +121,24 @@ fn nm_host_manifest_path() -> PathBuf {
 // .desktop file management
 // ============================================================
 
+/// Return the Exec= prefix for .desktop files.
+/// Inside Flatpak: `flatpak run chat.loft.Loft`
+/// Native: the path to the current binary.
+fn desktop_exec() -> Result<String> {
+    if crate::chrome::is_flatpak() {
+        Ok("flatpak run chat.loft.Loft".to_string())
+    } else {
+        let binary = std::env::current_exe().context("Could not determine loft binary path")?;
+        Ok(binary.display().to_string())
+    }
+}
+
 fn create_desktop_entry(definition: &ServiceDefinition) -> Result<()> {
-    let loft_binary = std::env::current_exe().context("Could not determine loft binary path")?;
-    let icon_path = data_dir().join("icons").join(definition.app_icon_filename);
+    let exec = desktop_exec()?;
+
+    // Use the icon theme name (installed by install_app_icon_to_theme)
+    // so the .desktop file works regardless of sandbox path remapping.
+    let icon = definition.app_icon_name();
 
     let content = format!(
         "[Desktop Entry]\n\
@@ -110,9 +151,9 @@ fn create_desktop_entry(definition: &ServiceDefinition) -> Result<()> {
          Categories=Network;InstantMessaging;\n\
          StartupWMClass=loft-{service}\n",
         name = definition.display_name,
-        exec = loft_binary.display(),
+        exec = exec,
         service = definition.name,
-        icon = icon_path.display(),
+        icon = icon,
     );
 
     let path = desktop_entry_path(definition);
@@ -128,9 +169,7 @@ fn create_desktop_entry(definition: &ServiceDefinition) -> Result<()> {
 /// running app window with an icon in the dock/overview.
 /// The file is named after the GTK application ID (`chat.loft.Manager.desktop`).
 pub fn ensure_manager_desktop_entry() -> Result<()> {
-    let apps_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-        .join("applications");
+    let apps_dir = host_data_dir().join("applications");
     let path = apps_dir.join("chat.loft.Manager.desktop");
 
     if path.exists() {
@@ -138,7 +177,7 @@ pub fn ensure_manager_desktop_entry() -> Result<()> {
     }
 
     std::fs::create_dir_all(&apps_dir)?;
-    let loft_binary = std::env::current_exe().context("Could not determine loft binary path")?;
+    let exec = desktop_exec()?;
 
     let content = format!(
         "[Desktop Entry]\n\
@@ -150,7 +189,7 @@ pub fn ensure_manager_desktop_entry() -> Result<()> {
          Terminal=false\n\
          Categories=Network;InstantMessaging;\n\
          StartupWMClass=loft\n",
-        exec = loft_binary.display(),
+        exec = exec,
     );
 
     std::fs::write(&path, &content)
@@ -175,8 +214,7 @@ fn remove_desktop_entry(definition: &ServiceDefinition) -> Result<()> {
 }
 
 fn chrome_notification_desktop_path(definition: &ServiceDefinition) -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+    host_data_dir()
         .join("applications")
         .join(format!("{}.desktop", definition.chrome_desktop_id))
 }
@@ -199,8 +237,8 @@ fn chrome_notification_desktop_path(definition: &ServiceDefinition) -> PathBuf {
 /// The daemon also rewrites this file after Chrome spawns (since Chrome
 /// overwrites it on launch), see `daemon::mod.rs::fix_chrome_desktop_file`.
 pub fn create_chrome_desktop_file(definition: &ServiceDefinition) -> Result<()> {
-    let loft_binary = std::env::current_exe().context("Could not determine loft binary path")?;
-    let icon_path = data_dir().join("icons").join(definition.app_icon_filename);
+    let exec = desktop_exec()?;
+    let icon = definition.app_icon_name();
 
     let content = format!(
         "[Desktop Entry]\n\
@@ -210,9 +248,9 @@ pub fn create_chrome_desktop_file(definition: &ServiceDefinition) -> Result<()> 
          Icon={icon}\n\
          NoDisplay=true\n",
         name = definition.display_name,
-        exec = loft_binary.display(),
+        exec = exec,
         service = definition.name,
-        icon = icon_path.display(),
+        icon = icon,
     );
 
     let path = chrome_notification_desktop_path(definition);
@@ -254,8 +292,7 @@ fn deploy_extension() -> Result<()> {
 
 /// Deploy the GNOME Shell extension to ~/.local/share/gnome-shell/extensions/loft-shell-helper@loft.chat/.
 fn deploy_gnome_shell_extension() -> Result<()> {
-    let ext_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+    let ext_dir = host_data_dir()
         .join("gnome-shell/extensions/loft-shell-helper@loft.chat");
     std::fs::create_dir_all(&ext_dir)
         .with_context(|| format!("Failed to create GNOME Shell extension dir {}", ext_dir.display()))?;
@@ -329,12 +366,32 @@ pub fn ensure_icons() {
 }
 
 /// Download app icon and tray icon for a single service (skips if already present).
+/// Continues past individual failures so a transient network error doesn't
+/// prevent other icon types from being fetched.
 fn ensure_icons_for(definition: &ServiceDefinition) -> Result<()> {
-    fetch_app_icon(definition)?;
-    fetch_app_icon_png(definition)?;
-    install_app_icon_to_theme(definition)?;
-    fetch_tray_icon(definition)?;
-    Ok(())
+    let mut last_err: Option<anyhow::Error> = None;
+
+    if let Err(e) = fetch_app_icon(definition) {
+        tracing::warn!("Failed to fetch app icon for {}: {}", definition.display_name, e);
+        last_err = Some(e);
+    }
+    if let Err(e) = fetch_app_icon_png(definition) {
+        tracing::warn!("Failed to fetch PNG icon for {}: {}", definition.display_name, e);
+        last_err = Some(e);
+    }
+    if let Err(e) = install_app_icon_to_theme(definition) {
+        tracing::warn!("Failed to install icon to theme for {}: {}", definition.display_name, e);
+        last_err = Some(e);
+    }
+    if let Err(e) = fetch_tray_icon(definition) {
+        tracing::warn!("Failed to fetch tray icon for {}: {}", definition.display_name, e);
+        last_err = Some(e);
+    }
+
+    match last_err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 /// Download the application icon (for .desktop files, notifications, manager GUI).
@@ -397,9 +454,7 @@ fn fetch_app_icon_png(definition: &ServiceDefinition) -> Result<()> {
 /// `~/.local/share/icons/hicolor/scalable/apps/loft-<name>.svg` (or 48x48 PNG).
 fn install_app_icon_to_theme(definition: &ServiceDefinition) -> Result<()> {
     let icon_name = definition.app_icon_name();
-    let icons_base = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-        .join("icons/hicolor");
+    let icons_base = host_data_dir().join("icons/hicolor");
 
     let is_svg = definition.app_icon_filename.ends_with(".svg");
     let dest = if is_svg {
@@ -436,9 +491,7 @@ fn install_app_icon_to_theme(definition: &ServiceDefinition) -> Result<()> {
 /// Non-SVG icons are decoded and saved as PNG to `~/.local/share/icons/hicolor/48x48/apps/`.
 fn fetch_tray_icon(definition: &ServiceDefinition) -> Result<()> {
     let tray_icon_name = definition.tray_icon_name();
-    let icons_base = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-        .join("icons/hicolor");
+    let icons_base = host_data_dir().join("icons/hicolor");
 
     let is_svg = definition.tray_icon_url.ends_with(".svg");
     let dest = if is_svg {
@@ -476,9 +529,7 @@ fn fetch_tray_icon(definition: &ServiceDefinition) -> Result<()> {
 
 /// Remove icons from the XDG icon theme directory (both app and tray).
 fn remove_icons_from_theme(definition: &ServiceDefinition) {
-    let icons_base = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-        .join("icons/hicolor");
+    let icons_base = host_data_dir().join("icons/hicolor");
 
     // Remove both app icon and tray icon from theme
     for name in [definition.app_icon_name(), definition.tray_icon_name()] {
@@ -500,9 +551,7 @@ fn remove_icons_from_theme(definition: &ServiceDefinition) {
 /// Embeds `loft-symbolic.svg` and `loft.svg` from `assets/icons/` at compile time
 /// and writes them to `~/.local/share/icons/hicolor/scalable/apps/`.
 pub fn ensure_combined_icon() -> Result<()> {
-    let icons_base = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-        .join("icons/hicolor/scalable/apps");
+    let icons_base = host_data_dir().join("icons/hicolor/scalable/apps");
     std::fs::create_dir_all(&icons_base)?;
 
     let symbolic_dest = icons_base.join("loft-symbolic.svg");
@@ -544,9 +593,7 @@ pub fn ensure_combined_icon() -> Result<()> {
 /// so KDE's KIconLoader applies color scheme recoloring.
 fn install_action_icon(name: &str, svg_content: &str) -> Result<()> {
     let system_themes = PathBuf::from("/usr/share/icons");
-    let user_themes = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-        .join("icons");
+    let user_themes = host_data_dir().join("icons");
 
     // Install into user's local icon directories for each theme that exists
     for theme in &["breeze", "breeze-dark", "hicolor"] {
@@ -578,16 +625,25 @@ fn install_action_icon(name: &str, svg_content: &str) -> Result<()> {
 fn download_url(url: &str) -> Result<Vec<u8>> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("Loft/1.0")
+        .timeout(std::time::Duration::from_secs(15))
         .build()
         .context("Failed to build HTTP client")?;
-    let response = client
-        .get(url)
-        .send()
-        .with_context(|| format!("Failed to fetch {}", url))?;
-    let bytes = response
-        .bytes()
-        .with_context(|| format!("Failed to read response body from {}", url))?;
-    Ok(bytes.to_vec())
+
+    let mut last_err = None;
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_secs(1 << attempt));
+        }
+        match client.get(url).send().and_then(|r| r.bytes()) {
+            Ok(bytes) => return Ok(bytes.to_vec()),
+            Err(e) => {
+                tracing::debug!("Download attempt {} for {} failed: {}", attempt + 1, url, e);
+                last_err = Some(e);
+            }
+        }
+    }
+
+    Err(last_err.unwrap()).with_context(|| format!("Failed to fetch {} after 3 attempts", url))
 }
 
 // ============================================================
@@ -595,20 +651,24 @@ fn download_url(url: &str) -> Result<Vec<u8>> {
 // ============================================================
 
 fn setup_nm_host() -> Result<()> {
-    let loft_binary = std::env::current_exe().context("Could not determine loft binary path")?;
     let origin = format!("chrome-extension://{}/", EXTENSION_ID);
 
     // Chrome launches the NM host binary directly without arguments, so we need
     // a wrapper script that passes --native-messaging to the loft binary.
     let wrapper_path = data_dir().join("nm-host.sh");
     std::fs::create_dir_all(wrapper_path.parent().unwrap())?;
-    // If running inside a Flatpak sandbox, use flatpak-spawn to call the
-    // host loft binary; otherwise exec it directly.
-    let wrapper_content = format!(
-        "#!/bin/sh\nif [ -f /.flatpak-info ]; then\n  exec flatpak-spawn --host \"{}\" --native-messaging \"$@\"\nelse\n  exec \"{}\" --native-messaging \"$@\"\nfi\n",
-        loft_binary.display(),
-        loft_binary.display()
-    );
+
+    // The wrapper runs on the HOST (Chrome launches it). When Loft is a Flatpak,
+    // use `flatpak run` to enter the sandbox; otherwise exec the binary directly.
+    let wrapper_content = if crate::chrome::is_flatpak() {
+        "#!/bin/sh\nexec flatpak run chat.loft.Loft --native-messaging \"$@\"\n".to_string()
+    } else {
+        let loft_binary = std::env::current_exe().context("Could not determine loft binary path")?;
+        format!(
+            "#!/bin/sh\nexec \"{}\" --native-messaging \"$@\"\n",
+            loft_binary.display()
+        )
+    };
     std::fs::write(&wrapper_path, &wrapper_content)
         .with_context(|| format!("Failed to write NM wrapper {}", wrapper_path.display()))?;
 
@@ -676,15 +736,12 @@ fn any_service_installed() -> bool {
 // ============================================================
 
 pub fn set_autostart(definition: &ServiceDefinition, enabled: bool, start_hidden: bool) -> Result<()> {
-    let autostart_dir = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
-        .join("autostart");
+    let autostart_dir = host_config_dir().join("autostart");
     let path = autostart_dir.join(format!("loft-{}.desktop", definition.name));
 
     if enabled {
         std::fs::create_dir_all(&autostart_dir)?;
-        let loft_binary =
-            std::env::current_exe().context("Could not determine loft binary path")?;
+        let exec = desktop_exec()?;
         let minimized_flag = if start_hidden { " --minimized" } else { "" };
         let content = format!(
             "[Desktop Entry]\n\
@@ -696,7 +753,7 @@ pub fn set_autostart(definition: &ServiceDefinition, enabled: bool, start_hidden
              Terminal=false\n\
              X-GNOME-Autostart-enabled=true\n",
             name = definition.display_name,
-            exec = loft_binary.display(),
+            exec = exec,
             service = definition.name,
             minimized = minimized_flag,
             icon = definition.app_icon_name(),

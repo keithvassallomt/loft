@@ -6,6 +6,22 @@ use std::process::Command;
 use crate::config::GlobalConfig;
 use crate::service::ServiceDefinition;
 
+/// Returns true if the current process is running inside a Flatpak sandbox.
+pub fn is_flatpak() -> bool {
+    Path::new("/.flatpak-info").exists()
+}
+
+/// Run a command on the host when inside Flatpak, or directly otherwise.
+fn host_command(program: &str) -> Command {
+    if is_flatpak() {
+        let mut cmd = Command::new("flatpak-spawn");
+        cmd.arg("--host").arg(program);
+        cmd
+    } else {
+        Command::new(program)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ChromeInfo {
     pub path: String,
@@ -30,7 +46,7 @@ pub fn detect_chrome(config: &GlobalConfig) -> Result<ChromeInfo> {
         if (path.starts_with("com.") || path.starts_with("org."))
             && !path.contains('/')
         {
-            if let Ok(output) = Command::new("flatpak").args(["info", path]).output() {
+            if let Ok(output) = host_command("flatpak").args(["info", path]).output() {
                 if output.status.success() {
                     return Ok(ChromeInfo {
                         path: path.clone(),
@@ -40,7 +56,7 @@ pub fn detect_chrome(config: &GlobalConfig) -> Result<ChromeInfo> {
                 }
             }
             tracing::warn!("Configured Flatpak app {} not installed", path);
-        } else if is_executable(Path::new(path)) {
+        } else if is_host_executable(path) {
             return Ok(ChromeInfo {
                 path: path.clone(),
                 display_name: "Custom".to_string(),
@@ -76,7 +92,7 @@ pub fn detect_all_chrome() -> Vec<ChromeInfo> {
 
     // 1. Search PATH for google-chrome / google-chrome-stable
     for name in &["google-chrome-stable", "google-chrome"] {
-        if let Ok(output) = Command::new("which").arg(name).output() {
+        if let Ok(output) = host_command("which").arg(name).output() {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if !path.is_empty() {
@@ -96,7 +112,7 @@ pub fn detect_all_chrome() -> Vec<ChromeInfo> {
         "/usr/bin/google-chrome",
         "/opt/google/chrome/google-chrome",
     ] {
-        if is_executable(Path::new(path)) {
+        if is_host_executable(path) {
             let basename = Path::new(path)
                 .file_name()
                 .unwrap_or_default()
@@ -134,7 +150,7 @@ pub fn detect_all_chrome() -> Vec<ChromeInfo> {
     }
 
     // 4. Flatpak
-    if let Ok(output) = Command::new("flatpak").args(["info", "com.google.Chrome"]).output() {
+    if let Ok(output) = host_command("flatpak").args(["info", "com.google.Chrome"]).output() {
         if output.status.success() {
             add(ChromeInfo {
                 display_name: "Google Chrome (Flatpak)".to_string(),
@@ -178,38 +194,78 @@ pub fn build_chrome_args(
 }
 
 /// Build a Command to launch Chrome based on the detection method.
+///
+/// When Loft is running inside a Flatpak sandbox, Chrome lives on the host,
+/// so all launch methods go through `flatpak-spawn --host`.
 pub fn build_chrome_command(
     chrome: &ChromeInfo,
     args: &[String],
 ) -> Command {
+    let in_flatpak = is_flatpak();
+
     match chrome.launch_method {
         LaunchMethod::Flatpak => {
-            let mut cmd = Command::new("flatpak");
-            // Flatpak args go before the app ID; Chrome args go after.
-            // Do NOT add "--" — Chrome treats it as "end of options"
-            // and opens everything after it as URL tabs.
-            //
+            // Chrome is itself a Flatpak app — launch it via `flatpak run`.
             // Grant access to the Loft data dir so Chrome can see the
             // extension and write to the profile inside the sandbox.
             // --talk-name=org.freedesktop.Flatpak allows flatpak-spawn --host
             // in the NM host script to call the loft binary on the host.
-            let loft_data = dirs::data_dir()
-                .unwrap_or_else(|| PathBuf::from("~/.local/share"))
-                .join("loft");
-            cmd.args([
+            let loft_data = loft_data_dir_on_host();
+            let flatpak_args = [
                 "run",
                 &format!("--filesystem={}", loft_data.display()),
                 "--talk-name=org.freedesktop.Flatpak",
-                &chrome.path,
-            ]);
-            cmd.args(args);
-            cmd
+            ];
+
+            if in_flatpak {
+                // Loft is Flatpak → Chrome is Flatpak: spawn on host
+                let mut cmd = Command::new("flatpak-spawn");
+                cmd.arg("--host").arg("flatpak");
+                cmd.args(flatpak_args);
+                cmd.arg(&chrome.path);
+                cmd.args(args);
+                cmd
+            } else {
+                // Loft is native → Chrome is Flatpak: call flatpak directly
+                let mut cmd = Command::new("flatpak");
+                cmd.args(flatpak_args);
+                cmd.arg(&chrome.path);
+                cmd.args(args);
+                cmd
+            }
         }
         _ => {
-            let mut cmd = Command::new(&chrome.path);
-            cmd.args(args);
-            cmd
+            if in_flatpak {
+                // Loft is Flatpak → Chrome is native: spawn on host
+                let mut cmd = Command::new("flatpak-spawn");
+                cmd.arg("--host").arg(&chrome.path);
+                cmd.args(args);
+                cmd
+            } else {
+                let mut cmd = Command::new(&chrome.path);
+                cmd.args(args);
+                cmd
+            }
         }
+    }
+}
+
+/// Return the Loft data directory as it appears on the host filesystem.
+/// Inside a Flatpak sandbox, `dirs::data_dir()` returns the sandbox path
+/// (`~/.var/app/chat.loft.Loft/data`), but Chrome on the host needs the
+/// real path. We read `$HOME` from the host via `/.flatpak-info` or fall back
+/// to `~/.local/share/loft`.
+fn loft_data_dir_on_host() -> PathBuf {
+    if is_flatpak() {
+        // Inside Flatpak, $HOME is the real home dir (not remapped).
+        // The host Chrome needs access to the sandbox's data dir.
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+            .join("loft")
+    } else {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+            .join("loft")
     }
 }
 
@@ -220,6 +276,19 @@ fn is_executable(path: &Path) -> bool {
             .metadata()
             .map(|m| m.permissions().mode() & 0o111 != 0)
             .unwrap_or(false)
+}
+
+/// Check if a path is executable on the host (works inside Flatpak sandbox).
+fn is_host_executable(path: &str) -> bool {
+    if is_flatpak() {
+        host_command("test")
+            .args(["-x", path])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    } else {
+        is_executable(Path::new(path))
+    }
 }
 
 /// Return the data directory for a service's Chrome profile.

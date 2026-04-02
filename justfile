@@ -61,6 +61,12 @@ update-flatpak-submission output=("$HOME/Downloads/chat.loft.Loft"):
     echo "Submission files in: $out/"
     ls -1 "$out/"
 
+# Package the GNOME Shell extension as a zip for EGO submission
+package-gnome-extension output="$HOME/Downloads":
+    @mkdir -p {{ output }}
+    cd gnome-shell-extension && zip -r {{ output }}/loft-shell-helper@loft.chat.zip extension.js metadata.json icons/
+    @echo "Extension zip: {{ output }}/loft-shell-helper@loft.chat.zip"
+
 # Install build tools (cargo-generate-rpm, cargo-deb, appimagetool)
 setup:
     cargo install cargo-generate-rpm cargo-deb
