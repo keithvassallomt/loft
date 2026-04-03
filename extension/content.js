@@ -58,6 +58,9 @@
   // message preview so new messages in an already-unread conversation are
   // detected as fresh notification events.
   const notifiedConversations = new Map();
+  // Map<href, avatarURL> — caches the most recently seen avatar URL
+  // for each Messenger conversation so repeat notifications reuse it.
+  const messengerAvatarCache = new Map();
   let messengerDnd = false;
 
   // ================================================================
@@ -705,13 +708,24 @@
       while ((textNode = walker.nextNode())) {
         if (foundMarker) {
           const text = textNode.textContent.trim();
-          if (text && text.length > 1 && !/^\d+[hms]$/.test(text) && text !== "·" && !/^Active\b/.test(text)) {
+          if (text && !/^\d+[hms]$/.test(text) && text !== "·" && !/^Active\b/.test(text)) {
             parts.push(text);
             if (parts.length >= 2) break;
           }
         }
         if (textNode.textContent.trim() === "Unread message:") {
           foundMarker = true;
+        }
+      }
+      // Fallback: include emoji <img> alt text in fingerprint so
+      // emoji-only messages produce a detectable fingerprint change.
+      if (parts.length < 2) {
+        for (const eImg of anchor.querySelectorAll('img[alt]')) {
+          const alt = eImg.alt;
+          if (alt && alt.length <= 2 && !eImg.src.includes("fbcdn.net")) {
+            parts.push(alt);
+            if (parts.length >= 2) break;
+          }
         }
       }
       return parts.join("|");
@@ -824,31 +838,47 @@
 
       // Message preview: first text node after the "Unread message:" marker
       let messagePreview = "";
-      const walker = document.createTreeWalker(
+      const previewWalker = document.createTreeWalker(
         anchor,
         NodeFilter.SHOW_TEXT,
         null
       );
       let foundMarker = false;
-      let textNode;
-      while ((textNode = walker.nextNode())) {
+      let previewNode;
+      while ((previewNode = previewWalker.nextNode())) {
         if (foundMarker) {
-          const text = textNode.textContent.trim();
-          if (text && text !== senderName && text.length > 1) {
+          const text = previewNode.textContent.trim();
+          if (text && text !== senderName && text !== "·"
+              && !/^\d+[hms]$/.test(text) && !/^Active\b/.test(text)) {
             messagePreview = text;
             break;
           }
         }
-        if (textNode.textContent.trim() === "Unread message:") {
+        if (previewNode.textContent.trim() === "Unread message:") {
           foundMarker = true;
         }
       }
+      // Fallback: check for emoji images (Messenger renders custom emoji
+      // as <img alt="👍"> elements invisible to the text walker).
+      if (!messagePreview) {
+        for (const eImg of anchor.querySelectorAll('img[alt]')) {
+          const alt = eImg.alt;
+          if (alt && alt.length <= 2 && !eImg.src.includes("fbcdn.net")) {
+            messagePreview = (messagePreview || "") + alt;
+          }
+        }
+      }
 
-      // Profile picture: <img> with fbcdn.net source
+      // Profile picture: try fbcdn.net img first, then any HTTPS img
+      // (covers composite group avatars), then fall back to cache.
       let profilePic = "";
-      const img = anchor.querySelector('img[src*="fbcdn.net"]');
-      if (img) {
+      const img = anchor.querySelector('img[src*="fbcdn.net"]')
+                || anchor.querySelector('img[src^="https://"]');
+      if (img && img.src) {
         profilePic = img.src;
+        messengerAvatarCache.set(href, profilePic);
+      } else if (messengerAvatarCache.has(href)) {
+        profilePic = messengerAvatarCache.get(href);
       }
 
       if (!senderName && !messagePreview) return null;
@@ -862,11 +892,29 @@
       };
     }
 
+    // Proactively populate the avatar cache from ALL visible conversation
+    // rows (not just unread ones) so avatars are available when a notification
+    // fires even if the <img> element is gone by then (React re-renders).
+    function scanMessengerAvatars() {
+      for (const anchor of document.querySelectorAll('a[href*="/messages/"]')) {
+        const href = anchor.getAttribute("href");
+        if (!href || messengerAvatarCache.has(href)) continue;
+        const img = anchor.querySelector('img[src*="fbcdn.net"]')
+                 || anchor.querySelector('img[src^="https://"]');
+        if (img && img.src) {
+          messengerAvatarCache.set(href, img.src);
+        }
+      }
+    }
+
     // Observe DOM changes and debounce scans to avoid excessive work
     let scanTimeout = null;
     const domObserver = new MutationObserver(() => {
       if (scanTimeout) clearTimeout(scanTimeout);
-      scanTimeout = setTimeout(scanForUnreadMessages, 500);
+      scanTimeout = setTimeout(() => {
+        scanForUnreadMessages();
+        scanMessengerAvatars();
+      }, 500);
     });
 
     function startDomObserver() {
@@ -876,11 +924,11 @@
           subtree: true,
         });
         // Initial scans — retry a few times to catch slow page loads
-        setTimeout(scanForUnreadMessages, 3000);
-        setTimeout(scanForUnreadMessages, 8000);
-        setTimeout(scanForUnreadMessages, 15000);
+        setTimeout(() => { scanForUnreadMessages(); scanMessengerAvatars(); }, 3000);
+        setTimeout(() => { scanForUnreadMessages(); scanMessengerAvatars(); }, 8000);
+        setTimeout(() => { scanForUnreadMessages(); scanMessengerAvatars(); }, 15000);
         // Periodic fallback scan (catches cases where MutationObserver misses a change)
-        setInterval(scanForUnreadMessages, 10000);
+        setInterval(() => { scanForUnreadMessages(); scanMessengerAvatars(); }, 10000);
       } else {
         setTimeout(startDomObserver, 500);
       }

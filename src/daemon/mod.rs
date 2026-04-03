@@ -90,7 +90,10 @@ impl DaemonState {
     }
 
     pub fn request_show(&self) {
-        self.visible.store(true, Ordering::Relaxed);
+        // Don't set visible here — wait for WindowShown confirmation from
+        // the extension.  Setting it optimistically causes permanent
+        // notification suppression if the window fails to actually show
+        // (e.g. GNOME focus-stealing prevention, window destroyed).
         let _ = self.cmd_tx.send(messaging::DaemonMessage::ShowWindow);
         // notify_waiters (not notify_one) so no permit is stored when
         // nobody is waiting — prevents spurious Chrome respawns.
@@ -98,7 +101,7 @@ impl DaemonState {
     }
 
     pub fn request_hide(&self) {
-        self.visible.store(false, Ordering::Relaxed);
+        // Don't set visible here — wait for WindowHidden confirmation.
         let _ = self.cmd_tx.send(messaging::DaemonMessage::HideWindow);
     }
 
@@ -818,6 +821,15 @@ impl ChromeManager {
         unsafe {
             libc::close(chrome_read_fd);
             libc::close(chrome_write_fd);
+        }
+
+        // Ensure extension and NM host are deployed (they may be missing after
+        // a fresh install or data wipe — install_service() isn't always called).
+        if let Err(e) = crate::desktop::deploy_extension() {
+            tracing::warn!("Failed to deploy extension: {}", e);
+        }
+        if let Err(e) = crate::desktop::setup_nm_host() {
+            tracing::warn!("Failed to set up NM host: {}", e);
         }
 
         // Load extension via CDP in a blocking task (pipe I/O is synchronous)

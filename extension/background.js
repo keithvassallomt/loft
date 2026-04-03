@@ -452,6 +452,17 @@ function blockServiceWorkerNotifications() {
     primaryPattern: "https://web.telegram.org/*",
     setting: "block",
   });
+  // Messenger uses service-worker push for some notifications (especially
+  // groups).  Block native Chrome notifications — Loft handles Messenger
+  // notifications via DOM scraping in content.js instead.
+  chrome.contentSettings.notifications.set({
+    primaryPattern: "https://www.facebook.com/*",
+    setting: "block",
+  });
+  chrome.contentSettings.notifications.set({
+    primaryPattern: "https://facebook.com/*",
+    setting: "block",
+  });
   // Ensure WhatsApp is allowed — it uses page-level Notification() which
   // our MAIN world override intercepts.  Clear any previous "block" setting.
   chrome.contentSettings.notifications.set({

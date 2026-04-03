@@ -37,9 +37,37 @@
   </branding>
 
   <screenshots>
-    <screenshot type="default">
-      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/manager.png</image>
+    <screenshot type="default" xml:lang="en">
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/main_light.png</image>
       <caption>Loft Manager showing available services</caption>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/main_dark.png</image>
+      <caption>Loft Manager showing available services (dark mode)</caption>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/service_settings.png</image>
+      <caption>Loft Manager showing per-service settings</caption>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/video_call.png</image>
+      <caption>WhatsApp service during a video call</caption>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/gnome_unified.png</image>
+      <caption>Unified panel icon on GNOME</caption>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/gnome_individual.png</image>
+      <caption>Individual panel icons on GNOME</caption>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/kde_unified.png</image>
+      <caption>Unified tray icon on KDE</caption>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/kde_individual.png</image>
+      <caption>Individual tray icons on KDE</caption>
     </screenshot>
   </screenshots>
 

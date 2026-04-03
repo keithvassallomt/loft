@@ -281,7 +281,7 @@ pub fn create_chrome_desktop_file(definition: &ServiceDefinition) -> Result<()> 
 // ============================================================
 
 /// Deploy the Chrome extension files to ~/.local/share/loft/extension/.
-fn deploy_extension() -> Result<()> {
+pub fn deploy_extension() -> Result<()> {
     let ext_dir = crate::chrome::extension_path();
     std::fs::create_dir_all(&ext_dir)
         .with_context(|| format!("Failed to create extension dir {}", ext_dir.display()))?;
@@ -517,7 +517,7 @@ fn install_action_icon(name: &str, svg_content: &str) -> Result<()> {
 // Native messaging host manifest
 // ============================================================
 
-fn setup_nm_host() -> Result<()> {
+pub fn setup_nm_host() -> Result<()> {
     let origin = format!("chrome-extension://{}/", EXTENSION_ID);
 
     // Chrome launches the NM host binary directly without arguments, so we need

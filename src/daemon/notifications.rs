@@ -125,7 +125,19 @@ fn resolve_app_icon(service_name: &str) -> String {
     format!("loft-{}", service_name)
 }
 
-/// Decode a data: URI avatar to a temp file.
+/// Avatar cache directory inside the Loft data dir.
+/// Using `~/.local/share/loft/avatars/` instead of `/tmp/` so avatars are
+/// visible to the host notification daemon when Loft runs inside Flatpak
+/// (Flatpak's `/tmp` is sandboxed and inaccessible from the host).
+fn avatar_cache_dir() -> PathBuf {
+    let dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("~/.local/share"))
+        .join("loft/avatars");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Decode a data: URI avatar to a cached file.
 fn decode_data_uri_avatar(data_uri: &str) -> Result<PathBuf> {
     use base64::Engine;
 
@@ -133,7 +145,7 @@ fn decode_data_uri_avatar(data_uri: &str) -> Result<PathBuf> {
     // Hash just the first 200 chars to avoid hashing megabytes of base64
     data_uri[..data_uri.len().min(200)].hash(&mut hasher);
     let hash = hasher.finish();
-    let cache_path = std::env::temp_dir().join(format!("loft-avatar-{:x}.png", hash));
+    let cache_path = avatar_cache_dir().join(format!("loft-avatar-{:x}", hash));
 
     // Reuse cached file if recent
     if let Ok(metadata) = std::fs::metadata(&cache_path) {
@@ -166,7 +178,8 @@ async fn download_avatar(url: &str) -> Result<PathBuf> {
     let mut hasher = DefaultHasher::new();
     url.hash(&mut hasher);
     let hash = hasher.finish();
-    let cache_path = std::env::temp_dir().join(format!("loft-avatar-{:x}.png", hash));
+    // No file extension — GNOME/KDE detect image format from magic bytes.
+    let cache_path = avatar_cache_dir().join(format!("loft-avatar-{:x}", hash));
 
     if let Ok(metadata) = std::fs::metadata(&cache_path) {
         if let Ok(modified) = metadata.modified() {
@@ -184,8 +197,17 @@ async fn download_avatar(url: &str) -> Result<PathBuf> {
     let response = client.get(url).send().await
         .context("failed to fetch avatar")?;
 
+    let status = response.status();
+    if !status.is_success() {
+        anyhow::bail!("avatar download failed with HTTP {}", status);
+    }
+
     let bytes = response.bytes().await
         .context("failed to read avatar response")?;
+
+    if bytes.len() < 100 {
+        anyhow::bail!("avatar response too small ({} bytes), likely not an image", bytes.len());
+    }
 
     std::fs::write(&cache_path, &bytes)
         .context("failed to write avatar to temp file")?;
@@ -245,6 +267,22 @@ pub async fn listen_for_actions(
                     let Some(href) = entry else { continue };
 
                     state.request_show();
+
+                    // Retry if the window doesn't appear within 1.5s.
+                    // request_show() doesn't set visible — only the
+                    // extension's WindowShown confirmation does — so
+                    // checking visible is safe and won't interfere with
+                    // Fix 5's correctness.
+                    {
+                        let retry_state = Arc::clone(&state);
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                            if !retry_state.visible.load(std::sync::atomic::Ordering::Relaxed) {
+                                tracing::info!("Window not visible after notification click, retrying show");
+                                retry_state.request_show();
+                            }
+                        });
+                    }
 
                     if let Some(url) = href {
                         let nav_msg = super::messaging::DaemonMessage::NavigateToConversation { url };
