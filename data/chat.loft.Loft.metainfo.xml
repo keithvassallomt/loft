@@ -72,7 +72,7 @@
   </screenshots>
 
   <releases>
-    <release version="0.1.0" date="2026-04-02">
+    <release version="0.1.0" date="2026-04-03">
       <description>
         <p>Initial release with WhatsApp, Messenger, Slack and Telegram support.</p>
       </description>
