@@ -134,6 +134,13 @@
       }
       button.hide-btn { padding: 4px 10px; }
       button.hide-btn svg { width: 14px; height: 14px; display: block; }
+      @keyframes loft-flash {
+        0%   { color: #fff; }
+        50%  { color: #fff; }
+        100% { color: inherit; }
+      }
+      .loft-intro .label { animation: loft-flash 1.2s ease; }
+      .loft-intro button { animation: loft-flash 1.2s ease; }
     `;
     shadow.appendChild(style);
 
@@ -268,6 +275,18 @@
 
     // Expose hideBar so the titlebar_config handler can dismiss it
     window.__loftHideBar = hideBar;
+
+    // First-run intro animation: slide bar down, flash controls, slide back up.
+    window.__loftPlayIntro = function () {
+      if (!titlebarEnabled) return;
+      showBar();
+      bar.classList.add('loft-intro');
+      // After flash animation finishes, schedule the bar to hide
+      setTimeout(() => {
+        bar.classList.remove('loft-intro');
+        hideBar();
+      }, 1800);
+    };
   }
 
   function initTitleBar() {
@@ -287,6 +306,11 @@
   };
 
   // First-run speech bubble
+  // The bubble disappears visually after 15s or when closed, but the
+  // "dismissed" flag is only persisted once the user actually engages with
+  // the window (click/key) or 1 minute elapses — whichever comes first.
+  // This way a user who opens the service, glances at it, and closes
+  // without interacting will see the bubble again next time.
   function showFirstRunBubble() {
     if (!chrome.storage) return;
     const storageKey = "loftFirstRunDismissed_" + service;
@@ -294,6 +318,20 @@
       if (data[storageKey]) return;
 
       const displayName = SERVICE_DISPLAY_NAMES[service] || service;
+
+      // --- Deferred persistence: wait for interaction or 1 minute ---
+      let flagPersisted = false;
+      function persistFlag() {
+        if (flagPersisted) return;
+        flagPersisted = true;
+        chrome.storage.local.set({ [storageKey]: true });
+        document.removeEventListener("click", onInteract, true);
+        document.removeEventListener("keydown", onInteract, true);
+      }
+      function onInteract() { persistFlag(); }
+      document.addEventListener("click", onInteract, true);
+      document.addEventListener("keydown", onInteract, true);
+      setTimeout(persistFlag, 60000);
 
       const bubble = document.createElement("div");
       bubble.id = "loft-first-run-bubble";
@@ -317,9 +355,10 @@
       ].join("; ");
 
       bubble.textContent =
-        "Use the \u25B2 button or tray icon to hide " +
+        "Hover near the top of the window to reveal the Loft bar. " +
+        "Use the hide button or tray icon to hide " +
         displayName +
-        ". Clicking Close (\u00d7) resets your window.";
+        " to the tray. Clicking Close (\u00d7) resets your window.";
 
       const closeBtn = document.createElement("span");
       closeBtn.textContent = "\u00d7";
@@ -340,18 +379,17 @@
       });
       closeBtn.addEventListener("click", () => {
         bubble.remove();
-        chrome.storage.local.set({ [storageKey]: true });
       });
 
       bubble.appendChild(closeBtn);
       document.body.appendChild(bubble);
 
-      // Auto-dismiss after 15 seconds
+      // Play the titlebar intro animation so the user sees it
+      if (window.__loftPlayIntro) window.__loftPlayIntro();
+
+      // Auto-dismiss bubble visually after 15 seconds (flag NOT persisted here)
       setTimeout(() => {
-        if (bubble.parentNode) {
-          bubble.remove();
-          chrome.storage.local.set({ [storageKey]: true });
-        }
+        if (bubble.parentNode) bubble.remove();
       }, 15000);
     });
   }
