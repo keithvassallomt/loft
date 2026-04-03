@@ -354,9 +354,10 @@
         "user-select: none",
       ].join("; ");
 
-      bubble.textContent =
+      bubble.innerHTML =
         "Hover near the top of the window to reveal the Loft bar. " +
-        "Use the hide button or tray icon to hide " +
+        'Use the <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" style="vertical-align:-3px;"><path fill="currentColor" d="m 1.004,1 v 14 H 15.004 v -14 z m 1.4,1.4 H 13.604 V 13.6 H 2.404 Z" style="stroke-width:1.4"/><g fill="currentColor" transform="matrix(0,-117.36063,117.36063,0,-865.535,1005.444)"><path d="M 8.535339,7.4211389 8.5671,7.3893779 8.552727,7.3750039 8.520966,7.4067649 8.506555,7.3923539 l -0.00762,0.00762 v 0.043196 h 0.043196 l 0.00762,-0.00762 z" style="stroke-width:0.00508184"/></g></svg> ' +
+        "button or tray icon to hide " +
         displayName +
         " to the tray. Clicking Close (\u00d7) resets your window.";
 
@@ -441,7 +442,7 @@
 
   if (service === "slack") {
     function scanSlackUnreads() {
-      const count = document.querySelectorAll('.p-channel_sidebar__channel--unread').length;
+      const count = document.querySelectorAll('.p-channel_sidebar__channel--unread:not(:has(.p-channel_sidebar__link--add-more-items))').length;
       if (count !== lastBadgeCount) {
         lastBadgeCount = count;
         safeSendMessage({ type: "badge_update", count });

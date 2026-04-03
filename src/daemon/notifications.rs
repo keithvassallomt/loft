@@ -291,10 +291,12 @@ pub async fn listen_for_actions(
                 }
             }
             Some(msg) = close_stream.next() => {
-                // Clean up stale entries when notifications are dismissed
+                // Do NOT remove here — ActionInvoked and NotificationClosed race.
+                // Removing here can cause ActionInvoked to find nothing and skip
+                // the show.  Stale entries are harmless (small HashMap, u32 keys).
                 if let Ok(msg) = msg {
-                    if let Ok((notif_id, _reason)) = msg.body().deserialize::<(u32, u32)>() {
-                        sent_ids().lock().await.remove(&notif_id);
+                    if let Ok((notif_id, reason)) = msg.body().deserialize::<(u32, u32)>() {
+                        tracing::debug!("Notification {} closed (reason: {})", notif_id, reason);
                     }
                 }
             }
