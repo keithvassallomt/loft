@@ -10,6 +10,9 @@ Loft provides full desktop integration for WhatsApp, Facebook Messenger, Slack a
 
 Unlike Electron wrappers, Loft uses your real Google Chrome installation for full WebRTC and codec support, while a Rust daemon provides system integration that Chrome alone cannot.
 
+> [!NOTE]
+> This project voluntarily adheres to The Friendly Manifesto. Read more [here](https://friendlymanifesto.org)
+
 ## Features
 
 - Voice and video calling (uses Chrome's native WebRTC)
