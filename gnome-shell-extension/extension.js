@@ -532,6 +532,7 @@ export default class LoftShellHelper extends Extension {
             this._combinedIcon.disconnect(this._combinedIconAllocId);
             this._combinedIconAllocId = null;
         }
+        this._combinedIcon?.destroy();
         this._combinedIcon = null;
         this._combinedBadge?.destroy();
         this._combinedBadge = null;
