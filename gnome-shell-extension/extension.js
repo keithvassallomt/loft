@@ -201,23 +201,13 @@ export default class LoftShellHelper extends Extension {
         this._pendingDashTimeouts = null;
 
         // Destroy combined icon if present
-        if (this._combinedWatchId)
-            Gio.bus_unwatch_name(this._combinedWatchId);
-        this._combinedIndicator?.destroy();
-        this._combinedIndicator = null;
-        this._combinedServices?.clear();
+        this._unregisterCombined();
         this._combinedServices = null;
-        this._combinedWatchId = null;
-        this._combinedBadge = null;
-        this._combinedDndBadge = null;
+        this._combinedRowSignals = null;
 
         // Destroy all panel icons and stop name watches
-        for (const [, entry] of this._panelIcons) {
-            if (entry.watchId)
-                Gio.bus_unwatch_name(entry.watchId);
-            entry.indicator?.destroy();
-        }
-        this._panelIcons.clear();
+        for (const name of [...this._panelIcons.keys()])
+            this._unregisterService(name);
         this._panelIcons = null;
 
         // Restore original prototypes
@@ -292,7 +282,7 @@ export default class LoftShellHelper extends Extension {
         });
         box.add_child(dndBadge);
 
-        icon.connect('notify::allocation', () => {
+        const iconAllocId = icon.connect('notify::allocation', () => {
             badge.set_position(
                 icon.x + icon.width - DOT_SIZE,
                 icon.y + icon.height - DOT_SIZE
@@ -321,7 +311,7 @@ export default class LoftShellHelper extends Extension {
 
         // Do Not Disturb toggle
         const dndItem = new PopupMenu.PopupSwitchMenuItem('Do Not Disturb', false);
-        dndItem.connect('toggled', (_item, state) => {
+        const dndItemToggledId = dndItem.connect('toggled', (_item, state) => {
             this._callDaemonMethod(dbusServiceName, 'SetDnd', '(b)', [state]);
         });
         indicator.menu.addMenuItem(dndItem);
@@ -355,9 +345,12 @@ export default class LoftShellHelper extends Extension {
 
         this._panelIcons.set(name, {
             indicator,
+            icon,
+            iconAllocId,
             badge,
             dndBadge,
             dndItem,
+            dndItemToggledId,
             showHideItem,
             wmClass,
             dbusServiceName,
@@ -372,6 +365,10 @@ export default class LoftShellHelper extends Extension {
         if (!entry) return;
         if (entry.watchId)
             Gio.bus_unwatch_name(entry.watchId);
+        if (entry.iconAllocId && entry.icon)
+            entry.icon.disconnect(entry.iconAllocId);
+        if (entry.dndItemToggledId && entry.dndItem)
+            entry.dndItem.disconnect(entry.dndItemToggledId);
         entry.indicator?.destroy();
         this._panelIcons.delete(name);
     }
@@ -489,7 +486,7 @@ export default class LoftShellHelper extends Extension {
         });
         box.add_child(dndBadge);
 
-        icon.connect('notify::allocation', () => {
+        this._combinedIconAllocId = icon.connect('notify::allocation', () => {
             badge.set_position(
                 icon.x + icon.width - DOT_SIZE,
                 icon.y + icon.height - DOT_SIZE
@@ -503,8 +500,10 @@ export default class LoftShellHelper extends Extension {
         Main.panel.addToStatusArea('loft-combined', indicator);
 
         this._combinedIndicator = indicator;
+        this._combinedIcon = icon;
         this._combinedBadge = badge;
         this._combinedDndBadge = dndBadge;
+        this._combinedRowSignals = [];
 
         // Watch the combined tray D-Bus name — destroy if it exits
         let nameAppeared = false;
@@ -528,9 +527,27 @@ export default class LoftShellHelper extends Extension {
             Gio.bus_unwatch_name(this._combinedWatchId);
             this._combinedWatchId = null;
         }
+        this._disconnectCombinedRowSignals();
+        if (this._combinedIconAllocId && this._combinedIcon) {
+            this._combinedIcon.disconnect(this._combinedIconAllocId);
+            this._combinedIconAllocId = null;
+        }
+        this._combinedIcon = null;
+        this._combinedBadge?.destroy();
+        this._combinedBadge = null;
+        this._combinedDndBadge?.destroy();
+        this._combinedDndBadge = null;
         this._combinedIndicator?.destroy();
         this._combinedIndicator = null;
-        this._combinedServices.clear();
+        this._combinedServices?.clear();
+    }
+
+    _disconnectCombinedRowSignals() {
+        if (!this._combinedRowSignals) return;
+        for (const [obj, id] of this._combinedRowSignals) {
+            try { obj.disconnect(id); } catch (_e) {}
+        }
+        this._combinedRowSignals = [];
     }
 
     _updateCombinedService(name, displayName, visible, badge, dnd, wmClass) {
@@ -558,6 +575,7 @@ export default class LoftShellHelper extends Extension {
         if (!this._combinedIndicator) return;
 
         const menu = this._combinedIndicator.menu;
+        this._disconnectCombinedRowSignals();
         menu.removeAll();
 
         // "Loft Settings..." opens the manager GUI via its .desktop file,
@@ -620,10 +638,10 @@ export default class LoftShellHelper extends Extension {
                 style: 'margin-left: 12px; padding: 2px 6px;',
                 can_focus: true,
             });
-            showHideBtn.connect('clicked', () => {
+            this._combinedRowSignals.push([showHideBtn, showHideBtn.connect('clicked', () => {
                 this._callDaemonMethod(dbusName, 'Toggle');
                 menu.close();
-            });
+            })]);
             row.add_child(showHideBtn);
 
             // DND icon toggle
@@ -634,9 +652,9 @@ export default class LoftShellHelper extends Extension {
                 style: `margin-left: 4px; padding: 2px 6px;${svc.dnd ? ' opacity: 128;' : ''}`,
                 can_focus: true,
             });
-            dndBtn.connect('clicked', () => {
+            this._combinedRowSignals.push([dndBtn, dndBtn.connect('clicked', () => {
                 this._callDaemonMethod(dbusName, 'SetDnd', '(b)', [!svc.dnd]);
-            });
+            })]);
             row.add_child(dndBtn);
 
             // Quit icon button
@@ -646,10 +664,10 @@ export default class LoftShellHelper extends Extension {
                 style: 'margin-left: 4px; padding: 2px 6px;',
                 can_focus: true,
             });
-            quitBtn.connect('clicked', () => {
+            this._combinedRowSignals.push([quitBtn, quitBtn.connect('clicked', () => {
                 this._callDaemonMethod(dbusName, 'Quit');
                 menu.close();
-            });
+            })]);
             row.add_child(quitBtn);
 
             menu.addMenuItem(item);
