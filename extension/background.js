@@ -177,6 +177,7 @@ function hideAppWindow() {
         console.log("Loft: Window minimized");
         if (port) {
           port.postMessage({ type: "window_hidden" });
+          port.postMessage({ type: "window_unfocused" });
         }
       }
     });
@@ -195,6 +196,7 @@ function showAppWindow() {
         console.log("Loft: Window restored and focused");
         if (port) {
           port.postMessage({ type: "window_shown" });
+          port.postMessage({ type: "window_focused" });
         }
         // Re-sync DND state to the content script → MAIN world relay.
         // chrome.tabs.sendMessage is unreliable for minimized tabs, so the
@@ -237,11 +239,16 @@ chrome.windows.onBoundsChanged.addListener((win) => {
 // Detect when the app window gains focus (e.g. user restored from alt-tab)
 // so the daemon can update its visible state and tray menu label.
 chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (!port) return;
   if (windowId === appWindowId) {
-    if (port) {
-      port.postMessage({ type: "window_shown" });
-      console.log("Loft: Sent window_shown to daemon (window focused)");
-    }
+    port.postMessage({ type: "window_shown" });
+    port.postMessage({ type: "window_focused" });
+    console.log("Loft: Sent window_focused to daemon");
+  } else {
+    // Either focus moved to a different window, or no window has focus
+    // (windowId === chrome.windows.WINDOW_ID_NONE / -1). In both cases the
+    // Loft window no longer has input focus.
+    port.postMessage({ type: "window_unfocused" });
   }
 });
 
@@ -262,6 +269,7 @@ chrome.windows.onRemoved.addListener((windowId) => {
   }
   if (port) {
     port.postMessage({ type: "window_hidden" });
+    port.postMessage({ type: "window_unfocused" });
     console.log("Loft: Sent window_hidden to daemon");
   } else {
     console.warn("Loft: Could not send window_hidden — no NM connection");

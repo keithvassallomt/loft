@@ -1,3 +1,4 @@
+pub mod background_status;
 pub mod combined_tray;
 pub mod dbus;
 pub mod gnome_shell;
@@ -22,6 +23,10 @@ use crate::service::{self, ServiceDefinition};
 /// Shared mutable state across all daemon components (D-Bus, tray, messaging).
 pub struct DaemonState {
     pub visible: AtomicBool,
+    /// Whether the window currently has input focus. Visible-but-unfocused
+    /// (e.g. behind another app) does NOT suppress notifications — only
+    /// focused does.
+    pub focused: AtomicBool,
     pub badge_count: AtomicU32,
     pub dnd: AtomicBool,
     pub quit_requested: AtomicBool,
@@ -54,6 +59,7 @@ impl DaemonState {
         let (cmd_tx, _) = tokio::sync::broadcast::channel(16);
         Self {
             visible: AtomicBool::new(false),
+            focused: AtomicBool::new(false),
             badge_count: AtomicU32::new(0),
             dnd: AtomicBool::new(dnd),
             quit_requested: AtomicBool::new(false),
@@ -258,6 +264,18 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
+        });
+    }
+
+    // 6c. GNOME Background Apps status reporter.
+    //     Reports a status string ("4 unread", "2 services running", ...)
+    //     to GNOME's Quick Settings → Background Apps entry via the
+    //     org.freedesktop.portal.Background portal.
+    {
+        let bg_state = Arc::clone(&state);
+        let display_name = definition.display_name.to_string();
+        tokio::spawn(async move {
+            run_background_status_loop(bg_state, display_name).await;
         });
     }
 
@@ -543,6 +561,46 @@ async fn run_combined_tray_client(
     // Clean up
     respawn_handle.abort();
     let _ = combined_tray::unregister(svc_name).await;
+}
+
+/// Drive the GNOME Background Apps status string via
+/// `org.freedesktop.portal.Background.SetStatus`.
+///
+/// Under Flatpak every Loft daemon shares the same app ID, so the message
+/// is aggregated across all running services (last writer wins, but all
+/// writers compute the same string). Under native installs each daemon
+/// has its own Background Apps entry, so each writes only its own badge.
+async fn run_background_status_loop(state: Arc<DaemonState>, display_name: String) {
+    let flatpak = background_status::is_flatpak();
+    let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+    let mut last_message: Option<String> = None;
+
+    loop {
+        interval.tick().await;
+        if state.quit_requested.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let message = if flatpak {
+            let agg = background_status::collect_aggregate().await;
+            background_status::format_aggregate(&agg)
+        } else {
+            let raw = state.badge_count.load(Ordering::Relaxed);
+            let badge = if state.is_badges_enabled() { raw } else { 0 };
+            background_status::format_own(&display_name, badge)
+        };
+
+        if last_message.as_deref() != Some(message.as_str()) {
+            if let Err(e) = background_status::set_status(&message).await {
+                tracing::debug!("background_status::set_status failed: {}", e);
+            } else {
+                last_message = Some(message);
+            }
+        }
+    }
+
+    // Clear the status on shutdown so a stale count doesn't linger.
+    let _ = background_status::set_status("").await;
 }
 
 /// Monitor the `chat.loft.Tray` D-Bus name. When it vanishes, re-spawn

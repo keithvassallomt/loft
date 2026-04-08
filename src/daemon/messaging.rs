@@ -36,6 +36,11 @@ pub enum ExtensionMessage {
     WindowHidden,
     /// Extension reports the window was restored/focused (e.g. via alt-tab).
     WindowShown,
+    /// Extension reports the window gained input focus.
+    WindowFocused,
+    /// Extension reports the window lost input focus (still visible, but
+    /// behind another window).
+    WindowUnfocused,
     /// Content script titlebar button requests hide-to-tray.
     HideRequest,
     /// Content script requests opening a URL in the default browser.
@@ -205,8 +210,8 @@ async fn handle_relay_connection(
                     }
                     Ok(ExtensionMessage::Notification { title, body, icon }) => {
                         tracing::debug!("Notification: {} - {}", title, body);
-                        if state.visible.load(Ordering::Relaxed) {
-                            tracing::debug!("Suppressing notification (window visible)");
+                        if state.focused.load(Ordering::Relaxed) {
+                            tracing::debug!("Suppressing notification (window focused)");
                         } else {
                             let svc = service_name.to_string();
                             let disp = display_name.to_string();
@@ -255,6 +260,15 @@ async fn handle_relay_connection(
                     Ok(ExtensionMessage::WindowHidden) => {
                         tracing::info!("Extension reports window hidden (user closed)");
                         state.visible.store(false, Ordering::Relaxed);
+                        state.focused.store(false, Ordering::Relaxed);
+                    }
+                    Ok(ExtensionMessage::WindowFocused) => {
+                        tracing::debug!("Extension reports window focused");
+                        state.focused.store(true, Ordering::Relaxed);
+                    }
+                    Ok(ExtensionMessage::WindowUnfocused) => {
+                        tracing::debug!("Extension reports window unfocused");
+                        state.focused.store(false, Ordering::Relaxed);
                     }
                     Ok(ExtensionMessage::WindowShown) => {
                         // If we're starting minimized, immediately hide the

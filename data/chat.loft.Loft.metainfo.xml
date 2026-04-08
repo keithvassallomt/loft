@@ -72,6 +72,14 @@
   </screenshots>
 
   <releases>
+    <release version="0.1.1" date="2026-04-08">
+      <description>
+        <ul>
+          <li>Loft now shows an unread count in GNOME's Background Apps list, so you can see at a glance how many messages are waiting without opening the app.</li>
+          <li>Desktop notifications now appear when a Loft window is open but not focused (for example, hidden behind another app). Previously they only appeared when the window was minimised or closed to tray.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-04-03">
       <description>
         <p>Initial release with WhatsApp, Messenger, Slack and Telegram support.</p>
