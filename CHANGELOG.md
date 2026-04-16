@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 2026-04-16
+
+### Fixed
+
+- Native messaging no longer silently fails when both Loft and Chrome are Flatpak installs. The NM wrapper script now detects when it's running inside a sandbox (via `/.flatpak-info`) and uses `flatpak-spawn --host` to escape — without this, the `flatpak` command isn't available inside Chrome's sandbox and the titlebar Hide button, DOM-based notifications, and other extension-to-daemon messaging all fail silently.
+- The combined tray panel icon now appears reliably at login. When multiple services autostart simultaneously, they all used to race to spawn `loft --tray` and multiple tray processes would briefly run — with orphans unregistering the panel icon a few seconds later. The singleton check now uses D-Bus `DoNotQueue` so only one instance ever owns the name.
+
 ## [0.1.1] - 2026-04-08
 
 ### Added

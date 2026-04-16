@@ -525,10 +525,17 @@ pub fn setup_nm_host() -> Result<()> {
     let wrapper_path = data_dir().join("nm-host.sh");
     std::fs::create_dir_all(wrapper_path.parent().unwrap())?;
 
-    // The wrapper runs on the HOST (Chrome launches it). When Loft is a Flatpak,
-    // use `flatpak run` to enter the sandbox; otherwise exec the binary directly.
+    // Chrome launches the wrapper inside whatever sandbox it's running in.
+    // When Chrome is itself a Flatpak (com.google.Chrome), the `flatpak` binary
+    // is not available inside its sandbox — only `flatpak-spawn` is — so we
+    // detect /.flatpak-info at runtime and escape to the host first.
     let wrapper_content = if crate::chrome::is_flatpak() {
-        "#!/bin/sh\nexec flatpak run chat.loft.Loft --native-messaging \"$@\"\n".to_string()
+        "#!/bin/sh\n\
+         if [ -f /.flatpak-info ]; then\n\
+         \texec flatpak-spawn --host flatpak run chat.loft.Loft --native-messaging \"$@\"\n\
+         else\n\
+         \texec flatpak run chat.loft.Loft --native-messaging \"$@\"\n\
+         fi\n".to_string()
     } else {
         let loft_binary = std::env::current_exe().context("Could not determine loft binary path")?;
         format!(

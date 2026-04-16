@@ -101,28 +101,34 @@ pub async fn run() -> Result<()> {
 
     let state = Arc::new(CombinedTrayState::new());
 
-    // 1. Singleton check
-    {
-        let conn = zbus::Connection::session().await?;
-        let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
-        let name = zbus::names::BusName::try_from("chat.loft.Tray")
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        if dbus.name_has_owner(name).await.unwrap_or(false) {
+    // Register D-Bus service. Request the well-known name with DoNotQueue so
+    // only one instance wins when multiple daemons autostart simultaneously and
+    // race to spawn `loft --tray`. The old approach (name_has_owner + Builder
+    // .name()) was racy: all racers saw "no owner", all built connections with
+    // .name() which queues by default, and orphan instances later unregistered
+    // the panel icon when their empty-services timeout fired.
+    let service = CombinedTrayService {
+        state: Arc::clone(&state),
+    };
+    let conn = zbus::connection::Builder::session()?
+        .serve_at("/chat/loft/Tray", service)?
+        .build()
+        .await
+        .context("Failed to build combined tray D-Bus connection")?;
+
+    let reply = conn
+        .request_name_with_flags(
+            "chat.loft.Tray",
+            zbus::fdo::RequestNameFlags::DoNotQueue.into(),
+        )
+        .await?;
+    match reply {
+        zbus::fdo::RequestNameReply::PrimaryOwner | zbus::fdo::RequestNameReply::AlreadyOwner => {}
+        _ => {
             tracing::info!("Combined tray already running, exiting");
             return Ok(());
         }
     }
-
-    // 2. Register D-Bus service
-    let service = CombinedTrayService {
-        state: Arc::clone(&state),
-    };
-    let _conn = zbus::connection::Builder::session()?
-        .name("chat.loft.Tray")?
-        .serve_at("/chat/loft/Tray", service)?
-        .build()
-        .await
-        .context("Failed to register combined tray D-Bus service")?;
 
     tracing::info!("Combined tray D-Bus service registered");
 
