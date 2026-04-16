@@ -739,6 +739,14 @@ export default class LoftShellHelper extends Extension {
                 if (win) {
                     if (win.minimized)
                         win.unminimize();
+                    // Pull the window onto the current workspace before
+                    // activating. Otherwise `activate()` triggers GNOME's
+                    // focus-stealing-prevention (the window gets marked as
+                    // demands_attention and the user sees an "X is ready"
+                    // notification instead of a workspace switch).
+                    const currentWs = global.workspace_manager.get_active_workspace();
+                    if (win.get_workspace() !== currentWs)
+                        win.change_workspace(currentWs);
                     win.activate(global.get_current_time());
                     invocation.return_value(GLib.Variant.new('(b)', [true]));
                 } else {
