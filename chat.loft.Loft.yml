@@ -12,12 +12,13 @@ finish-args:
   - --socket=wayland
   - --device=dri
   - --share=network
-  - --socket=pulseaudio
   - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.kde.KWin
   - --talk-name=org.freedesktop.Notifications
   - --own-name=chat.loft.*
   - --talk-name=org.freedesktop.Flatpak
   - --talk-name=org.freedesktop.portal.Desktop
+  - --talk-name=org.gnome.SessionManager
   - --filesystem=home
 
 build-options:

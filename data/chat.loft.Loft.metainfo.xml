@@ -72,6 +72,20 @@
   </screenshots>
 
   <releases>
+    <release version="0.1.2" date="2026-04-16">
+      <description>
+        <ul>
+          <li>The panel/tray icon now reliably shows up at login when multiple services autostart.</li>
+          <li>Hide-to-tray from the Loft titlebar now works when Loft and Chrome are both installed as Flatpaks.</li>
+          <li>Clicking a service from a different workspace brings its window to you, instead of showing a "ready" notification and throwing you back to the original workspace.</li>
+          <li>The dock now shows a proper icon for each service (Messenger, WhatsApp, Slack, Telegram) instead of a single Chrome icon. Alt-tabbing to a service also correctly raises its window.</li>
+          <li>Messenger notifications now include emoji that were part of the message.</li>
+          <li>The Loft titlebar slides in smoothly on Telegram instead of stuttering.</li>
+          <li>Links to Facebook itself (profiles, posts, photos…) inside a Messenger conversation now open in your default browser instead of replacing the conversation.</li>
+          <li>Logging out with Loft services running no longer produces "Chrome has crashed" notifications on your next login.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.1" date="2026-04-08">
       <description>
         <ul>

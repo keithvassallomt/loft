@@ -5,17 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2026-04-16
+## [0.1.2] - 2026-04-16
 
 ### Fixed
 
-- Native messaging no longer silently fails when both Loft and Chrome are Flatpak installs. The NM wrapper script now detects when it's running inside a sandbox (via `/.flatpak-info`) and uses `flatpak-spawn --host` to escape — without this, the `flatpak` command isn't available inside Chrome's sandbox and the titlebar Hide button, DOM-based notifications, and other extension-to-daemon messaging all fail silently.
-- The combined tray panel icon now appears reliably at login. When multiple services autostart simultaneously, they all used to race to spawn `loft --tray` and multiple tray processes would briefly run — with orphans unregistering the panel icon a few seconds later. The singleton check now uses D-Bus `DoNotQueue` so only one instance ever owns the name.
-- Showing a hidden service from a different workspace now pulls the window onto your current workspace, instead of triggering GNOME's focus-stealing-prevention and showing an "X is ready" notification that jumps you to the old workspace when clicked.
-- The GNOME dock now shows one icon per service (Messenger, WhatsApp, Slack, Telegram) instead of a single Chrome icon for all of them, when Chrome is installed as a Flatpak. Chrome Flatpak on Wayland identifies every window as `com.google.Chrome` regardless of `--app=`, so GNOME would group them all under Chrome's icon. The shell extension now re-maps these windows to their per-service `.desktop` file and also hides the Chrome app from the dock when its only open windows are Loft's. Added `StartupWMClass` to Loft's generated Chrome `.desktop` files so that native matching also works.
-- Messenger desktop notifications now include inline emoji in the message body. Messenger renders custom emoji as `<img>` elements interleaved with text, and the previous extractor took only the first text node and stopped — so any emoji after the first word was silently dropped.
-- The Loft titlebar no longer stutters on Telegram when it slides in or out. Animating the app root's height triggered a full re-layout of Telegram's virtualised chat list on each frame; the titlebar now overlays the top 36px of the Telegram window during hover instead of reflowing the whole app.
-- Clicking a link to `facebook.com` inside a Messenger conversation (a profile, post, photo, etc.) now opens it in your default browser instead of replacing the Messenger page. Previously the same-origin link was treated as internal navigation; Messenger is now scoped to `/messages/*` so anything else on Facebook is external.
+- The panel/tray icon now reliably shows up at login when you have multiple services set to autostart.
+- Hide-to-tray from the Loft titlebar now works when Loft and Chrome are both installed as Flatpaks.
+- Clicking a service from a different workspace brings its window to you, instead of showing a "X is ready" notification and throwing you back to the workspace the window was on.
+- The dock now shows a proper icon for each service (Messenger, WhatsApp, Slack, Telegram) instead of lumping them all under a single Chrome icon. Alt-tabbing to a service also correctly raises its window.
+- Messenger notifications now include emoji that were part of the message (previously, anything after the first word, if it contained an emoji, was dropped from the notification body).
+- The Loft titlebar slides in smoothly on Telegram instead of stuttering.
+- Links to Facebook itself (profiles, posts, photos…) inside a Messenger conversation now open in your default browser instead of replacing the conversation window.
+- Logging out with Loft services running no longer produces "Chrome has crashed" notifications on your next login. Loft now registers with GNOME's session manager and shuts Chrome down cleanly before the Wayland session tears down.
 
 ## [0.1.1] - 2026-04-08
 

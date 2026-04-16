@@ -280,6 +280,11 @@ async fn handle_relay_connection(
                             Ordering::Relaxed,
                         ).is_ok() {
                             tracing::info!("Start-minimized: hiding window immediately");
+                            // Chrome's Wayland surface is still coming up here;
+                            // minimizing it from the shell side on top of the
+                            // Chrome-extension minimize SIGTRAPs it. Let the
+                            // Chrome extension handle this one alone.
+                            state.skip_shell_hide_once.store(true, Ordering::Relaxed);
                             let _ = state.cmd_tx.send(DaemonMessage::HideWindow);
                             state.visible.store(false, Ordering::Relaxed);
                         } else {

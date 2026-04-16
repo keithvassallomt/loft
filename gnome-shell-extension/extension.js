@@ -1,10 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Loft Shell Helper — window management and panel icons for Loft services.
-//
-// 1. Exposes a D-Bus interface so the Loft daemon can focus/hide Chrome
-//    windows without triggering GNOME's focus-stealing prevention.
-// 2. Hides minimized Loft windows from alt-tab, overview, and the dock.
-// 3. Provides native GNOME panel icons as an alternative to SNI tray icons.
+// Loft Shell Helper — D-Bus + shell integration for the Loft daemon.
 
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -23,10 +18,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 const DBUS_NAME = 'chat.loft.ShellHelper';
 const DBUS_PATH = '/chat/loft/ShellHelper';
 
-// WM_CLASS values for Loft-managed Chrome app windows.
 // Chrome in --app= mode sets WM_CLASS to "chrome-<sanitised_url>-<profile>".
-// Stored as an array at module scope (no object instantiation) and converted
-// to a Set instance property in enable() for O(1) lookups.
 const LOFT_WM_CLASS_LIST = [
     'chrome-web.whatsapp.com__-Default',
     'chrome-facebook.com__messages_-Default',
@@ -83,11 +75,16 @@ const DBUS_IFACE = `<node>
   </interface>
 </node>`;
 
-// Save original prototypes for clean restore on disable
+// Saved originals — restored in disable().
 const _origIsOverviewWindow = Workspace.prototype._isOverviewWindow;
 const _origAppSwitcherInit = AppSwitcherPopup.prototype._init;
+const _origAppSwitcherInitialSelection = AppSwitcherPopup.prototype._initialSelection;
 const _origGetRunning = Shell.AppSystem.prototype.get_running;
 const _origGetWindowApp = Shell.WindowTracker.prototype.get_window_app;
+const _origGetFocusApp = Shell.WindowTracker.prototype.get_focus_app;
+const _origAppGetWindows = Shell.App.prototype.get_windows;
+const _origAppActivate = Shell.App.prototype.activate;
+const _origAppActivateWindow = Shell.App.prototype.activate_window;
 
 function _isLoftWindow(win, wmClasses) {
     let meta = win;
@@ -104,21 +101,14 @@ function _isMinimizedLoftWindow(win, wmClasses) {
 
 export default class LoftShellHelper extends Extension {
     enable() {
-        // Build the WM_CLASS lookup Set as an instance property (not module scope)
         this._loftWmClasses = new Set(LOFT_WM_CLASS_LIST);
-
-        // Panel icon registry: service name → { indicator, badge, dndItem, showHideItem, wmClass }
         this._panelIcons = new Map();
-        // Combined icon state
         this._combinedIndicator = null;
-        this._combinedServices = new Map(); // name → { displayName, visible, badge, dnd, wmClass }
+        this._combinedServices = new Map();
         this._combinedWatchId = null;
-
-        // Pending dash-rebuild timeouts (must be cancelled in disable)
         this._pendingDashTimeouts = new Set();
 
-        // --- D-Bus interface for window focus/hide + panel icons ---
-
+        // D-Bus interface — window focus/hide + panel icon management.
         const nodeInfo = Gio.DBusNodeInfo.new_for_xml(DBUS_IFACE);
         this._dbusId = Gio.DBus.session.register_object(
             DBUS_PATH,
@@ -137,30 +127,52 @@ export default class LoftShellHelper extends Extension {
             null, null, null
         );
 
-        // --- Hide minimized Loft windows from alt-tab, overview, and dock ---
-
-        // Capture the instance reference for use in patched prototypes
+        // Hide minimized Loft windows from alt-tab, overview, and dock.
         const wmClasses = this._loftWmClasses;
 
-        // Alt-Tab: AppSwitcherPopup._init builds the app/window list.
-        // After the original _init runs, filter out minimized Loft windows
-        // from each app's cachedWindows, and remove apps with no remaining windows.
+        // Alt-tab: drop minimized Loft windows from the switcher, and drop
+        // apps that have nothing else to show. Also correct the default
+        // selection when the currently focused window is a Loft service —
+        // Mutter's focus-app property still points at com.google.Chrome
+        // (which we've hidden from the running list), so the switcher
+        // defaults to index 0, which happens to be the Loft app itself.
         AppSwitcherPopup.prototype._init = function() {
             _origAppSwitcherInit.call(this);
-
-            // Filter minimized Loft windows from each app entry
             for (const item of [...this._items]) {
                 const before = item.cachedWindows.length;
                 item.cachedWindows = item.cachedWindows.filter(
                     w => !_isMinimizedLoftWindow(w, wmClasses)
                 );
-                // If all windows were filtered out, remove this app entry
                 if (before > 0 && item.cachedWindows.length === 0)
                     this._switcherList._removeIcon(item.app);
             }
         };
 
-        // Overview: Patch _isOverviewWindow to exclude minimized Loft windows
+        // Default selection: the base class picks index 1 ("next most recent
+        // app"), which relies on the MRU sort putting the currently focused
+        // app at index 0. For Loft windows, Mutter's internal focus mapping
+        // still points at com.google.Chrome (not in the running list), so
+        // that sort can put the Loft service anywhere — and the default
+        // selection lands on the focused Loft app itself. Rewrite the
+        // selection explicitly: current focused app + 1, wrap around.
+        AppSwitcherPopup.prototype._initialSelection = function(backward, binding) {
+            const focus = global.display.get_focus_window?.();
+            const focusWc = focus?.get_wm_class?.() ?? '';
+            if (focusWc && wmClasses.has(focusWc) && this._items.length > 1) {
+                const targetId = `${focusWc}.desktop`;
+                const currentIdx = this._items.findIndex(
+                    i => i.app?.get_id?.() === targetId
+                );
+                if (currentIdx >= 0) {
+                    if (backward || binding === 'switch-applications-backward')
+                        return (currentIdx - 1 + this._items.length) % this._items.length;
+                    return (currentIdx + 1) % this._items.length;
+                }
+            }
+            return _origAppSwitcherInitialSelection.call(this, backward, binding);
+        };
+
+        // Activities overview: same treatment.
         Workspace.prototype._isOverviewWindow = function(win) {
             const show = _origIsOverviewWindow.call(this, win);
             if (!show)
@@ -173,14 +185,11 @@ export default class LoftShellHelper extends Extension {
             return !meta.minimized;
         };
 
-        // Dock: Patch get_running() to:
-        //  (1) hide Loft apps whose windows are all minimized (hidden to tray),
-        //  (2) when Chrome is Flatpak/Wayland, com.google.Chrome claims
-        //      ownership of Loft Chrome windows at the Mutter/WindowTracker
-        //      level, so the dash shows one Chrome icon instead of per-service
-        //      icons. Remove Chrome from the list when its only visible
-        //      windows are Loft's, and inject the per-service .desktop apps
-        //      instead — one icon per service, with the correct icon.
+        // Dock: show one icon per Loft service instead of a single Chrome
+        // icon. Flatpak Chrome on Wayland reports app_id=com.google.Chrome
+        // for every PWA, so Mutter groups every Loft window under Chrome's
+        // .desktop. Swap Chrome out for the per-service apps whenever Chrome
+        // has no non-Loft windows.
         const appSystem_running = Shell.AppSystem.get_default();
         const CHROME_APP_IDS = new Set([
             'com.google.Chrome.desktop',
@@ -189,7 +198,6 @@ export default class LoftShellHelper extends Extension {
         Shell.AppSystem.prototype.get_running = function() {
             const apps = _origGetRunning.call(this);
 
-            // Collect Loft windows grouped by wm_class (one service = one wm_class)
             const loftWinsByClass = new Map();
             for (const actor of global.get_window_actors()) {
                 const w = actor.meta_window;
@@ -210,7 +218,6 @@ export default class LoftShellHelper extends Extension {
                 const windows = app.get_windows();
 
                 if (CHROME_APP_IDS.has(id)) {
-                    // Keep Chrome only if it has at least one non-Loft window.
                     const nonLoft = windows.filter(
                         w => !wmClasses.has(w.get_wm_class?.() ?? '')
                     );
@@ -218,7 +225,7 @@ export default class LoftShellHelper extends Extension {
                         continue;
                 }
 
-                // Original behaviour: hide Loft apps whose windows are all minimized.
+                // Don't show Loft apps while they're hidden to tray.
                 if (windows.length > 0 &&
                     windows.every(w => _isMinimizedLoftWindow(w, wmClasses))) {
                     continue;
@@ -228,8 +235,6 @@ export default class LoftShellHelper extends Extension {
                 result.push(app);
             }
 
-            // Inject a per-service app for each Loft wm_class that has at
-            // least one non-minimized window.
             for (const [wc, wins] of loftWinsByClass) {
                 if (wins.every(w => w.minimized))
                     continue;
@@ -246,13 +251,33 @@ export default class LoftShellHelper extends Extension {
             return result;
         };
 
-        // Window→App mapping: re-map Loft Chrome windows to the per-service
-        // .desktop file. Chrome Flatpak on Wayland forces app_id to
-        // "com.google.Chrome" regardless of --app=, so GNOME would otherwise
-        // match every Loft window to Chrome's own .desktop (wrong icon in
-        // the dock, wrong grouping in alt-tab). Native Chrome sets a per-app
-        // app_id from the URL and doesn't need this patch, but this is safe
-        // for native too.
+        // Make each service's app report its own windows (and Chrome stop
+        // claiming them). Alt-tab and dock clicks raise windows via
+        // app.get_windows()[0], which is empty on the Loft apps until we
+        // route the Chrome windows over.
+        Shell.App.prototype.get_windows = function() {
+            const id = this.get_id?.() ?? '';
+            if (CHROME_APP_IDS.has(id)) {
+                return _origAppGetWindows.call(this).filter(
+                    w => !wmClasses.has(w.get_wm_class?.() ?? '')
+                );
+            }
+            const maybeWmClass = id.replace(/\.desktop$/, '');
+            if (wmClasses.has(maybeWmClass)) {
+                const out = [];
+                for (const actor of global.get_window_actors()) {
+                    const w = actor.meta_window;
+                    if (w.get_window_type?.() !== Meta.WindowType.NORMAL)
+                        continue;
+                    if (w.get_wm_class?.() === maybeWmClass)
+                        out.push(w);
+                }
+                return out;
+            }
+            return _origAppGetWindows.call(this);
+        };
+
+        // Route Loft windows to their own app instead of com.google.Chrome.
         const appSystem = Shell.AppSystem.get_default();
         Shell.WindowTracker.prototype.get_window_app = function(metaWindow) {
             const wmClass = metaWindow?.get_wm_class?.() ?? '';
@@ -264,9 +289,59 @@ export default class LoftShellHelper extends Extension {
             return _origGetWindowApp.call(this, metaWindow);
         };
 
-        // Trigger a dock rebuild when a Loft window is minimized/unminimized,
-        // since the app's running state doesn't actually change.
-        // Use connectObject() for automatic cleanup via disconnectObject() in disable().
+        // Focus-tracking uses this to decide "what app is in front" — alt-tab
+        // needs it to pick the next entry correctly.
+        Shell.WindowTracker.prototype.get_focus_app = function() {
+            const focus = global.display.get_focus_window?.();
+            const wc = focus?.get_wm_class?.() ?? '';
+            if (wc && wmClasses.has(wc)) {
+                const app = appSystem.lookup_app(`${wc}.desktop`);
+                if (app)
+                    return app;
+            }
+            return _origGetFocusApp.call(this);
+        };
+
+        // Shell.App.activate_window() / activate() live in C and consult
+        // the C-side window list to pick the window to raise. That list
+        // still maps everything to com.google.Chrome, so alt-tab / dash
+        // clicks silently no-op for Loft apps. Intercept here and raise
+        // the window directly.
+        const _loftActivateWindow = (w, time) => {
+            if (!w) return;
+            const currentWs = global.workspace_manager.get_active_workspace();
+            if (w.get_workspace() !== currentWs)
+                w.change_workspace(currentWs);
+            if (w.minimized)
+                w.unminimize();
+            w.activate(time ?? global.get_current_time());
+        };
+
+        Shell.App.prototype.activate_window = function(window, timestamp) {
+            const id = this.get_id?.() ?? '';
+            const maybeWmClass = id.replace(/\.desktop$/, '');
+            if (wmClasses.has(maybeWmClass)) {
+                _loftActivateWindow(window, timestamp);
+                return;
+            }
+            return _origAppActivateWindow.call(this, window, timestamp);
+        };
+
+        Shell.App.prototype.activate = function() {
+            const id = this.get_id?.() ?? '';
+            const maybeWmClass = id.replace(/\.desktop$/, '');
+            if (wmClasses.has(maybeWmClass)) {
+                const windows = this.get_windows();
+                if (windows.length > 0) {
+                    _loftActivateWindow(windows[0]);
+                    return;
+                }
+            }
+            return _origAppActivate.call(this);
+        };
+
+        // A minimize/unminimize doesn't change app running state, so the
+        // dash won't rebuild on its own — nudge it.
         global.window_manager.connectObject(
             'minimize', (wm, actor) => this._notifyDashIfLoft(actor.meta_window),
             'unminimize', (wm, actor) => this._notifyDashIfLoft(actor.meta_window),
@@ -275,31 +350,29 @@ export default class LoftShellHelper extends Extension {
     }
 
     disable() {
-        // Cancel all pending dash-rebuild timeouts
         for (const id of this._pendingDashTimeouts)
             GLib.Source.remove(id);
         this._pendingDashTimeouts = null;
 
-        // Destroy combined icon if present
         this._unregisterCombined();
         this._combinedServices = null;
-        this._combinedRowSignals = null;
 
-        // Destroy all panel icons and stop name watches
         for (const name of [...this._panelIcons.keys()])
             this._unregisterService(name);
         this._panelIcons = null;
 
-        // Restore original prototypes
         Workspace.prototype._isOverviewWindow = _origIsOverviewWindow;
         AppSwitcherPopup.prototype._init = _origAppSwitcherInit;
+        AppSwitcherPopup.prototype._initialSelection = _origAppSwitcherInitialSelection;
         Shell.AppSystem.prototype.get_running = _origGetRunning;
         Shell.WindowTracker.prototype.get_window_app = _origGetWindowApp;
+        Shell.WindowTracker.prototype.get_focus_app = _origGetFocusApp;
+        Shell.App.prototype.get_windows = _origAppGetWindows;
+        Shell.App.prototype.activate = _origAppActivate;
+        Shell.App.prototype.activate_window = _origAppActivateWindow;
 
-        // Disconnect minimize/unminimize handlers
         global.window_manager.disconnectObject(this);
 
-        // Release D-Bus
         if (this._dbusId) {
             Gio.DBus.session.unregister_object(this._dbusId);
             this._dbusId = null;
@@ -309,16 +382,10 @@ export default class LoftShellHelper extends Extension {
             this._nameId = null;
         }
 
-        // Release WM_CLASS set
         this._loftWmClasses = null;
     }
 
-    // ================================================================
-    // Panel icon management
-    // ================================================================
-
     _registerService(name, displayName, iconName, wmClass) {
-        // Remove existing indicator for this service if any
         if (this._panelIcons.has(name)) {
             this._panelIcons.get(name).indicator?.destroy();
             this._panelIcons.delete(name);
@@ -344,9 +411,9 @@ export default class LoftShellHelper extends Extension {
         });
         box.add_child(icon);
 
-        // Small red dot at bottom-right of the icon.
-        // BinLayout alignment is unreliable for overlay positioning, so we
-        // track the icon's actual allocation and set the dot position explicitly.
+        // Unread dot and DND dash overlay the icon's bottom-right corner.
+        // BinLayout alignment is unreliable for overlays — position them
+        // manually from the icon's allocation instead.
         const DOT_SIZE = 6;
         const badge = new St.Widget({
             style: `background-color: #e01b24; border-radius: ${DOT_SIZE / 2}px; width: ${DOT_SIZE}px; height: ${DOT_SIZE}px;`,
@@ -354,7 +421,6 @@ export default class LoftShellHelper extends Extension {
         });
         box.add_child(badge);
 
-        // Small grey dash at bottom-right for DND indicator (replaces badge dot).
         const DASH_W = 8;
         const DASH_H = 2;
         const dndBadge = new St.Widget({
@@ -363,7 +429,7 @@ export default class LoftShellHelper extends Extension {
         });
         box.add_child(dndBadge);
 
-        const iconAllocId = icon.connect('notify::allocation', () => {
+        icon.connect('notify::allocation', () => {
             badge.set_position(
                 icon.x + icon.width - DOT_SIZE,
                 icon.y + icon.height - DOT_SIZE
@@ -374,14 +440,8 @@ export default class LoftShellHelper extends Extension {
             );
         });
 
-        // --- Popup menu ---
-
-        // Derive D-Bus name from the service name for calling daemon methods.
-        // Service D-Bus names: "WhatsApp", "Messenger" — capitalize first letter,
-        // but these are passed via wmClass mapping. Use a lookup instead.
         const dbusServiceName = this._dbusNameForService(name);
 
-        // Show / Hide toggle
         const showHideItem = new PopupMenu.PopupMenuItem('Show');
         showHideItem.connect('activate', () => {
             this._callDaemonMethod(dbusServiceName, 'Toggle');
@@ -390,16 +450,14 @@ export default class LoftShellHelper extends Extension {
 
         indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        // Do Not Disturb toggle
         const dndItem = new PopupMenu.PopupSwitchMenuItem('Do Not Disturb', false);
-        const dndItemToggledId = dndItem.connect('toggled', (_item, state) => {
+        dndItem.connect('toggled', (_item, state) => {
             this._callDaemonMethod(dbusServiceName, 'SetDnd', '(b)', [state]);
         });
         indicator.menu.addMenuItem(dndItem);
 
         indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        // Quit
         const quitItem = new PopupMenu.PopupMenuItem('Quit');
         quitItem.connect('activate', () => {
             this._callDaemonMethod(dbusServiceName, 'Quit');
@@ -408,9 +466,9 @@ export default class LoftShellHelper extends Extension {
 
         Main.panel.addToStatusArea(`loft-${name}`, indicator);
 
-        // Watch the daemon's D-Bus name — remove panel icon if daemon exits.
-        // name_vanished fires immediately if the name isn't on the bus yet,
-        // so track whether we've seen it appear first.
+        // If the daemon vanishes, drop our panel icon with it.
+        // name_vanished fires immediately when the name doesn't exist yet,
+        // so only react once we've seen it appear.
         const daemonBusName = `chat.loft.${dbusServiceName}`;
         let nameAppeared = false;
         const watchId = Gio.bus_watch_name(
@@ -427,11 +485,9 @@ export default class LoftShellHelper extends Extension {
         this._panelIcons.set(name, {
             indicator,
             icon,
-            iconAllocId,
             badge,
             dndBadge,
             dndItem,
-            dndItemToggledId,
             showHideItem,
             wmClass,
             dbusServiceName,
@@ -446,10 +502,6 @@ export default class LoftShellHelper extends Extension {
         if (!entry) return;
         if (entry.watchId)
             Gio.bus_unwatch_name(entry.watchId);
-        if (entry.iconAllocId && entry.icon)
-            entry.icon.disconnect(entry.iconAllocId);
-        if (entry.dndItemToggledId && entry.dndItem)
-            entry.dndItem.disconnect(entry.dndItemToggledId);
         entry.indicator?.destroy();
         this._panelIcons.delete(name);
     }
@@ -458,7 +510,6 @@ export default class LoftShellHelper extends Extension {
         const entry = this._panelIcons.get(name);
         if (!entry) return;
         entry.badgeCount = count;
-        // DND suppresses the badge — the dash replaces it
         entry.badge.visible = count > 0 && !entry.dndEnabled;
     }
 
@@ -468,7 +519,6 @@ export default class LoftShellHelper extends Extension {
         entry.dndEnabled = enabled;
         entry.dndItem.setToggleState(enabled);
         entry.dndBadge.visible = enabled;
-        // Hide badge when DND is on, restore when off
         entry.badge.visible = entry.badgeCount > 0 && !enabled;
     }
 
@@ -478,7 +528,6 @@ export default class LoftShellHelper extends Extension {
         entry.showHideItem.label.text = visible ? 'Hide' : 'Show';
     }
 
-    // Map service name → D-Bus name (e.g. "whatsapp" → "WhatsApp")
     _dbusNameForService(name) {
         const map = {
             'whatsapp': 'WhatsApp',
@@ -489,7 +538,6 @@ export default class LoftShellHelper extends Extension {
         return map[name] || name;
     }
 
-    // Fire-and-forget D-Bus call to the per-service daemon
     _callDaemonMethod(dbusName, method, signature, args) {
         const busName = `chat.loft.${dbusName}`;
         const objPath = `/chat/loft/${dbusName}`;
@@ -503,23 +551,18 @@ export default class LoftShellHelper extends Extension {
             Gio.DBus.session.call(
                 busName, objPath, iface, method,
                 params,
-                null,       // reply type
+                null,
                 Gio.DBusCallFlags.NO_AUTO_START,
-                -1,         // timeout (default)
-                null,       // cancellable
-                null        // callback (fire-and-forget)
+                -1,
+                null,
+                null
             );
         } catch (e) {
             console.error(`Loft: Failed to call ${busName}.${method}: ${e}`);
         }
     }
 
-    // ================================================================
-    // Combined panel icon management
-    // ================================================================
-
     _registerCombined(iconName) {
-        // Remove existing combined indicator if any
         if (this._combinedIndicator) {
             this._combinedIndicator.destroy();
             this._combinedIndicator = null;
@@ -550,7 +593,6 @@ export default class LoftShellHelper extends Extension {
         });
         box.add_child(icon);
 
-        // Badge dot
         const DOT_SIZE = 6;
         const badge = new St.Widget({
             style: `background-color: #e01b24; border-radius: ${DOT_SIZE / 2}px; width: ${DOT_SIZE}px; height: ${DOT_SIZE}px;`,
@@ -558,7 +600,6 @@ export default class LoftShellHelper extends Extension {
         });
         box.add_child(badge);
 
-        // DND dash
         const DASH_W = 8;
         const DASH_H = 2;
         const dndBadge = new St.Widget({
@@ -567,7 +608,7 @@ export default class LoftShellHelper extends Extension {
         });
         box.add_child(dndBadge);
 
-        this._combinedIconAllocId = icon.connect('notify::allocation', () => {
+        icon.connect('notify::allocation', () => {
             badge.set_position(
                 icon.x + icon.width - DOT_SIZE,
                 icon.y + icon.height - DOT_SIZE
@@ -584,9 +625,8 @@ export default class LoftShellHelper extends Extension {
         this._combinedIcon = icon;
         this._combinedBadge = badge;
         this._combinedDndBadge = dndBadge;
-        this._combinedRowSignals = [];
 
-        // Watch the combined tray D-Bus name — destroy if it exits
+        // Drop the combined icon if the tray process exits.
         let nameAppeared = false;
         this._combinedWatchId = Gio.bus_watch_name(
             Gio.BusType.SESSION,
@@ -599,7 +639,6 @@ export default class LoftShellHelper extends Extension {
             }
         );
 
-        // Build the menu (initially empty)
         this._rebuildCombinedMenu();
     }
 
@@ -608,28 +647,12 @@ export default class LoftShellHelper extends Extension {
             Gio.bus_unwatch_name(this._combinedWatchId);
             this._combinedWatchId = null;
         }
-        this._disconnectCombinedRowSignals();
-        if (this._combinedIconAllocId && this._combinedIcon) {
-            this._combinedIcon.disconnect(this._combinedIconAllocId);
-            this._combinedIconAllocId = null;
-        }
-        this._combinedIcon?.destroy();
-        this._combinedIcon = null;
-        this._combinedBadge?.destroy();
-        this._combinedBadge = null;
-        this._combinedDndBadge?.destroy();
-        this._combinedDndBadge = null;
         this._combinedIndicator?.destroy();
         this._combinedIndicator = null;
+        this._combinedIcon = null;
+        this._combinedBadge = null;
+        this._combinedDndBadge = null;
         this._combinedServices?.clear();
-    }
-
-    _disconnectCombinedRowSignals() {
-        if (!this._combinedRowSignals) return;
-        for (const [obj, id] of this._combinedRowSignals) {
-            try { obj.disconnect(id); } catch (_e) {}
-        }
-        this._combinedRowSignals = [];
     }
 
     _updateCombinedService(name, displayName, visible, badge, dnd, wmClass) {
@@ -640,7 +663,7 @@ export default class LoftShellHelper extends Extension {
             existing.badge === badge &&
             existing.dnd === dnd &&
             existing.wmClass === wmClass) {
-            return; // No change, skip menu rebuild
+            return;
         }
         this._combinedServices.set(name, { displayName, visible, badge, dnd, wmClass });
         this._rebuildCombinedMenu();
@@ -657,11 +680,8 @@ export default class LoftShellHelper extends Extension {
         if (!this._combinedIndicator) return;
 
         const menu = this._combinedIndicator.menu;
-        this._disconnectCombinedRowSignals();
         menu.removeAll();
 
-        // "Loft Settings..." opens the manager GUI via its .desktop file,
-        // which works for both native and Flatpak installs.
         const settingsItem = new PopupMenu.PopupMenuItem('Loft Settings\u2026');
         settingsItem.connect('activate', () => {
             const appInfo = Gio.DesktopAppInfo.new('chat.loft.Loft.desktop')
@@ -720,10 +740,10 @@ export default class LoftShellHelper extends Extension {
                 style: 'margin-left: 12px; padding: 2px 6px;',
                 can_focus: true,
             });
-            this._combinedRowSignals.push([showHideBtn, showHideBtn.connect('clicked', () => {
+            showHideBtn.connect('clicked', () => {
                 this._callDaemonMethod(dbusName, 'Toggle');
                 menu.close();
-            })]);
+            });
             row.add_child(showHideBtn);
 
             // DND icon toggle
@@ -734,9 +754,9 @@ export default class LoftShellHelper extends Extension {
                 style: `margin-left: 4px; padding: 2px 6px;${svc.dnd ? ' opacity: 128;' : ''}`,
                 can_focus: true,
             });
-            this._combinedRowSignals.push([dndBtn, dndBtn.connect('clicked', () => {
+            dndBtn.connect('clicked', () => {
                 this._callDaemonMethod(dbusName, 'SetDnd', '(b)', [!svc.dnd]);
-            })]);
+            });
             row.add_child(dndBtn);
 
             // Quit icon button
@@ -746,10 +766,10 @@ export default class LoftShellHelper extends Extension {
                 style: 'margin-left: 4px; padding: 2px 6px;',
                 can_focus: true,
             });
-            this._combinedRowSignals.push([quitBtn, quitBtn.connect('clicked', () => {
+            quitBtn.connect('clicked', () => {
                 this._callDaemonMethod(dbusName, 'Quit');
                 menu.close();
-            })]);
+            });
             row.add_child(quitBtn);
 
             menu.addMenuItem(item);
@@ -778,10 +798,6 @@ export default class LoftShellHelper extends Extension {
         this._combinedDndBadge.visible = allDnd;
     }
 
-    // ================================================================
-    // Window management helpers
-    // ================================================================
-
     _notifyDashIfLoft(win) {
         const wmClass = win.get_wm_class?.() ?? '';
         if (!this._loftWmClasses.has(wmClass))
@@ -790,8 +806,7 @@ export default class LoftShellHelper extends Extension {
         const app = tracker.get_window_app(win);
         if (!app)
             return;
-        // Short delay to let the minimize/unminimize animation settle,
-        // then poke the app-state-changed signal so the dash rebuilds.
+        // Let the minimize animation settle before poking the dash.
         const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
             this._pendingDashTimeouts?.delete(id);
             Shell.AppSystem.get_default().emit('app-state-changed', app);
@@ -811,7 +826,6 @@ export default class LoftShellHelper extends Extension {
     }
 
     _onMethodCall(method, params, invocation) {
-        // Window management methods (take a single string: wm_class)
         if (method === 'FocusWindow' || method === 'HideWindow') {
             const [wmClass] = params.deep_unpack();
 
@@ -820,11 +834,9 @@ export default class LoftShellHelper extends Extension {
                 if (win) {
                     if (win.minimized)
                         win.unminimize();
-                    // Pull the window onto the current workspace before
-                    // activating. Otherwise `activate()` triggers GNOME's
-                    // focus-stealing-prevention (the window gets marked as
-                    // demands_attention and the user sees an "X is ready"
-                    // notification instead of a workspace switch).
+                    // Move the window to the current workspace first, so
+                    // activate() doesn't trip focus-stealing-prevention and
+                    // bounce the user to the window's old workspace.
                     const currentWs = global.workspace_manager.get_active_workspace();
                     if (win.get_workspace() !== currentWs)
                         win.change_workspace(currentWs);
@@ -845,7 +857,6 @@ export default class LoftShellHelper extends Extension {
             return;
         }
 
-        // Panel icon methods
         if (method === 'RegisterService') {
             const [name, displayName, iconName, wmClass] = params.deep_unpack();
             this._registerService(name, displayName, iconName, wmClass);

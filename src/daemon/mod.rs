@@ -7,7 +7,7 @@ pub mod messaging;
 pub mod notifications;
 pub mod tray;
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -19,6 +19,93 @@ use crate::chrome::{self, ChromeInfo};
 use crate::cli::ServiceName;
 use crate::config::{GlobalConfig, ServiceConfig, TrayBackend};
 use crate::service::{self, ServiceDefinition};
+
+/// Chrome's PID, readable from a signal handler (0 = no Chrome).
+/// A plain signed pid; we send SIGKILL to `-pid` (the process group).
+static CHROME_PID_FOR_SIGNAL: AtomicI32 = AtomicI32::new(0);
+
+/// SIGTERM/SIGINT handler: SIGKILL Chrome and exit ourselves, synchronously
+/// in signal context, before the Wayland compositor tears down. Only calls
+/// async-signal-safe functions (`kill(2)`, `_exit(2)`).
+extern "C" fn kill_chrome_on_signal(_sig: libc::c_int) {
+    let pid = CHROME_PID_FOR_SIGNAL.load(Ordering::Relaxed);
+    if pid > 0 {
+        unsafe { libc::kill(-pid, libc::SIGKILL); }
+    }
+    unsafe { libc::_exit(0); }
+}
+
+fn install_signal_killer() {
+    unsafe {
+        let mut act: libc::sigaction = std::mem::zeroed();
+        act.sa_sigaction = kill_chrome_on_signal as *const () as libc::sighandler_t;
+        act.sa_flags = 0;
+        libc::sigemptyset(&mut act.sa_mask);
+        libc::sigaction(libc::SIGTERM, &act, std::ptr::null_mut());
+        libc::sigaction(libc::SIGINT, &act, std::ptr::null_mut());
+    }
+}
+
+/// Register as an `org.gnome.SessionManager` client. At logout GNOME fires
+/// `EndSession` on our client BEFORE systemd starts SIGTERMing user scopes,
+/// which is the only reliable moment to kill the host-side Chrome before
+/// its Wayland surface disappears. On non-GNOME sessions, RegisterClient
+/// just fails and this task exits.
+async fn register_session_client() {
+    use futures_util::StreamExt;
+    let Ok(conn) = zbus::Connection::session().await else { return };
+    let Ok(sm) = zbus::Proxy::new(
+        &conn,
+        "org.gnome.SessionManager",
+        "/org/gnome/SessionManager",
+        "org.gnome.SessionManager",
+    ).await else { return };
+    let startup_id = std::env::var("DESKTOP_STARTUP_ID").unwrap_or_default();
+    let app_id = "chat.loft.Loft";
+    let client_path: zbus::zvariant::OwnedObjectPath = match sm
+        .call("RegisterClient", &(app_id, startup_id.as_str())).await {
+        Ok(p) => p,
+        Err(e) => { tracing::debug!("Not a GNOME session ({}); skipping", e); return; }
+    };
+    tracing::info!("Registered with GNOME SessionManager: {}", client_path.as_str());
+
+    let client = match zbus::Proxy::new(
+        &conn,
+        "org.gnome.SessionManager",
+        client_path.clone(),
+        "org.gnome.SessionManager.ClientPrivate",
+    ).await { Ok(p) => p, Err(_) => return };
+
+    let mut end_session = match client.receive_signal("EndSession").await {
+        Ok(s) => s, Err(_) => return
+    };
+    let mut query_end_session = match client.receive_signal("QueryEndSession").await {
+        Ok(s) => s, Err(_) => return
+    };
+
+    let kill_chrome = || {
+        let _ = std::process::Command::new("flatpak-spawn")
+            .args(["--host", "flatpak", "kill", "com.google.Chrome"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    };
+
+    loop {
+        tokio::select! {
+            Some(_) = end_session.next() => {
+                tracing::info!("GNOME EndSession — killing host Chrome");
+                kill_chrome();
+                let _: Result<(), _> = client.call("EndSessionResponse", &(true, "")).await;
+            }
+            Some(_) = query_end_session.next() => {
+                let _: Result<(), _> = client.call("EndSessionResponse", &(true, "")).await;
+            }
+            else => break,
+        }
+    }
+}
 
 /// Shared mutable state across all daemon components (D-Bus, tray, messaging).
 pub struct DaemonState {
@@ -33,6 +120,11 @@ pub struct DaemonState {
     /// When true, the messaging handler will immediately hide the window
     /// on the first `WindowShown` event (for `--minimized` startup).
     pub start_minimized: AtomicBool,
+    /// One-shot flag: skip the GNOME-shell / KWin side of the next
+    /// `HideWindow`. Set by the start-minimized handler because double-
+    /// minimizing a Chrome window (extension + shell helper) during
+    /// Chrome's Wayland surface setup reliably SIGTRAPs it.
+    pub skip_shell_hide_once: AtomicBool,
     pub show_titlebar: AtomicBool,
     pub badges_enabled: AtomicBool,
     /// Whether to use the combined tray icon instead of per-service icons.
@@ -41,6 +133,9 @@ pub struct DaemonState {
     pub tray_mode_changed: Notify,
     pub show_signal: Notify,
     pub chrome_pid: tokio::sync::Mutex<Option<u32>>,
+    /// Same value as `chrome_pid`, accessible synchronously. 0 = no pid.
+    /// Used by the SIGTERM handler so it can kill Chrome without yielding.
+    pub chrome_pid_atomic: AtomicI32,
     /// CDP pipe file descriptors (read_fd, write_fd). Closing these triggers
     /// a clean Chrome shutdown (Chrome exits on pipe EOF).
     pub cdp_pipe_fds: std::sync::Mutex<Option<(i32, i32)>>,
@@ -64,12 +159,14 @@ impl DaemonState {
             dnd: AtomicBool::new(dnd),
             quit_requested: AtomicBool::new(false),
             start_minimized: AtomicBool::new(minimized),
+            skip_shell_hide_once: AtomicBool::new(false),
             show_titlebar: AtomicBool::new(show_titlebar),
             badges_enabled: AtomicBool::new(badges_enabled),
             combine_tray: AtomicBool::new(combine_tray),
             tray_mode_changed: Notify::new(),
             show_signal: Notify::new(),
             chrome_pid: tokio::sync::Mutex::new(None),
+            chrome_pid_atomic: AtomicI32::new(0),
             cdp_pipe_fds: std::sync::Mutex::new(None),
             cmd_tx,
         }
@@ -227,6 +324,7 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
     //     (always runs — handles FocusWindow/HideWindow D-Bus calls regardless of tray backend)
     {
         let wm_class = definition.chrome_desktop_id.to_string();
+        let handler_state = Arc::clone(&state);
         let mut cmd_rx = state.cmd_tx.subscribe();
         tokio::spawn(async move {
             loop {
@@ -245,6 +343,10 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
                         }
                     }
                     Ok(messaging::DaemonMessage::HideWindow) => {
+                        if handler_state.skip_shell_hide_once.swap(false, Ordering::Relaxed) {
+                            tracing::debug!("Skipping shell-side hide (start-minimized)");
+                            continue;
+                        }
                         match gnome_shell::hide_window(&wm_class).await {
                             Ok(true) => tracing::debug!("GNOME Shell hid window"),
                             Ok(false) => tracing::debug!("GNOME Shell: window not found"),
@@ -279,21 +381,17 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
         });
     }
 
-    // 7. Set up signal handling
-    let signal_state = Arc::clone(&state);
-    tokio::spawn(async move {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("Failed to register SIGTERM handler");
-        let mut sigint =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-                .expect("Failed to register SIGINT handler");
-        tokio::select! {
-            _ = sigterm.recv() => tracing::info!("Received SIGTERM"),
-            _ = sigint.recv() => tracing::info!("Received SIGINT"),
-        }
-        signal_state.request_quit();
-    });
+    // 7. Install signal handler. SIGTERM/SIGINT synchronously kill Chrome
+    //    and exit — no graceful path on logout, because the Wayland
+    //    compositor dies milliseconds after SIGTERM and Chrome SIGTRAPs
+    //    if we let it try to tear down its surface. Tray Quit uses a
+    //    separate D-Bus path that still does graceful shutdown.
+    install_signal_killer();
+
+    // 7a. GNOME SessionManager client. Fires before systemd starts tearing
+    //     down user scopes at logout, which is our only reliable window to
+    //     kill the host-side Chrome cleanly. Silently skipped on non-GNOME.
+    tokio::spawn(register_session_client());
 
     // 8. Run Chrome lifecycle loop
     let manager = ChromeManager::new(chrome_info, definition, Arc::clone(&state));
@@ -755,6 +853,9 @@ impl ChromeManager {
             let mut child = self.spawn_chrome().await?;
             let pid = child.id();
             *self.state.chrome_pid.lock().await = pid;
+            let pid_i32 = pid.unwrap_or(0) as i32;
+            self.state.chrome_pid_atomic.store(pid_i32, Ordering::Relaxed);
+            CHROME_PID_FOR_SIGNAL.store(pid_i32, Ordering::Relaxed);
             self.state.visible.store(true, Ordering::Relaxed);
             tracing::info!("Chrome launched (pid: {:?})", pid);
 
@@ -781,6 +882,8 @@ impl ChromeManager {
                 }
             }
             *self.state.chrome_pid.lock().await = None;
+            self.state.chrome_pid_atomic.store(0, Ordering::Relaxed);
+            CHROME_PID_FOR_SIGNAL.store(0, Ordering::Relaxed);
             // Clear pipe fds (Chrome already exited, fds are stale)
             if let Ok(mut guard) = self.state.cdp_pipe_fds.lock() {
                 if let Some((read_fd, write_fd)) = guard.take() {
