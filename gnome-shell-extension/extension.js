@@ -647,11 +647,14 @@ export default class LoftShellHelper extends Extension {
             Gio.bus_unwatch_name(this._combinedWatchId);
             this._combinedWatchId = null;
         }
+        this._combinedDndBadge?.destroy();
+        this._combinedDndBadge = null;
+        this._combinedBadge?.destroy();
+        this._combinedBadge = null;
+        this._combinedIcon?.destroy();
+        this._combinedIcon = null;
         this._combinedIndicator?.destroy();
         this._combinedIndicator = null;
-        this._combinedIcon = null;
-        this._combinedBadge = null;
-        this._combinedDndBadge = null;
         this._combinedServices?.clear();
     }
 

@@ -63,9 +63,20 @@ update-flatpak-submission output=("$HOME/Downloads/chat.loft.Loft"):
 
 # Package the GNOME Shell extension as a zip for EGO submission
 package-gnome-extension output="$HOME/Downloads":
-    @mkdir -p {{ output }}
-    cd gnome-shell-extension && zip -r {{ output }}/loft-shell-helper@loft.chat.zip extension.js metadata.json icons/
-    @echo "Extension zip: {{ output }}/loft-shell-helper@loft.chat.zip"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "{{ output }}"
+    zip_path="{{ output }}/loft-shell-helper@loft.chat.zip"
+    (cd gnome-shell-extension && zip -r "$zip_path" extension.js metadata.json icons/)
+    echo "Extension zip: $zip_path"
+
+    echo "==> Running EGO static analysis (shexli)..."
+    venv="target/shexli-venv"
+    if [ ! -x "$venv/bin/shexli" ]; then
+        python3 -m venv "$venv"
+    fi
+    "$venv/bin/pip" install -q -U shexli
+    "$venv/bin/shexli" "$zip_path"
 
 # Install build tools (cargo-generate-rpm, cargo-deb, appimagetool)
 setup:
