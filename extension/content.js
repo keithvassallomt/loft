@@ -213,11 +213,18 @@
       return pos === 'fixed' || pos === 'absolute';
     }
 
+    // Telegram's virtualised chat list re-lays out the entire app whenever
+    // the root's height changes, which makes the titlebar show/hide visibly
+    // stutter.  For Telegram we let the titlebar overlay the top 36px of
+    // content (a transient hover element) instead of reflowing the app.
+    const shiftRoot = service !== "telegram";
+
     function showBar() {
       if (hideTimeout) { clearTimeout(hideTimeout); hideTimeout = null; }
       if (barVisible || !titlebarEnabled) return;
       barVisible = true;
       host.style.top = '0';
+      if (!shiftRoot) return;
       const root = getAppRoot();
       if (root) {
         if (isFixedOrAbsolute(root)) {
@@ -235,6 +242,7 @@
       if (!barVisible) return;
       barVisible = false;
       host.style.top = '-' + TITLEBAR_HEIGHT + 'px';
+      if (!shiftRoot) return;
       const root = getAppRoot();
       if (root) {
         if (isFixedOrAbsolute(root)) {
@@ -875,35 +883,35 @@
         }
       }
 
-      // Message preview: first text node after the "Unread message:" marker
+      // Message preview: collect text and inline emoji images after the
+      // "Unread message:" marker, in document order.  Messenger renders
+      // custom emoji as <img alt="..."> inline with text, so a text-only
+      // walker stops at the first text node and drops trailing emoji.
+      // Walking elements-and-text together preserves the full message.
       let messagePreview = "";
       const previewWalker = document.createTreeWalker(
         anchor,
-        NodeFilter.SHOW_TEXT,
+        NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
         null
       );
       let foundMarker = false;
       let previewNode;
       while ((previewNode = previewWalker.nextNode())) {
-        if (foundMarker) {
+        if (previewNode.nodeType === Node.TEXT_NODE) {
           const text = previewNode.textContent.trim();
-          if (text && text !== senderName && text !== "·"
-              && !/^\d+[hms]$/.test(text) && !/^Active\b/.test(text)) {
-            messagePreview = text;
-            break;
+          if (!foundMarker) {
+            if (text === "Unread message:") foundMarker = true;
+            continue;
           }
-        }
-        if (previewNode.textContent.trim() === "Unread message:") {
-          foundMarker = true;
-        }
-      }
-      // Fallback: check for emoji images (Messenger renders custom emoji
-      // as <img alt="👍"> elements invisible to the text walker).
-      if (!messagePreview) {
-        for (const eImg of anchor.querySelectorAll('img[alt]')) {
-          const alt = eImg.alt;
-          if (alt && alt.length <= 2 && !eImg.src.includes("fbcdn.net")) {
-            messagePreview = (messagePreview || "") + alt;
+          if (!text || text === senderName || text === "·"
+              || /^\d+[hms]$/.test(text) || /^Active\b/.test(text)) continue;
+          messagePreview += (messagePreview ? " " : "") + text;
+        } else if (foundMarker && previewNode.tagName === "IMG") {
+          const alt = previewNode.getAttribute("alt") || "";
+          // Inline emoji <img> — alt is usually 1–2 chars (a single emoji
+          // can be 2 UTF-16 code units). Skip fbcdn avatars/attachments.
+          if (alt && alt.length <= 2 && !(previewNode.src || "").includes("fbcdn.net")) {
+            messagePreview += alt;
           }
         }
       }
@@ -1006,6 +1014,17 @@
       const linkUrl = new URL(href, window.location.origin);
       // Same-page anchors and javascript: are always internal
       if (linkUrl.protocol === "javascript:" || linkUrl.protocol === "blob:") return true;
+
+      // Messenger runs under facebook.com/messages/. The rest of Facebook
+      // (profiles, posts, photos, groups, marketplace, …) is same-origin
+      // but shouldn't navigate the conversation window — treat it as
+      // external so it opens in the user's default browser instead.
+      if (service === "messenger") {
+        const onFacebook = linkUrl.hostname === "facebook.com"
+          || linkUrl.hostname === "www.facebook.com";
+        return onFacebook && linkUrl.pathname.startsWith("/messages/");
+      }
+
       if (linkUrl.origin === window.location.origin) return true;
       return allowedDomains.some((d) => linkUrl.hostname === d || linkUrl.hostname.endsWith("." + d));
     } catch {
