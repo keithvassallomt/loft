@@ -87,6 +87,7 @@ const DBUS_IFACE = `<node>
 const _origIsOverviewWindow = Workspace.prototype._isOverviewWindow;
 const _origAppSwitcherInit = AppSwitcherPopup.prototype._init;
 const _origGetRunning = Shell.AppSystem.prototype.get_running;
+const _origGetWindowApp = Shell.WindowTracker.prototype.get_window_app;
 
 function _isLoftWindow(win, wmClasses) {
     let meta = win;
@@ -172,16 +173,95 @@ export default class LoftShellHelper extends Extension {
             return !meta.minimized;
         };
 
-        // Dock: Patch get_running() so the dash doesn't show Loft apps
-        // whose windows are all minimized (hidden to tray).
+        // Dock: Patch get_running() to:
+        //  (1) hide Loft apps whose windows are all minimized (hidden to tray),
+        //  (2) when Chrome is Flatpak/Wayland, com.google.Chrome claims
+        //      ownership of Loft Chrome windows at the Mutter/WindowTracker
+        //      level, so the dash shows one Chrome icon instead of per-service
+        //      icons. Remove Chrome from the list when its only visible
+        //      windows are Loft's, and inject the per-service .desktop apps
+        //      instead — one icon per service, with the correct icon.
+        const appSystem_running = Shell.AppSystem.get_default();
+        const CHROME_APP_IDS = new Set([
+            'com.google.Chrome.desktop',
+            'google-chrome.desktop',
+        ]);
         Shell.AppSystem.prototype.get_running = function() {
             const apps = _origGetRunning.call(this);
-            return apps.filter(app => {
+
+            // Collect Loft windows grouped by wm_class (one service = one wm_class)
+            const loftWinsByClass = new Map();
+            for (const actor of global.get_window_actors()) {
+                const w = actor.meta_window;
+                if (w.get_window_type?.() !== Meta.WindowType.NORMAL)
+                    continue;
+                const wc = w.get_wm_class?.() ?? '';
+                if (!wmClasses.has(wc))
+                    continue;
+                if (!loftWinsByClass.has(wc))
+                    loftWinsByClass.set(wc, []);
+                loftWinsByClass.get(wc).push(w);
+            }
+
+            const result = [];
+            const seenIds = new Set();
+            for (const app of apps) {
+                const id = app.get_id?.() ?? '';
                 const windows = app.get_windows();
-                if (windows.length === 0)
-                    return true;
-                return !windows.every(w => _isMinimizedLoftWindow(w, wmClasses));
-            });
+
+                if (CHROME_APP_IDS.has(id)) {
+                    // Keep Chrome only if it has at least one non-Loft window.
+                    const nonLoft = windows.filter(
+                        w => !wmClasses.has(w.get_wm_class?.() ?? '')
+                    );
+                    if (nonLoft.length === 0)
+                        continue;
+                }
+
+                // Original behaviour: hide Loft apps whose windows are all minimized.
+                if (windows.length > 0 &&
+                    windows.every(w => _isMinimizedLoftWindow(w, wmClasses))) {
+                    continue;
+                }
+
+                seenIds.add(id);
+                result.push(app);
+            }
+
+            // Inject a per-service app for each Loft wm_class that has at
+            // least one non-minimized window.
+            for (const [wc, wins] of loftWinsByClass) {
+                if (wins.every(w => w.minimized))
+                    continue;
+                const svcApp = appSystem_running.lookup_app(`${wc}.desktop`);
+                if (!svcApp)
+                    continue;
+                const svcId = svcApp.get_id();
+                if (seenIds.has(svcId))
+                    continue;
+                seenIds.add(svcId);
+                result.push(svcApp);
+            }
+
+            return result;
+        };
+
+        // Window→App mapping: re-map Loft Chrome windows to the per-service
+        // .desktop file. Chrome Flatpak on Wayland forces app_id to
+        // "com.google.Chrome" regardless of --app=, so GNOME would otherwise
+        // match every Loft window to Chrome's own .desktop (wrong icon in
+        // the dock, wrong grouping in alt-tab). Native Chrome sets a per-app
+        // app_id from the URL and doesn't need this patch, but this is safe
+        // for native too.
+        const appSystem = Shell.AppSystem.get_default();
+        Shell.WindowTracker.prototype.get_window_app = function(metaWindow) {
+            const wmClass = metaWindow?.get_wm_class?.() ?? '';
+            if (wmClasses.has(wmClass)) {
+                const app = appSystem.lookup_app(`${wmClass}.desktop`);
+                if (app)
+                    return app;
+            }
+            return _origGetWindowApp.call(this, metaWindow);
         };
 
         // Trigger a dock rebuild when a Loft window is minimized/unminimized,
@@ -214,6 +294,7 @@ export default class LoftShellHelper extends Extension {
         Workspace.prototype._isOverviewWindow = _origIsOverviewWindow;
         AppSwitcherPopup.prototype._init = _origAppSwitcherInit;
         Shell.AppSystem.prototype.get_running = _origGetRunning;
+        Shell.WindowTracker.prototype.get_window_app = _origGetWindowApp;
 
         // Disconnect minimize/unminimize handlers
         global.window_manager.disconnectObject(this);

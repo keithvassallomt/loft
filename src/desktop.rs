@@ -260,11 +260,13 @@ pub fn create_chrome_desktop_file(definition: &ServiceDefinition) -> Result<()> 
          Name={name}\n\
          Exec={exec} --service {service}\n\
          Icon={icon}\n\
+         StartupWMClass={wm_class}\n\
          NoDisplay=true\n",
         name = definition.display_name,
         exec = exec,
         service = definition.name,
         icon = icon,
+        wm_class = definition.chrome_desktop_id,
     );
 
     let path = chrome_notification_desktop_path(definition);
