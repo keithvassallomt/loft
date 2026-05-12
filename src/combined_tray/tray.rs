@@ -7,6 +7,7 @@ use ksni::menu::{CheckmarkItem, StandardItem, SubMenu};
 use ksni::{Handle, Icon, MenuItem, Tray, TrayMethods};
 
 use super::CombinedTrayState;
+use crate::chrome::is_flatpak;
 
 /// Snapshot of a service's state for building tray menus.
 /// We need owned data because ksni callbacks take `&mut Self`.
@@ -314,7 +315,7 @@ pub async fn run_combined_sni(state: Arc<CombinedTrayState>) -> Result<()> {
                 icon_data: load_combined_icon(),
             };
 
-            match tray.spawn().await {
+            match tray.disable_dbus_name(is_flatpak()).spawn().await {
                 Ok(h) => {
                     handle = Some(h);
                     break;

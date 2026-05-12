@@ -108,6 +108,7 @@ _appimage:
     cp data/chat.loft.Loft.desktop "$appdir/usr/share/applications/"
     cp data/chat.loft.Loft.desktop "$appdir/"
     cp data/chat.loft.Loft.metainfo.xml "$appdir/usr/share/metainfo/"
+    ln -s chat.loft.Loft.metainfo.xml "$appdir/usr/share/metainfo/chat.loft.Loft.appdata.xml"
     cp assets/icons/loft.svg "$appdir/usr/share/icons/hicolor/scalable/apps/chat.loft.Loft.svg"
     cp assets/icons/loft.svg "$appdir/chat.loft.Loft.svg"
 

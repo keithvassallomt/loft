@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-05-12
+
+### Fixed
+
+- SNI tray icons now appear when Loft is installed as a Flatpak. The sandbox's D-Bus proxy refused ksni's standard `org.kde.StatusNotifierItem-<pid>-<N>` bus name (only `chat.loft.*` is permitted by the manifest), so the tray never registered with `org.kde.StatusNotifierWatcher`. Loft now uses ksni's `disable_dbus_name` workaround when running under Flatpak, registering via its unique connection name instead.
+
 ## [0.1.2] - 2026-04-16
 
 ### Fixed
@@ -32,5 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release.
 
+[0.1.3]: https://github.com/keithvassallomt/loft/releases/tag/v0.1.3
+[0.1.2]: https://github.com/keithvassallomt/loft/releases/tag/v0.1.2
 [0.1.1]: https://github.com/keithvassallomt/loft/releases/tag/v0.1.1
 [0.1.0]: https://github.com/keithvassallomt/loft/releases/tag/v0.1.0

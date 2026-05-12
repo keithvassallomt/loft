@@ -72,6 +72,13 @@
   </screenshots>
 
   <releases>
+    <release version="0.1.3" date="2026-05-12">
+      <description>
+        <ul>
+          <li>Tray icons now appear when Loft is installed as a Flatpak. Previously the sandbox blocked the tray's standard D-Bus name, so nothing showed up in the panel.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.2" date="2026-04-16">
       <description>
         <ul>

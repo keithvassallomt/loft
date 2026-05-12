@@ -352,7 +352,7 @@ pub async fn run_tray_lifecycle(
                 &icon_path,
                 Arc::clone(&state),
             );
-            match tray.spawn().await {
+            match tray.disable_dbus_name(crate::chrome::is_flatpak()).spawn().await {
                 Ok(h) => {
                     handle = Some(h);
                     break;
