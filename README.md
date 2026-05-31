@@ -74,6 +74,31 @@ just setup-flatpak  # one-time: install GNOME SDK
 just build-flatpak
 ```
 
+### Cutting a release (maintainers)
+
+A single command runs the whole release in the correct order:
+
+```sh
+just release 0.1.4
+```
+
+It will:
+
+1. Preflight-check (clean tree, `gh` authenticated, tag not already used).
+2. Bump the version in `Cargo.toml`.
+3. **Pause** and wait for you to add the matching release notes to `CHANGELOG.md`
+   and `data/chat.loft.Loft.metainfo.xml` (it re-checks until both have an entry
+   for the new version — these are the parts the script can't write for you).
+4. Build the binary and the RPM/DEB/AppImage packages.
+5. Ask for one final confirmation, then commit, tag, and push the branch + tag.
+6. Create the GitHub release (notes from `CHANGELOG.md`, packages attached).
+7. Generate the FriendlyHub submission files into `~/Downloads/chat.loft.Loft/`.
+
+The Flatpak/FriendlyHub manifest is always pinned to **both** the tag and its
+commit SHA — a bare tag is mutable and is rejected by `flatpak-builder-lint`,
+which is what previously left the store listing out of sync. The last manual
+step is submitting the three generated files to FriendlyHub.
+
 ## Usage
 
 ```sh

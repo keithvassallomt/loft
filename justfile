@@ -45,21 +45,142 @@ update-flatpak-submission output=("$HOME/Downloads/chat.loft.Loft"):
     cp data/chat.loft.Loft.metainfo.xml "$out/"
 
     echo "==> Generating submission manifest..."
-    # Determine the current commit for pinning
+    # Determine the commit (and tag, if any) to pin.
+    # FriendlyHub/Flathub run flatpak-builder-lint, which REJECTS a git source
+    # that has a tag but no commit — a bare tag is mutable and not reproducible.
+    # So always pin the commit, and include the tag too when HEAD is tagged.
     commit=$(git rev-parse HEAD)
     tag=$(git describe --tags --exact-match 2>/dev/null || echo "")
 
-    # Start from the project manifest and replace the dir source with a git source
-    cp chat.loft.Loft.yml "$out/chat.loft.Loft.yml"
-    if [ -n "$tag" ]; then
-        sed -i '/^      - type: dir$/,/^        path: \.$/c\      - type: git\n        url: {{ upstream_repo }}\n        tag: '"$tag" "$out/chat.loft.Loft.yml"
-    else
-        sed -i '/^      - type: dir$/,/^        path: \.$/c\      - type: git\n        url: {{ upstream_repo }}\n        commit: '"$commit" "$out/chat.loft.Loft.yml"
+    if [ -z "$tag" ]; then
+        echo "WARNING: HEAD is not on a release tag — pinning to commit $commit only." >&2
+        echo "         Tag the release commit before submitting so the listing tracks it." >&2
     fi
+
+    # Start from the project manifest and replace the dir source with a git source.
+    src='      - type: git\n        url: {{ upstream_repo }}'
+    if [ -n "$tag" ]; then
+        src="$src"'\n        tag: '"$tag"
+    fi
+    src="$src"'\n        commit: '"$commit"
+    cp chat.loft.Loft.yml "$out/chat.loft.Loft.yml"
+    sed -i '/^      - type: dir$/,/^        path: \.$/c\'"$src" "$out/chat.loft.Loft.yml"
+
+    echo "    Pinned to commit $commit${tag:+ (tag $tag)}"
 
     echo ""
     echo "Submission files in: $out/"
     ls -1 "$out/"
+
+# Cut a release: bump version, build, tag, push, GitHub release, Flatpak submission files
+release new_version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ver="{{ new_version }}"
+    tag="v$ver"
+    slug="keithvassallomt/loft"
+    metainfo="data/chat.loft.Loft.metainfo.xml"
+    today=$(date +%F)
+
+    # ---- Preflight: nothing is changed if any check fails ----
+    if ! [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "ERROR: version must be X.Y.Z (got '$ver')." >&2; exit 1
+    fi
+    command -v gh >/dev/null || { echo "ERROR: gh CLI not found." >&2; exit 1; }
+    gh auth status >/dev/null 2>&1 || { echo "ERROR: gh is not authenticated (run: gh auth login)." >&2; exit 1; }
+
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    # Allow a dirty tree only for the files this recipe edits (so an interrupted
+    # run can be re-run); abort on any unrelated uncommitted change.
+    allowed='^(Cargo\.toml|Cargo\.lock|CHANGELOG\.md|data/chat\.loft\.Loft\.metainfo\.xml)$'
+    unrelated=$(git status --porcelain | cut -c4- | grep -Ev "$allowed" || true)
+    if [ -n "$unrelated" ]; then
+        echo "ERROR: unrelated uncommitted changes — commit or stash first:" >&2
+        echo "$unrelated" | sed 's/^/  /' >&2; exit 1
+    fi
+    if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+        echo "ERROR: tag $tag already exists locally." >&2; exit 1
+    fi
+    if git ls-remote --exit-code --tags origin "$tag" >/dev/null 2>&1; then
+        echo "ERROR: tag $tag already exists on origin." >&2; exit 1
+    fi
+    current=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+    echo "==> Releasing $tag (from $current) on branch '$branch'"
+
+    # ---- Phase 1: local prep (reversible — nothing pushed yet) ----
+    if [ "$ver" = "$current" ]; then
+        echo "==> Cargo.toml already at $ver (resuming a previous run)"
+    else
+        echo "==> Bumping Cargo.toml to $ver"
+        sed -i 's/^version = "'"$current"'"/version = "'"$ver"'"/' Cargo.toml
+    fi
+
+    # Release notes are the part only you can write — wait until both files have
+    # an entry for this version before continuing.
+    while :; do
+        missing=""
+        grep -q "## \[$ver\]" CHANGELOG.md || missing="$missing CHANGELOG.md"
+        grep -q "version=\"$ver\"" "$metainfo" || missing="$missing $metainfo"
+        [ -z "$missing" ] && break
+        echo
+        echo "!! Add a $ver entry to:$missing"
+        echo "     CHANGELOG.md -> ## [$ver] - $today"
+        echo "     $metainfo -> <release version=\"$ver\" date=\"$today\">"
+        read -rp "   Press Enter once added (Ctrl-C to abort)... " _ </dev/tty
+    done
+    echo "==> Release notes present in CHANGELOG.md and metainfo"
+
+    # Compile (validates the build + refreshes Cargo.lock) and build packages.
+    echo "==> Building binary + packages"
+    just build
+
+    # ---- Confirmation: last stop before anything leaves your machine ----
+    echo
+    echo "About to publish $tag:"
+    git --no-pager diff --stat
+    echo "  - commit on '$branch', tag $tag, push branch + tag to origin"
+    echo "  - create GitHub release $tag (notes from CHANGELOG.md, packages from target/dist/)"
+    echo "  - generate FriendlyHub submission files"
+    echo
+    read -rp "Proceed? [y/N] " ans </dev/tty
+    case "$ans" in [yY]|[yY][eE][sS]) ;; *) echo "Aborted. Local edits kept (use 'git checkout .' to undo)."; exit 1;; esac
+
+    # ---- Phase 2: publish (point of no return) ----
+    echo "==> Committing and tagging"
+    git add -A
+    git commit -m "Release $tag"
+    git tag -a "$tag" -m "$tag"
+
+    echo "==> Generating FriendlyHub submission files (pins $tag)"
+    just update-flatpak-submission
+
+    echo "==> Pushing branch + tag"
+    git push origin "$branch"
+    git push origin "$tag"
+
+    echo "==> Creating GitHub release"
+    notes=$(mktemp)
+    awk -v v="$ver" '
+        $0 ~ "^## \\[" v "\\]" {grab=1; next}
+        grab && /^## \[/ {exit}
+        grab {print}
+    ' CHANGELOG.md > "$notes"
+    assets=()
+    shopt -s nullglob; for f in {{ dist_dir }}/*; do assets+=("$f"); done; shopt -u nullglob
+    if [ ${#assets[@]} -gt 0 ]; then
+        gh release create "$tag" --repo "$slug" --title "$tag" --notes-file "$notes" "${assets[@]}" \
+            || { echo "WARN: gh release create failed; tag is pushed. Retry: gh release create $tag --notes-file <notes> {{ dist_dir }}/*" >&2; }
+    else
+        gh release create "$tag" --repo "$slug" --title "$tag" --notes-file "$notes" \
+            || echo "WARN: gh release create failed; tag is pushed. Retry manually." >&2
+    fi
+    rm -f "$notes"
+
+    echo
+    echo "================ DONE: $tag ================"
+    echo "GitHub release: https://github.com/$slug/releases/tag/$tag"
+    echo "Packages:       {{ dist_dir }}/"
+    echo "FriendlyHub:    $HOME/Downloads/chat.loft.Loft/  (submit the 3 files there)"
 
 # Package the GNOME Shell extension as a zip for EGO submission
 package-gnome-extension output="$HOME/Downloads":
