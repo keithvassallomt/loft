@@ -1,6 +1,6 @@
 # Loft
 
-Linux desktop integration layer for web apps (WhatsApp, Facebook Messenger, Slack, Telegram) that provides full functionality including voice/video calling, system tray integration, and proper desktop presence.
+Linux desktop integration layer for web apps (WhatsApp, Facebook Messenger, Slack, Telegram, Element) that provides full functionality including voice/video calling, system tray integration, and proper desktop presence.
 
 ## Problem
 
@@ -37,7 +37,7 @@ loft-whatsapp.desktop (or user clicks tray icon)
 ### Components
 
 1. **Loft Manager** — Adwaita GUI (`loft` with no args)
-   - Lists available services (WhatsApp, Messenger, Slack, Telegram)
+   - Lists available services (WhatsApp, Messenger, Slack, Telegram, Element)
    - Install: creates `.desktop` file, registers autostart, sets up native messaging host
    - Uninstall: removes `.desktop` file, removes autostart, cleans up
    - Minimal UI — just a list of services with install/uninstall controls
@@ -194,6 +194,24 @@ Only Google Chrome is officially supported (proprietary codecs required for vide
 | Facebook Messenger | https://facebook.com/messages/   |
 | Slack              | https://app.slack.com/client/    |
 | Telegram           | https://web.telegram.org/a/      |
+| Element (Matrix)   | https://app.element.io/      |
+
+Element is self-hostable, so its per-service config supports a `custom_url`
+(set in the manager's service detail page) to point at a self-hosted Element
+Web instance instead of `app.element.io`. Because Loft deploys its own
+extension, `deploy_extension()` templates the manifest at deploy time — adding
+the custom origin to `host_permissions` + `content_scripts.matches` and writing
+a generated `loft-overrides.js` (`origin → service` map). The custom origin is
+thus a *granted* host permission at load time (no runtime permission prompt),
+and the content script / service worker recognise it as `element` via the map,
+so badge/notification/titlebar integration works on any domain.
+
+Element specifics: badge count is read from `document.title` (`Element [N]`,
+where N = rooms with unread notifications — matching Element's own favicon),
+not DOM-scraped (Element's room list uses hashed CSS-module classes and is
+virtualized). Notifications use the standard `Notification` API with no focus
+gating, so they flow through the shared `notification-override.js` + daemon
+D-Bus path like Slack/WhatsApp — no Element-specific notification code.
 
 ## Tech Stack
 

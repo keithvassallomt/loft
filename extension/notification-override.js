@@ -27,22 +27,62 @@
     }
   });
 
-  function relayMetadata(title, options = {}) {
-    const safeIcon =
-      typeof options.icon === "string" && options.icon.startsWith("https://")
-        ? options.icon
-        : "";
+  // Element (app.element.io or a self-hosted instance) renders the page under
+  // a #matrixchat root. Detected lazily — the page isn't loaded yet at
+  // document_start, but notifications only fire long after.
+  function isElementPage() {
+    return !!document.getElementById("matrixchat");
+  }
 
-    window.postMessage(
-      {
-        __loft_notification: true,
-        title: title,
-        body: options.body || "",
-        icon: safeIcon,
-        tag: options.tag || "",
-      },
-      "*"
-    );
+  // Resolve a notification icon to something the daemon can display.
+  //
+  // Element serves avatars either as blob: object URLs or as authenticated
+  // Matrix media URLs that only the page can fetch (Element's service worker
+  // attaches the access token). The daemon can't fetch those, so for Element
+  // we fetch the icon in-page and inline it as a data: URL (the daemon decodes
+  // data: URIs). Other services keep the original behaviour: pass https URLs
+  // through for the daemon to download, drop anything else.
+  function resolveIcon(icon) {
+    if (typeof icon !== "string" || !icon) return Promise.resolve("");
+    if (icon.startsWith("data:")) return Promise.resolve(icon);
+
+    const fetchable =
+      icon.startsWith("blob:") ||
+      icon.startsWith("https://") ||
+      icon.startsWith("http://");
+    if (isElementPage() && fetchable) {
+      return fetch(icon)
+        .then((r) => (r.ok ? r.blob() : Promise.reject(new Error("fetch failed"))))
+        .then(
+          (blob) =>
+            new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.onloadend = () =>
+                resolve(typeof reader.result === "string" ? reader.result : "");
+              reader.onerror = () => resolve("");
+              reader.readAsDataURL(blob);
+            })
+        )
+        // Fall back to the original URL if it's at least daemon-downloadable.
+        .catch(() => (icon.startsWith("https://") ? icon : ""));
+    }
+
+    return Promise.resolve(icon.startsWith("https://") ? icon : "");
+  }
+
+  function relayMetadata(title, options = {}) {
+    resolveIcon(options.icon).then((icon) => {
+      window.postMessage(
+        {
+          __loft_notification: true,
+          title: title,
+          body: options.body || "",
+          icon: icon,
+          tag: options.tag || "",
+        },
+        "*"
+      );
+    });
   }
 
   // Silent stub that suppresses visible notifications.  Slack inspects
@@ -88,6 +128,7 @@
   const isWhatsApp = window.location.href.startsWith("https://web.whatsapp.com");
   const isSlack = window.location.href.startsWith("https://app.slack.com");
   const isTelegram = window.location.href.startsWith("https://web.telegram.org");
+  const isElement = window.location.href.startsWith("https://app.element.io");
 
   const internalDomains = isMessenger
     ? ["facebook.com", "www.facebook.com"]
@@ -97,6 +138,8 @@
     ? ["app.slack.com", "slack.com"]
     : isTelegram
     ? ["web.telegram.org", "telegram.org"]
+    : isElement
+    ? ["app.element.io"]
     : [];
 
   function isInternalOrigin(url) {

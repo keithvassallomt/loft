@@ -232,6 +232,13 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
     let global_config = GlobalConfig::load()?;
     let service_config = ServiceConfig::load(&service_name)?;
 
+    // Re-template the extension so a configured `custom_url` (e.g. a self-hosted
+    // Element instance) is reflected in the manifest Chrome loads. Non-fatal:
+    // a stale extension still works for the built-in URLs.
+    if let Err(e) = crate::desktop::deploy_extension() {
+        tracing::warn!("Could not re-deploy extension on startup: {}", e);
+    }
+
     // 1. Singleton check via D-Bus
     match dbus::is_already_running(definition).await {
         Ok(true) => {
@@ -394,7 +401,12 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
     tokio::spawn(register_session_client());
 
     // 8. Run Chrome lifecycle loop
-    let manager = ChromeManager::new(chrome_info, definition, Arc::clone(&state));
+    let manager = ChromeManager::new(
+        chrome_info,
+        definition,
+        Arc::clone(&state),
+        service_config.custom_url.clone(),
+    );
     let result = manager.run_loop().await;
 
     // 9. Wait for tray lifecycle to clean up (unregister from combined tray, etc.)
@@ -819,6 +831,8 @@ struct ChromeManager {
     chrome_info: ChromeInfo,
     definition: &'static ServiceDefinition,
     state: Arc<DaemonState>,
+    /// Per-service URL override (`custom_url`); falls back to `definition.url`.
+    custom_url: Option<String>,
 }
 
 impl ChromeManager {
@@ -826,11 +840,13 @@ impl ChromeManager {
         chrome_info: ChromeInfo,
         definition: &'static ServiceDefinition,
         state: Arc<DaemonState>,
+        custom_url: Option<String>,
     ) -> Self {
         Self {
             chrome_info,
             definition,
             state,
+            custom_url,
         }
     }
 
@@ -922,7 +938,12 @@ impl ChromeManager {
         // there is no download shelf, so silent downloads confuse users).
         set_chrome_download_prompt(&profile);
 
-        let args = chrome::build_chrome_args(self.definition, &profile, &self.chrome_info.launch_method);
+        let args = chrome::build_chrome_args(
+            self.definition,
+            &profile,
+            &self.chrome_info.launch_method,
+            self.custom_url.as_deref(),
+        );
         let mut cmd = chrome::build_chrome_command(&self.chrome_info, &args);
 
         // Set up CDP pipes for loading the extension.

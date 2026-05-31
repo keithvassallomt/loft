@@ -480,6 +480,52 @@ fn create_detail_page(
     appearance_group.add(&badges_row);
     outer.append(&appearance_group);
 
+    // --- Connection group (custom server URL) ---
+    // Element (Matrix) can be self-hosted, so allow pointing at a custom
+    // Element Web instance instead of app.element.io. Loft templates the
+    // extension manifest with this origin at deploy time.
+    if definition.name == "element" {
+        let connection_group = libadwaita::PreferencesGroup::new();
+        connection_group.set_title("Connection");
+        connection_group.set_description(Some(
+            "Use a self-hosted Element Web instance instead of app.element.io. \
+             Leave empty for the default. Takes effect next time the service starts.",
+        ));
+
+        let url_row = libadwaita::EntryRow::new();
+        url_row.set_title("Custom Server URL");
+        url_row.set_show_apply_button(true);
+        if let Some(u) = config.custom_url.as_deref() {
+            url_row.set_text(u);
+        }
+
+        url_row.connect_apply(move |row| {
+            let mut text = row.text().trim().to_string();
+            // Normalise a bare host to https:// so it forms a valid origin.
+            if !text.is_empty() && !text.contains("://") {
+                text = format!("https://{text}");
+            }
+
+            let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
+            cfg.custom_url = if text.is_empty() { None } else { Some(text) };
+            if let Err(e) = cfg.save(&definition.name) {
+                tracing::error!(
+                    "Failed to save custom_url for {}: {}",
+                    definition.display_name,
+                    e
+                );
+                return;
+            }
+            // Re-template the extension so the new origin is in the manifest.
+            if let Err(e) = desktop::deploy_extension() {
+                tracing::error!("Failed to re-deploy extension after URL change: {}", e);
+            }
+        });
+
+        connection_group.add(&url_row);
+        outer.append(&connection_group);
+    }
+
     // --- Uninstall button ---
     let uninstall_button = gtk4::Button::with_label("Uninstall\u{2026}");
     uninstall_button.add_css_class("destructive-action");

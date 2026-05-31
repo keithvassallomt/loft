@@ -1,4 +1,23 @@
 const NM_HOST_NAME = "chat.loft.host";
+
+// Generated origin → service map for self-hosted instances configured via a
+// service's custom_url (e.g. a custom Element Web domain). Written by Loft's
+// deploy_extension(); always present (may be empty). Sets self.__loftOverrides.
+try {
+  importScripts("loft-overrides.js");
+} catch (e) {
+  self.__loftOverrides = self.__loftOverrides || {};
+}
+
+function originService(url) {
+  if (!url || !self.__loftOverrides) return null;
+  try {
+    return self.__loftOverrides[new URL(url).origin] || null;
+  } catch {
+    return null;
+  }
+}
+
 let port = null;
 let appWindowId = null;
 let appUrl = null;
@@ -108,7 +127,9 @@ function isLoftTab(url) {
       url.startsWith("https://facebook.com/messages") ||
       url.startsWith("https://www.facebook.com/messages") ||
       url.startsWith("https://app.slack.com") ||
-      url.startsWith("https://web.telegram.org"))
+      url.startsWith("https://web.telegram.org") ||
+      url.startsWith("https://app.element.io") ||
+      originService(url) != null)
   );
 }
 
@@ -118,7 +139,8 @@ function detectServiceFromUrl(url) {
   if (url.startsWith("https://facebook.com/messages") || url.startsWith("https://www.facebook.com/messages")) return "messenger";
   if (url.startsWith("https://app.slack.com")) return "slack";
   if (url.startsWith("https://web.telegram.org")) return "telegram";
-  return null;
+  if (url.startsWith("https://app.element.io")) return "element";
+  return originService(url);
 }
 
 // Save window bounds to storage so they survive Chrome restarts
@@ -434,6 +456,11 @@ async function injectContentScripts() {
         target: { tabId: tab.id },
         files: ["notification-override.js"],
         world: "MAIN",
+      });
+      // Seed the ISOLATED-world custom-origin map before content.js reads it
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["loft-overrides.js"],
       });
       // Then inject the ISOLATED-world content script
       await chrome.scripting.executeScript({

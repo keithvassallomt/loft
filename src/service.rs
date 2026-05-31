@@ -91,7 +91,19 @@ pub const TELEGRAM: ServiceDefinition = ServiceDefinition {
     chrome_desktop_id: "chrome-web.telegram.org__a_-Default",
 };
 
-pub const ALL_SERVICES: &[&ServiceDefinition] = &[&WHATSAPP, &MESSENGER, &SLACK, &TELEGRAM];
+pub const ELEMENT: ServiceDefinition = ServiceDefinition {
+    name: "element",
+    display_name: "Element",
+    url: "https://app.element.io/",
+    dbus_name: "Element",
+    app_icon_svg: include_str!("../assets/icons/element.svg"),
+    app_icon_png: include_bytes!("../assets/icons/element.png"),
+    tray_icon_svg: include_str!("../assets/icons/element-symbolic.svg"),
+    app_icon_filename: "element.svg",
+    chrome_desktop_id: "chrome-app.element.io__-Default",
+};
+
+pub const ALL_SERVICES: &[&ServiceDefinition] = &[&WHATSAPP, &MESSENGER, &SLACK, &TELEGRAM, &ELEMENT];
 
 pub fn get_definition(name: &ServiceName) -> &'static ServiceDefinition {
     match name {
@@ -99,6 +111,7 @@ pub fn get_definition(name: &ServiceName) -> &'static ServiceDefinition {
         ServiceName::Messenger => &MESSENGER,
         ServiceName::Slack => &SLACK,
         ServiceName::Telegram => &TELEGRAM,
+        ServiceName::Element => &ELEMENT,
     }
 }
 
@@ -144,5 +157,8 @@ mod tests {
 
         let telegram = get_definition(&ServiceName::Telegram);
         assert_eq!(telegram.name, "telegram");
+
+        let element = get_definition(&ServiceName::Element);
+        assert_eq!(element.name, "element");
     }
 }

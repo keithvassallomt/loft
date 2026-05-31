@@ -177,13 +177,17 @@ fn display_name_for_binary(name: &str) -> String {
 /// Uses `--remote-debugging-pipe` + CDP `Extensions.loadUnpacked` to load the
 /// extension (since `--load-extension` was removed from branded Chrome 137+).
 /// The pipe fds (3/4) are set up via `pre_exec` in the daemon's spawn logic.
+/// `url_override` (from per-service config `custom_url`) replaces the service's
+/// built-in URL when set — e.g. a self-hosted Element Web instance.
 pub fn build_chrome_args(
     service: &ServiceDefinition,
     profile_path: &Path,
     _launch_method: &LaunchMethod,
+    url_override: Option<&str>,
 ) -> Vec<String> {
+    let url = url_override.unwrap_or(service.url);
     vec![
-        format!("--app={}", service.url),
+        format!("--app={}", url),
         format!("--user-data-dir={}", profile_path.display()),
         format!("--class=loft-{}", service.name),
         "--enable-unsafe-extension-debugging".to_string(),
@@ -319,7 +323,7 @@ mod tests {
         let service = &crate::service::WHATSAPP;
         let profile = PathBuf::from("/home/user/.local/share/loft/profiles/whatsapp");
 
-        let args = build_chrome_args(service, &profile, &LaunchMethod::Direct);
+        let args = build_chrome_args(service, &profile, &LaunchMethod::Direct, None);
 
         assert_eq!(args[0], "--app=https://web.whatsapp.com/");
         assert!(args[1].contains("profiles/whatsapp"));
@@ -330,11 +334,27 @@ mod tests {
     }
 
     #[test]
+    fn test_build_chrome_args_url_override() {
+        let service = &crate::service::ELEMENT;
+        let profile = PathBuf::from("/home/user/.local/share/loft/profiles/element");
+
+        let args = build_chrome_args(
+            service,
+            &profile,
+            &LaunchMethod::Direct,
+            Some("https://chat.example.com/"),
+        );
+
+        assert_eq!(args[0], "--app=https://chat.example.com/");
+        assert_eq!(args[2], "--class=loft-element");
+    }
+
+    #[test]
     fn test_build_chrome_args_flatpak() {
         let service = &crate::service::WHATSAPP;
         let profile = PathBuf::from("/home/user/.local/share/loft/profiles/whatsapp");
 
-        let args = build_chrome_args(service, &profile, &LaunchMethod::Flatpak);
+        let args = build_chrome_args(service, &profile, &LaunchMethod::Flatpak, None);
 
         assert_eq!(args[0], "--app=https://web.whatsapp.com/");
         assert!(args.contains(&"--remote-debugging-pipe".to_string()));

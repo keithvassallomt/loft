@@ -82,6 +82,10 @@ pub struct ServiceConfig {
     pub show_titlebar: bool,
     #[serde(default = "default_true")]
     pub badges_enabled: bool,
+    /// Override the URL Chrome launches (power-user option, e.g. a self-hosted
+    /// Element Web instance). When `None`, the service's built-in URL is used.
+    #[serde(default)]
+    pub custom_url: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -103,6 +107,7 @@ impl Default for ServiceConfig {
             start_hidden: false,
             show_titlebar: true,
             badges_enabled: true,
+            custom_url: None,
         }
     }
 }
@@ -225,6 +230,7 @@ mod tests {
             start_hidden: true,
             show_titlebar: false,
             badges_enabled: false,
+            custom_url: Some("https://chat.example.com/".to_string()),
         };
 
         let content = toml::to_string_pretty(&config).unwrap();
@@ -242,6 +248,7 @@ mod tests {
         assert!(!config.start_hidden);
         assert!(config.show_titlebar);
         assert!(config.badges_enabled);
+        assert_eq!(config.custom_url, None);
     }
 
     #[test]
@@ -253,5 +260,6 @@ mod tests {
         assert!(!config.start_hidden);
         assert!(config.show_titlebar);
         assert!(config.badges_enabled);
+        assert_eq!(config.custom_url, None);
     }
 }

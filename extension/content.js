@@ -37,6 +37,15 @@
     service = "slack";
   } else if (url.startsWith("https://web.telegram.org")) {
     service = "telegram";
+  } else if (url.startsWith("https://app.element.io")) {
+    service = "element";
+  }
+
+  // Fall back to the generated custom-origin map (loft-overrides.js, injected
+  // at document_start in the same isolated world) for self-hosted instances
+  // configured via a service's custom_url (e.g. a custom Element Web domain).
+  if (!service && self.__loftOverrides) {
+    service = self.__loftOverrides[window.location.origin] || null;
   }
 
   if (!service) return;
@@ -215,9 +224,11 @@
 
     // Telegram's virtualised chat list re-lays out the entire app whenever
     // the root's height changes, which makes the titlebar show/hide visibly
-    // stutter.  For Telegram we let the titlebar overlay the top 36px of
+    // stutter.  Element (React, #matrixchat) is worse: animating the root's
+    // height leaves the window blank when the bar auto-hides and the layout
+    // fails to recover.  For both we let the titlebar overlay the top 36px of
     // content (a transient hover element) instead of reflowing the app.
-    const shiftRoot = service !== "telegram";
+    const shiftRoot = service !== "telegram" && service !== "element";
 
     function showBar() {
       if (hideTimeout) { clearTimeout(hideTimeout); hideTimeout = null; }
@@ -311,6 +322,7 @@
     messenger: "Messenger",
     slack: "Slack",
     telegram: "Telegram",
+    element: "Element",
   };
 
   // First-run speech bubble
@@ -463,6 +475,34 @@
     });
     setInterval(scanSlackUnreads, 2000);
     setTimeout(scanSlackUnreads, 3000);
+  }
+
+  // Element: read the unread count Element itself writes into document.title.
+  // Element sets the title to "Element [N]" where N is the number of rooms
+  // with unread *notifications* (this is exactly the number it puts on its own
+  // favicon badge — see MatrixChat.onUpdateStatusIndicator). A bare "*" means
+  // unread activity only (grey dot, no notifications) → treat as 0. This is far
+  // more reliable than scraping the room list, whose CSS class names are hashed
+  // CSS-modules and whose list is virtualized (off-screen rooms aren't in DOM).
+  if (service === "element") {
+    function scanElementUnreads() {
+      let count = 0;
+      const match = document.title.match(/\[(\d+)\]/);
+      if (match) count = parseInt(match[1], 10);
+      if (count !== lastBadgeCount) {
+        lastBadgeCount = count;
+        safeSendMessage({ type: "badge_update", count });
+      }
+    }
+
+    // document.title lives in <head>; observe it directly plus a poll fallback.
+    const titleEl = document.querySelector("title");
+    if (titleEl) {
+      const elementObserver = new MutationObserver(scanElementUnreads);
+      elementObserver.observe(titleEl, { childList: true, characterData: true, subtree: true });
+    }
+    setInterval(scanElementUnreads, 2000);
+    setTimeout(scanElementUnreads, 3000);
   }
 
   // Telegram: count sidebar badges (unread conversation indicators)
@@ -1005,6 +1045,7 @@
     messenger: ["facebook.com", "www.facebook.com"],
     slack: ["app.slack.com", "slack.com"],
     telegram: ["web.telegram.org", "telegram.org"],
+    element: ["app.element.io"],
   };
 
   const allowedDomains = SERVICE_DOMAINS[service] || [];
