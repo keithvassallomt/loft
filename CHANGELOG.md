@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Element (Matrix) is now a supported service, using `https://app.element.io/`. The tray badge reflects the number of rooms with unread notifications, and notifications respect Do Not Disturb like the other services.
 - Element can point at a self-hosted Element Web instance via a custom server URL in the service's settings. Loft templates its extension manifest with the custom origin at deploy time, so badge, notification, and titlebar integration work on any domain without a browser permission prompt.
 
+### Fixed
+
+- Services set to start hidden no longer leave ghost windows in the GNOME activities overview after login. The overview is open at login while each hidden service's window maps briefly before being minimized; the GNOME helper now keeps a service's window out of the overview until the daemon reports it visible, so start-hidden windows never appear there.
+
 ## [0.1.3] - 2026-05-12
 
 ### Fixed

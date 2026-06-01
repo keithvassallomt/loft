@@ -892,7 +892,15 @@ impl ChromeManager {
             let pid_i32 = pid.unwrap_or(0) as i32;
             self.state.chrome_pid_atomic.store(pid_i32, Ordering::Relaxed);
             CHROME_PID_FOR_SIGNAL.store(pid_i32, Ordering::Relaxed);
-            self.state.visible.store(true, Ordering::Relaxed);
+            // For a start-hidden launch the window maps only briefly before the
+            // extension minimizes it, so never report it as visible — otherwise
+            // the GNOME helper would add its thumbnail to the (login-time) open
+            // overview and it would linger. start_minimized is still set until
+            // the first WindowShown consumes it.
+            self.state.visible.store(
+                !self.state.start_minimized.load(Ordering::Relaxed),
+                Ordering::Relaxed,
+            );
             tracing::info!("Chrome launched (pid: {:?})", pid);
 
             let start_time = Instant::now();

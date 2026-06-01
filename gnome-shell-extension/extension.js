@@ -100,6 +100,10 @@ function _isMinimizedLoftWindow(win, wmClasses) {
 export default class LoftShellHelper extends Extension {
     enable() {
         this._loftWmClasses = new Set();
+        // wm_class → whether the daemon considers the service's window visible.
+        // Used to keep a start-hidden window (which maps briefly before being
+        // minimized) out of the overview. Default-absent is treated as hidden.
+        this._loftOverviewVisible = new Map();
         this._panelIcons = new Map();
         this._combinedIndicator = null;
         this._combinedServices = new Map();
@@ -127,6 +131,7 @@ export default class LoftShellHelper extends Extension {
 
         // Hide minimized Loft windows from alt-tab, overview, and dock.
         const wmClasses = this._loftWmClasses;
+        const overviewVisible = this._loftOverviewVisible;
 
         // Alt-tab: drop minimized Loft windows from the switcher, and drop
         // apps that have nothing else to show. Also correct the default
@@ -180,7 +185,14 @@ export default class LoftShellHelper extends Extension {
             let meta = win;
             if (win.get_meta_window)
                 meta = win.get_meta_window();
-            return !meta.minimized;
+            if (meta.minimized)
+                return false;
+            // Keep out any Loft window the daemon hasn't marked visible — most
+            // importantly a start-hidden window during its brief pre-minimize
+            // map at login, when the overview is open and would otherwise add
+            // (and keep) a thumbnail. Absent/false → hidden.
+            const wc = meta.get_wm_class?.() ?? '';
+            return overviewVisible.get(wc) === true;
         };
 
         // Dock: show one icon per Loft service instead of a single Chrome
@@ -381,6 +393,7 @@ export default class LoftShellHelper extends Extension {
         }
 
         this._loftWmClasses = null;
+        this._loftOverviewVisible = null;
     }
 
     _registerService(name, displayName, iconName, wmClass) {
@@ -392,8 +405,13 @@ export default class LoftShellHelper extends Extension {
         // Track this service's window class so the alt-tab/overview/dash
         // patches hide its minimized window. Add-only: stale entries match no
         // window and are harmless, and re-registration (mode switch) dedupes.
-        if (wmClass)
+        if (wmClass) {
             this._loftWmClasses?.add(wmClass);
+            // Default to hidden in the overview until the daemon reports
+            // visibility (UpdateVisible), unless we already know it's visible.
+            if (!this._loftOverviewVisible?.has(wmClass))
+                this._loftOverviewVisible?.set(wmClass, false);
+        }
 
         const indicator = new PanelMenu.Button(0.0, `loft-${name}`, false);
 
@@ -509,6 +527,8 @@ export default class LoftShellHelper extends Extension {
         if (!entry) return;
         if (entry.watchId)
             Gio.bus_unwatch_name(entry.watchId);
+        if (entry.wmClass)
+            this._loftOverviewVisible?.delete(entry.wmClass);
         entry.indicator?.destroy();
         this._panelIcons.delete(name);
     }
@@ -533,6 +553,8 @@ export default class LoftShellHelper extends Extension {
         const entry = this._panelIcons.get(name);
         if (!entry) return;
         entry.showHideItem.label.text = visible ? 'Hide' : 'Show';
+        if (entry.wmClass)
+            this._loftOverviewVisible?.set(entry.wmClass, visible);
     }
 
     _callDaemonMethod(dbusName, method, signature, args) {
@@ -657,9 +679,12 @@ export default class LoftShellHelper extends Extension {
 
     _updateCombinedService(name, displayName, visible, badge, dnd, wmClass) {
         // Track the window class for alt-tab/overview/dash hiding (combined mode
-        // registers services here rather than via _registerService).
-        if (wmClass)
+        // registers services here rather than via _registerService), and the
+        // daemon's visibility so the overview can exclude hidden windows.
+        if (wmClass) {
             this._loftWmClasses?.add(wmClass);
+            this._loftOverviewVisible?.set(wmClass, visible);
+        }
 
         const existing = this._combinedServices.get(name);
         if (existing &&
@@ -676,6 +701,9 @@ export default class LoftShellHelper extends Extension {
     }
 
     _removeCombinedService(name) {
+        const svc = this._combinedServices.get(name);
+        if (svc?.wmClass)
+            this._loftOverviewVisible?.delete(svc.wmClass);
         this._combinedServices.delete(name);
         this._rebuildCombinedMenu();
         this._updateCombinedBadges();
