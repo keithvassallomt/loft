@@ -28,7 +28,7 @@ loft-whatsapp.desktop (or user clicks tray icon)
   → daemon instance launches:
       google-chrome
         --user-data-dir=~/.local/share/loft/profiles/whatsapp
-        --load-extension=/path/to/loft/extension
+        --remote-debugging-pipe   (extension loaded via CDP, see below)
         --app=https://web.whatsapp.com/
   → extension ←→ daemon via native messaging
   → daemon manages: its own SNI tray icon, badge count, show/hide
@@ -65,9 +65,11 @@ loft-whatsapp.desktop (or user clicks tray icon)
    - Zoom level persistence via `chrome.storage.local` (range 0.3–3.0, step 0.1)
    - Offscreen document (`offscreen.html`) to keep the service worker alive
 
-4. **GNOME Shell extension** (`loft-shell-helper@chat.loft`)
+4. **GNOME Shell extension** (`loft-shell-helper@loft.chat`)
    - Deployed to `~/.local/share/gnome-shell/extensions/` during service install
-   - D-Bus interface (`chat.loft.ShellHelper`) with methods: `FocusWindow`, `HideWindow`, `RegisterService`, `UnregisterService`, `UpdateBadge`, `UpdateDnd`, `UpdateVisible`
+   - D-Bus interface (`chat.loft.ShellHelper`) with methods: `FocusWindow`, `HideWindow`, `RegisterService`, `UnregisterService`, `UpdateBadge`, `UpdateDnd`, `UpdateVisible`, plus combined-icon methods `RegisterCombined`, `UnregisterCombined`, `UpdateCombinedService`, `RemoveCombinedService`
+   - Service identity is data-driven: each service's window class and display name come from the daemon's `RegisterService`/`UpdateCombinedService` calls (no hardcoded service lists), and the window class is derived from the effective launch URL so self-hosted instances match too
+   - Loft ships this helper; the daemon (re)deploys the bundled copy when it's missing or newer than what's installed (compared via `version-name`, never downgrading a newer EGO build) and prompts the user to log out/in, since GNOME loads new extension JS only at session start
    - Bypasses GNOME's focus-stealing prevention by calling `meta_window.activate()` from inside the compositor
    - Hides minimized Loft windows from alt-tab (patches `AppSwitcherPopup`), overview (patches `Workspace`), and dock/dash (patches `Shell.AppSystem.get_running`)
    - Provides native GNOME panel icons with badge counts, DND state, and show/hide controls as an alternative to SNI tray icons
@@ -94,6 +96,18 @@ Each running service gets its own independent tray icon:
   └─ Quit
 ```
 
+#### Tray backend & combined icon
+
+The tray backend is selected by `tray_backend` in `config.toml` (`auto` |
+`gnome-panel` | `sni`; `auto` → GNOME panel icons on GNOME, SNI elsewhere).
+
+Independently, `combine_tray_icons` (default true on GNOME) collapses the
+per-service icons above into a single Loft icon whose menu lists every running
+service. The combined SNI icon runs in a separate process (`loft --tray`,
+`src/combined_tray/`) that owns the `chat.loft.Tray` D-Bus name; each daemon
+registers with it. On GNOME the combined icon is instead a single panel button
+managed by the shell helper (`RegisterCombined`/`UpdateCombinedService`).
+
 ### Window Behavior
 
 - **Close (X button)**: Window hides, daemon + tray icon stay alive. Click tray icon to reopen.
@@ -103,8 +117,8 @@ Each running service gets its own independent tray icon:
 ### Chrome Launch Details
 
 - **Separate profile per service**: `~/.local/share/loft/profiles/<service>/` (e.g. `profiles/whatsapp/`, `profiles/messenger/`)
-- Extension loaded via `--load-extension=`
-- Developer mode nag suppressed via `--disable-extensions-except=/path --load-extension=/path` or Chrome enterprise policies (`policies.json`)
+- Extension loaded at runtime via `--remote-debugging-pipe` + CDP `Extensions.loadUnpacked` (branded Chrome 137+ removed `--load-extension`); the daemon drives the CDP pipe on fds 3/4 (`pre_exec` dup2 in the spawn logic)
+- Unpacked-extension loading enabled via `--enable-unsafe-extension-debugging`
 - `--app=<url>` for chromeless window
 - **Window focus**: On GNOME, the daemon calls the GNOME Shell extension via D-Bus (`chat.loft.ShellHelper.FocusWindow`) which uses `meta_window.activate()` — bypasses focus-stealing prevention. On KDE, the daemon uses KWin scripting via D-Bus (`org.kde.kwin.Scripting`) to find and activate windows by WM class. On other DEs, the Chrome extension handles focus via `chrome.windows.update({focused: true})`.
 
@@ -121,7 +135,9 @@ Communication between the extension and daemon uses Chrome's native messaging fo
 | `notification`   | `{ type, title: string, body: string, icon?: string }` | Notification metadata (informational — Chrome shows the actual notification) |
 | `dom_notification` | `{ type, sender: string, body: string, icon?: string, href?: string }` | DOM-scraped notification (Messenger/Slack) with conversation link |
 | `window_hidden`  | `{ type }`                                       | User closed the window (X button); Chrome still alive in background |
-| `window_shown`   | `{ type }`                                       | Window was restored/focused (e.g. via alt-tab) |
+| `window_shown`   | `{ type }`                                       | Window was restored/shown (e.g. via alt-tab) |
+| `window_focused` | `{ type }`                                       | Window gained input focus (used to suppress notifications while focused) |
+| `window_unfocused` | `{ type }`                                     | Window lost input focus |
 | `hide_request`   | `{ type }`                                       | Content script titlebar button requests hide-to-tray |
 | `open_url`       | `{ type, url: string }`                          | Content script requests opening a URL in the default browser |
 
@@ -170,7 +186,7 @@ If none found, prompt the user to install Google Chrome.
 
 User can override with a custom path in settings (power user option).
 
-**Minimum version**: Chrome 88 or later.
+**Minimum version**: Chrome 137 or later (the CDP-based unpacked-extension loading via `--remote-debugging-pipe` replaced `--load-extension`, which branded Chrome removed in 137).
 
 Only Google Chrome is officially supported (proprietary codecs required for video calling). Other Chromium-based browsers may work but are not guaranteed.
 
@@ -262,7 +278,7 @@ Centralised logging for all components (manager, daemons):
     telegram.log
 
 ~/.local/share/gnome-shell/extensions/
-  loft-shell-helper@chat.loft/    # GNOME Shell extension (focus/hide, alt-tab hiding)
+  loft-shell-helper@loft.chat/    # GNOME Shell extension (focus/hide, alt-tab hiding)
 ```
 
 ## Packaging
