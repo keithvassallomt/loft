@@ -172,6 +172,32 @@ fn display_name_for_binary(name: &str) -> String {
     }
 }
 
+/// Derive the WM_CLASS (window `res_class`) Chrome assigns to an `--app=URL`
+/// window. In app mode Chrome sets it to `chrome-<host>_<path>-Default`, where
+/// every `/` in the path (leading slash included) becomes `_`. This matches the
+/// per-service `chrome_desktop_id` constants exactly, and lets us compute the
+/// right class for a self-hosted `custom_url` instead of the built-in URL.
+///
+/// e.g. `https://app.element.io/` → `chrome-app.element.io__-Default`,
+/// `https://chat.example.com/element/` → `chrome-chat.example.com__element_-Default`.
+pub fn chrome_app_wm_class(url: &str) -> String {
+    let without_scheme = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url);
+    let (host, raw_path) = match without_scheme.find('/') {
+        Some(i) => (&without_scheme[..i], &without_scheme[i..]),
+        None => (without_scheme, "/"),
+    };
+    // Drop any query/fragment — Chrome's class is derived from host + path only.
+    let path = raw_path
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("/");
+    let path = if path.is_empty() { "/" } else { path };
+    format!("chrome-{}_{}-Default", host, path.replace('/', "_"))
+}
+
 /// Build the Chrome command-line arguments for a service.
 ///
 /// Uses `--remote-debugging-pipe` + CDP `Extensions.loadUnpacked` to load the
@@ -331,6 +357,37 @@ mod tests {
         assert!(args.contains(&"--remote-debugging-pipe".to_string()));
         assert!(args.contains(&"--enable-unsafe-extension-debugging".to_string()));
         assert!(!args.iter().any(|a| a.starts_with("--load-extension")));
+    }
+
+    #[test]
+    fn test_chrome_app_wm_class_matches_known_ids() {
+        // The deriver must reproduce every service's hand-verified
+        // chrome_desktop_id from its built-in URL.
+        for svc in crate::service::ALL_SERVICES {
+            assert_eq!(
+                chrome_app_wm_class(svc.url),
+                svc.chrome_desktop_id,
+                "wm_class mismatch for {}",
+                svc.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_chrome_app_wm_class_custom() {
+        assert_eq!(
+            chrome_app_wm_class("https://chat.example.com/"),
+            "chrome-chat.example.com__-Default"
+        );
+        assert_eq!(
+            chrome_app_wm_class("https://chat.example.com/element/#/welcome"),
+            "chrome-chat.example.com__element_-Default"
+        );
+        // No path → treated as root, same as a trailing slash.
+        assert_eq!(
+            chrome_app_wm_class("https://chat.example.com"),
+            "chrome-chat.example.com__-Default"
+        );
     }
 
     #[test]

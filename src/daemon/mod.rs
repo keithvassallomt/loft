@@ -141,6 +141,11 @@ pub struct DaemonState {
     pub cdp_pipe_fds: std::sync::Mutex<Option<(i32, i32)>>,
     /// Broadcast channel for sending commands to the extension via native messaging.
     pub cmd_tx: tokio::sync::broadcast::Sender<messaging::DaemonMessage>,
+    /// The window class Chrome assigns to this service's `--app` window, used to
+    /// find/focus/hide it via the GNOME Shell / KWin helpers. Derived from the
+    /// effective launch URL (custom_url-aware), so it's correct for self-hosted
+    /// instances, not just the built-in URL.
+    pub wm_class: String,
 }
 
 impl DaemonState {
@@ -150,6 +155,7 @@ impl DaemonState {
         show_titlebar: bool,
         badges_enabled: bool,
         combine_tray: bool,
+        wm_class: String,
     ) -> Self {
         let (cmd_tx, _) = tokio::sync::broadcast::channel(16);
         Self {
@@ -169,6 +175,7 @@ impl DaemonState {
             chrome_pid_atomic: AtomicI32::new(0),
             cdp_pipe_fds: std::sync::Mutex::new(None),
             cmd_tx,
+            wm_class,
         }
     }
 
@@ -238,6 +245,11 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
     if let Err(e) = crate::desktop::deploy_extension() {
         tracing::warn!("Could not re-deploy extension on startup: {}", e);
     }
+    // Refresh the GNOME Shell helper too, so panel/alt-tab fixes land without a
+    // reinstall. GNOME Shell still needs a reload (re-login) to load new JS.
+    if let Err(e) = crate::desktop::deploy_gnome_shell_extension() {
+        tracing::warn!("Could not re-deploy GNOME Shell extension on startup: {}", e);
+    }
 
     // 1. Singleton check via D-Bus
     match dbus::is_already_running(definition).await {
@@ -256,12 +268,20 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
     // start_hidden config is only applied via the autostart .desktop file's
     // --minimized flag, so manual launches from the app icon show the window.
     let minimized = minimized;
+    // Window class for focus/hide helpers: derive from the effective launch URL
+    // so a self-hosted custom_url matches its real Chrome window, not the
+    // built-in app.element.io class.
+    let wm_class = match service_config.custom_url.as_deref() {
+        Some(url) => chrome::chrome_app_wm_class(url),
+        None => definition.chrome_desktop_id.to_string(),
+    };
     let state = Arc::new(DaemonState::new(
         service_config.do_not_disturb,
         minimized,
         service_config.show_titlebar,
         service_config.badges_enabled,
         global_config.combine_tray_icons,
+        wm_class,
     ));
 
     // 3. Register D-Bus service
@@ -330,7 +350,7 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
     // 6b. Start GNOME Shell extension handler for window focus/hide
     //     (always runs — handles FocusWindow/HideWindow D-Bus calls regardless of tray backend)
     {
-        let wm_class = definition.chrome_desktop_id.to_string();
+        let wm_class = state.wm_class.clone();
         let handler_state = Arc::clone(&state);
         let mut cmd_rx = state.cmd_tx.subscribe();
         tokio::spawn(async move {
@@ -470,7 +490,7 @@ async fn run_gnome_panel_icon(state: Arc<DaemonState>, definition: &'static Serv
     let svc_name = definition.name.to_string();
     let display_name = definition.display_name.to_string();
     let icon = definition.tray_icon_name();
-    let wm_class = definition.chrome_desktop_id.to_string();
+    let wm_class = state.wm_class.clone();
 
     // Register with retry
     let retry_delays = [0u64, 2, 4, 8, 16];
@@ -602,7 +622,7 @@ async fn run_combined_tray_client(
     let svc_name = definition.name;
     let display_name = definition.display_name;
     let icon = definition.tray_icon_name();
-    let wm_class = definition.chrome_desktop_id;
+    let wm_class = state.wm_class.as_str();
 
     // Spawn tray process if needed and register
     if let Err(e) = combined_tray::spawn_tray_if_needed().await {
@@ -776,7 +796,7 @@ async fn monitor_combined_tray_restart(
                     definition.name,
                     definition.display_name,
                     &definition.tray_icon_name(),
-                    definition.chrome_desktop_id,
+                    &state.wm_class,
                     visible,
                     badge,
                     dnd,

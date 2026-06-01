@@ -416,7 +416,7 @@ pub fn deploy_extension() -> Result<()> {
 }
 
 /// Deploy the GNOME Shell extension to ~/.local/share/gnome-shell/extensions/loft-shell-helper@loft.chat/.
-fn deploy_gnome_shell_extension() -> Result<()> {
+pub fn deploy_gnome_shell_extension() -> Result<()> {
     let ext_dir = host_data_dir()
         .join("gnome-shell/extensions/loft-shell-helper@loft.chat");
     std::fs::create_dir_all(&ext_dir)

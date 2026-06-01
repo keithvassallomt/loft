@@ -19,12 +19,10 @@ const DBUS_NAME = 'chat.loft.ShellHelper';
 const DBUS_PATH = '/chat/loft/ShellHelper';
 
 // Chrome in --app= mode sets WM_CLASS to "chrome-<sanitised_url>-<profile>".
-const LOFT_WM_CLASS_LIST = [
-    'chrome-web.whatsapp.com__-Default',
-    'chrome-facebook.com__messages_-Default',
-    'chrome-app.slack.com__client_-Default',
-    'chrome-web.telegram.org__a_-Default',
-];
+// Loft window classes (chrome-<host>__<path>-Default) are not hardcoded — the
+// daemon sends each service's real wm_class via RegisterService /
+// UpdateCombinedService, and we add it to _loftWmClasses on registration. This
+// keeps the extension service-agnostic and correct for self-hosted instances.
 
 const DBUS_IFACE = `<node>
   <interface name="${DBUS_NAME}">
@@ -101,7 +99,7 @@ function _isMinimizedLoftWindow(win, wmClasses) {
 
 export default class LoftShellHelper extends Extension {
     enable() {
-        this._loftWmClasses = new Set(LOFT_WM_CLASS_LIST);
+        this._loftWmClasses = new Set();
         this._panelIcons = new Map();
         this._combinedIndicator = null;
         this._combinedServices = new Map();
@@ -391,6 +389,12 @@ export default class LoftShellHelper extends Extension {
             this._panelIcons.delete(name);
         }
 
+        // Track this service's window class so the alt-tab/overview/dash
+        // patches hide its minimized window. Add-only: stale entries match no
+        // window and are harmless, and re-registration (mode switch) dedupes.
+        if (wmClass)
+            this._loftWmClasses?.add(wmClass);
+
         const indicator = new PanelMenu.Button(0.0, `loft-${name}`, false);
 
         const box = new St.Widget({
@@ -440,7 +444,10 @@ export default class LoftShellHelper extends Extension {
             );
         });
 
-        const dbusServiceName = this._dbusNameForService(name);
+        // The daemon registers on chat.loft.<dbus_name>, and in service.rs
+        // dbus_name == display_name for every service, so displayName is the
+        // D-Bus name (no per-service lookup table needed).
+        const dbusServiceName = displayName;
 
         const showHideItem = new PopupMenu.PopupMenuItem('Show');
         showHideItem.connect('activate', () => {
@@ -526,16 +533,6 @@ export default class LoftShellHelper extends Extension {
         const entry = this._panelIcons.get(name);
         if (!entry) return;
         entry.showHideItem.label.text = visible ? 'Hide' : 'Show';
-    }
-
-    _dbusNameForService(name) {
-        const map = {
-            'whatsapp': 'WhatsApp',
-            'messenger': 'Messenger',
-            'slack': 'Slack',
-            'telegram': 'Telegram',
-        };
-        return map[name] || name;
     }
 
     _callDaemonMethod(dbusName, method, signature, args) {
@@ -659,6 +656,11 @@ export default class LoftShellHelper extends Extension {
     }
 
     _updateCombinedService(name, displayName, visible, badge, dnd, wmClass) {
+        // Track the window class for alt-tab/overview/dash hiding (combined mode
+        // registers services here rather than via _registerService).
+        if (wmClass)
+            this._loftWmClasses?.add(wmClass);
+
         const existing = this._combinedServices.get(name);
         if (existing &&
             existing.displayName === displayName &&
@@ -704,7 +706,7 @@ export default class LoftShellHelper extends Extension {
 
         // One compact row per service: name + unread dot + [Show/Hide] [DND] [Quit]
         for (const [name, svc] of this._combinedServices) {
-            const dbusName = this._dbusNameForService(name);
+            const dbusName = svc.displayName;
 
             const item = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
 
