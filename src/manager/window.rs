@@ -66,6 +66,24 @@ fn is_gnome() -> bool {
         .any(|d| d.eq_ignore_ascii_case("GNOME"))
 }
 
+/// Tell the user to log out and back in for the Loft Shell Helper to load.
+/// Shown after Loft (re)deploys the bundled extension, since GNOME Shell only
+/// loads new extension JS at session start.
+fn show_relogin_dialog(window: Option<&libadwaita::ApplicationWindow>) {
+    let dialog = libadwaita::AlertDialog::new(
+        Some("Log Out to Finish Setup"),
+        Some(
+            "Loft installed (or updated) its GNOME Shell integration. Log out and \
+             back in for window management — show/hide, panel icons, and overview \
+             handling — to work correctly.",
+        ),
+    );
+    dialog.add_response("ok", "Got It");
+    dialog.set_default_response(Some("ok"));
+    dialog.set_close_response("ok");
+    dialog.present(window);
+}
+
 /// Check whether the Loft Shell Helper GNOME extension is installed.
 /// If not, show a dialog offering to install it from EGO.
 fn check_gnome_extension(window: &libadwaita::ApplicationWindow) {
@@ -270,7 +288,7 @@ fn create_uninstalled_row(
     let nv = nav_view.clone();
     button.connect_clicked(move |btn| {
         match desktop::install_service(definition) {
-            Ok(()) => {
+            Ok(helper_deployed) => {
                 if let Some(old_row) = btn
                     .ancestor(libadwaita::ActionRow::static_type())
                     .and_then(|w| w.downcast::<libadwaita::ActionRow>().ok())
@@ -279,6 +297,13 @@ fn create_uninstalled_row(
                     lb.remove(&old_row);
                     let new_row = create_installed_row(definition, &lb, &nv);
                     lb.insert(&new_row, idx);
+                }
+                // GNOME loads new extension JS only at session start.
+                if helper_deployed && is_gnome() {
+                    let window = btn
+                        .root()
+                        .and_then(|r| r.downcast::<libadwaita::ApplicationWindow>().ok());
+                    show_relogin_dialog(window.as_ref());
                 }
             }
             Err(e) => tracing::error!("Install failed: {}", e),

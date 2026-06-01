@@ -9,9 +9,12 @@ use crate::service::ServiceDefinition;
 const EXTENSION_ID: &str = "eofapmpkglkhhdjadegnleadgbjooljp";
 
 /// Install a service: fetch icon, create .desktop file, set up NM host manifest.
-pub fn install_service(definition: &ServiceDefinition) -> Result<()> {
+///
+/// Returns `true` when the GNOME Shell helper was (re)deployed, so the caller
+/// can prompt the user to log out and back in for it to take effect.
+pub fn install_service(definition: &ServiceDefinition) -> Result<bool> {
     deploy_extension()?;
-    deploy_gnome_shell_extension()?;
+    let helper_deployed = deploy_gnome_shell_extension()?;
     deploy_service_icons(definition)?;
     ensure_combined_icon()?;
     create_desktop_entry(definition)?;
@@ -19,7 +22,7 @@ pub fn install_service(definition: &ServiceDefinition) -> Result<()> {
     setup_nm_host()?;
     ServiceConfig::default().save(&definition.name)?;
     tracing::info!("Installed service: {}", definition.display_name);
-    Ok(())
+    Ok(helper_deployed)
 }
 
 /// Uninstall a service: remove .desktop file, icon, config.
@@ -415,15 +418,58 @@ pub fn deploy_extension() -> Result<()> {
     Ok(())
 }
 
+const GNOME_HELPER_METADATA: &str = include_str!("../gnome-shell-extension/metadata.json");
+
+/// Parse a metadata.json `version-name` (e.g. `"1.2"`) into comparable parts.
+/// `version-name` is the only version field we control that survives EGO
+/// distribution (EGO assigns its own integer `version`), so it's what we use
+/// to decide whether the bundled helper is newer than the deployed one.
+fn helper_version(metadata_json: &str) -> Vec<u32> {
+    serde_json::from_str::<serde_json::Value>(metadata_json)
+        .ok()
+        .and_then(|v| {
+            v.get("version-name")
+                .and_then(|s| s.as_str())
+                .map(|s| s.split('.').filter_map(|p| p.parse::<u32>().ok()).collect())
+        })
+        .unwrap_or_default()
+}
+
+/// The bundled GNOME Shell helper's `version-name` (e.g. `"1.2"`).
+pub fn bundled_gnome_helper_version() -> String {
+    serde_json::from_str::<serde_json::Value>(GNOME_HELPER_METADATA)
+        .ok()
+        .and_then(|v| v.get("version-name").and_then(|s| s.as_str()).map(String::from))
+        .unwrap_or_default()
+}
+
 /// Deploy the GNOME Shell extension to ~/.local/share/gnome-shell/extensions/loft-shell-helper@loft.chat/.
-pub fn deploy_gnome_shell_extension() -> Result<()> {
+///
+/// Loft ships the helper itself, so a user may have it missing (never installed)
+/// or outdated (an older EGO build whose update isn't approved yet). We deploy
+/// the bundled copy when it's missing or strictly newer than what's installed
+/// (never downgrade a newer EGO build). Returns `true` when files were
+/// (re)written — the caller should then prompt the user to log out and back in,
+/// since GNOME Shell only loads new extension JS at session start.
+pub fn deploy_gnome_shell_extension() -> Result<bool> {
     let ext_dir = host_data_dir()
         .join("gnome-shell/extensions/loft-shell-helper@loft.chat");
+
+    // Decide whether the bundled helper is newer than what's deployed.
+    let bundled_version = helper_version(GNOME_HELPER_METADATA);
+    let deployed_meta = std::fs::read_to_string(ext_dir.join("metadata.json")).ok();
+    if let Some(ref meta) = deployed_meta {
+        if helper_version(meta) >= bundled_version {
+            // Up to date (or a newer EGO build) — leave it alone.
+            return Ok(false);
+        }
+    }
+
     std::fs::create_dir_all(&ext_dir)
         .with_context(|| format!("Failed to create GNOME Shell extension dir {}", ext_dir.display()))?;
 
     let files: &[(&str, &str)] = &[
-        ("metadata.json", include_str!("../gnome-shell-extension/metadata.json")),
+        ("metadata.json", GNOME_HELPER_METADATA),
         ("extension.js", include_str!("../gnome-shell-extension/extension.js")),
     ];
 
@@ -469,7 +515,7 @@ pub fn deploy_gnome_shell_extension() -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(true)
 }
 
 // ============================================================
@@ -761,6 +807,30 @@ pub fn set_autostart(definition: &ServiceDefinition, enabled: bool, start_hidden
 mod tests {
     use super::*;
     use crate::service::WHATSAPP;
+
+    #[test]
+    fn test_helper_version_parse_and_compare() {
+        assert_eq!(helper_version(r#"{"version-name":"1.2"}"#), vec![1, 2]);
+        assert_eq!(helper_version(r#"{"version-name":"2"}"#), vec![2]);
+        // Missing / unparseable → empty, which sorts below any real version.
+        assert_eq!(helper_version(r#"{}"#), Vec::<u32>::new());
+        assert_eq!(helper_version("not json"), Vec::<u32>::new());
+
+        // Newer bundled than deployed → would deploy; equal/older → would not.
+        assert!(helper_version(r#"{"version-name":"1.2"}"#) > helper_version(r#"{"version-name":"1.1"}"#));
+        assert!(helper_version(r#"{"version-name":"1.10"}"#) > helper_version(r#"{"version-name":"1.2"}"#));
+        assert!(helper_version(r#"{"version-name":"1.2"}"#) >= helper_version(r#"{"version-name":"1.2"}"#));
+        // A newer EGO build must not be downgraded.
+        assert!(helper_version(r#"{"version-name":"1.3"}"#) >= helper_version(GNOME_HELPER_METADATA));
+    }
+
+    #[test]
+    fn test_bundled_helper_version_nonempty() {
+        // The bundled metadata must carry a parseable version-name.
+        let v = bundled_gnome_helper_version();
+        assert!(!v.is_empty());
+        assert!(!helper_version(GNOME_HELPER_METADATA).is_empty());
+    }
 
     #[test]
     fn test_desktop_entry_path() {

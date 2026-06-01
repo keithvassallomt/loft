@@ -233,6 +233,54 @@ impl DaemonState {
 
 }
 
+fn is_gnome() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .split(':')
+        .any(|d| d.eq_ignore_ascii_case("GNOME"))
+}
+
+/// Notify the user (once per version, deduped across concurrently-starting
+/// service daemons) that the GNOME Shell helper was (re)deployed and needs a
+/// re-login to load. No-op off GNOME.
+async fn notify_gnome_helper_relogin(definition: &'static ServiceDefinition) {
+    if !is_gnome() {
+        return;
+    }
+
+    // The first daemon to create the per-version marker sends the notification;
+    // the others (same login, same version) find it and stay quiet.
+    let version = crate::desktop::bundled_gnome_helper_version();
+    if let Some(dir) = dirs::data_dir().map(|d| d.join("loft")) {
+        let _ = std::fs::create_dir_all(&dir);
+        let marker = dir.join(format!(".gnome-helper-relogin-{version}"));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&marker)
+        {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return,
+            Err(e) => tracing::warn!("Could not write re-login marker: {}", e),
+        }
+    }
+
+    tracing::info!("GNOME Shell helper (re)deployed — notifying user to re-login");
+    if let Err(e) = notifications::send(
+        definition.name,
+        "Loft",
+        "Log out to finish updating Loft",
+        "Loft updated its GNOME integration. Log out and back in for window \
+         management (show/hide, panel icons) to work correctly.",
+        None,
+        None,
+    )
+    .await
+    {
+        tracing::warn!("Failed to send re-login notification: {}", e);
+    }
+}
+
 /// Main entry point for the service daemon.
 pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
     let definition = service::get_definition(&service_name);
@@ -245,10 +293,14 @@ pub async fn run(service_name: ServiceName, minimized: bool) -> Result<()> {
     if let Err(e) = crate::desktop::deploy_extension() {
         tracing::warn!("Could not re-deploy extension on startup: {}", e);
     }
-    // Refresh the GNOME Shell helper too, so panel/alt-tab fixes land without a
-    // reinstall. GNOME Shell still needs a reload (re-login) to load new JS.
-    if let Err(e) = crate::desktop::deploy_gnome_shell_extension() {
-        tracing::warn!("Could not re-deploy GNOME Shell extension on startup: {}", e);
+    // Refresh the GNOME Shell helper if the bundled copy is missing or newer
+    // than what's installed (e.g. an EGO build whose update isn't approved yet).
+    // GNOME Shell only loads new extension JS at session start, so when we
+    // (re)deploy it we tell the user to log out and back in.
+    match crate::desktop::deploy_gnome_shell_extension() {
+        Ok(true) => notify_gnome_helper_relogin(definition).await,
+        Ok(false) => {}
+        Err(e) => tracing::warn!("Could not deploy GNOME Shell extension on startup: {}", e),
     }
 
     // 1. Singleton check via D-Bus
