@@ -186,6 +186,17 @@ pub fn ensure_manager_desktop_entry() -> Result<()> {
         return Ok(());
     }
 
+    // Don't pollute the launcher when running a dev build straight out of the
+    // cargo target dir — that's a working copy, not an installed app. Packaged
+    // and AppImage builds run from elsewhere and still get their entry.
+    if let Ok(exe) = std::env::current_exe() {
+        let p = exe.to_string_lossy();
+        if p.contains("/target/debug/") || p.contains("/target/release/") {
+            tracing::debug!("Dev build ({p}) — skipping manager .desktop entry");
+            return Ok(());
+        }
+    }
+
     let apps_dir = host_data_dir().join("applications");
     let path = apps_dir.join("chat.loft.Manager.desktop");
 
