@@ -15,7 +15,7 @@
   <description>
     <p>
       Loft provides full desktop integration for WhatsApp, Facebook Messenger,
-      Slack and Telegram on Linux, including voice and video calling, system tray
+      Slack, Telegram, Element (Matrix), and NextCloud Talk on Linux, including voice and video calling, system tray
       icons, badge counts, and close-to-tray behavior.
     </p>
     <p>
@@ -72,6 +72,15 @@
   </screenshots>
 
   <releases>
+    <release version="0.1.4" date="2026-06-02">
+      <description>
+        <ul>
+          <li>Added support for Element (Matrix), including self-hosted instances, with unread badges and Do Not Disturb.</li>
+          <li>Added support for NextCloud Talk on your own NextCloud server, with unread badges and notifications that show the sender's avatar.</li>
+          <li>Loft now prompts you to log out and back in when it updates its GNOME integration, so window management keeps working.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.3" date="2026-05-12">
       <description>
         <ul>

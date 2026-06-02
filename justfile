@@ -6,6 +6,7 @@ upstream_repo := "https://github.com/keithvassallomt/loft.git"
 # Build release binary and package as RPM, DEB, and AppImage
 build:
     cargo build --release
+    rm -rf {{ dist_dir }}
     mkdir -p {{ dist_dir }}
     @echo "==> Building RPM..."
     cargo generate-rpm
