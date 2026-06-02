@@ -155,7 +155,14 @@ release new_version:
     # ---- Phase 2: publish (point of no return) ----
     echo "==> Committing and tagging"
     git add -A
-    git commit -m "Release $tag"
+    # Normally this commit captures the version bump + changelog/metainfo. If
+    # that prep was already committed by hand, there's nothing to stage — just
+    # tag HEAD instead of failing on an empty commit.
+    if git diff --cached --quiet; then
+        echo "    Nothing to commit (release prep already committed) — tagging HEAD"
+    else
+        git commit -m "Release $tag"
+    fi
     git tag -a "$tag" -m "$tag"
 
     echo "==> Generating FriendlyHub submission files (pins $tag)"
