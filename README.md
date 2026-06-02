@@ -6,7 +6,7 @@
 
 Desktop integration for messaging apps on Linux.
 
-Loft provides full desktop integration for WhatsApp, Facebook Messenger, Slack and Telegram on Linux, including voice and video calling, system tray icons, badge counts, and close-to-tray behavior.
+Loft provides full desktop integration for WhatsApp, Facebook Messenger, Slack, Telegram, Element and NextCloud Talk on Linux, including voice and video calling, system tray icons, badge counts, and close-to-tray behavior.
 
 Unlike Electron wrappers, Loft uses your real Google Chrome installation for full WebRTC and codec support, while a Rust daemon provides system integration that Chrome alone cannot.
 
@@ -35,6 +35,10 @@ Unlike Electron wrappers, Loft uses your real Google Chrome installation for ful
 | Facebook Messenger | https://facebook.com/messages/ |
 | Slack              | https://app.slack.com/client/  |
 | Telegram           | https://web.telegram.org/a/    |
+| Element (Matrix)   | https://app.element.io/ (or self-hosted) |
+| NextCloud Talk     | self-hosted (your instance URL) |
+
+Element and NextCloud Talk are self-hostable: set your instance's URL in the service's settings in the Loft Manager. Element defaults to `app.element.io`; NextCloud Talk has no public server, so its URL is required.
 
 ## Requirements
 
@@ -110,6 +114,8 @@ loft --service whatsapp
 loft --service messenger
 loft --service slack
 loft --service telegram
+loft --service element
+loft --service talk
 
 # Start minimized to tray
 loft --service whatsapp --minimized
