@@ -462,10 +462,11 @@ export default class LoftShellHelper extends Extension {
             );
         });
 
-        // The daemon registers on chat.loft.<dbus_name>, and in service.rs
-        // dbus_name == display_name for every service, so displayName is the
-        // D-Bus name (no per-service lookup table needed).
-        const dbusServiceName = displayName;
+        // The daemon registers on chat.loft.<dbus_name>. In service.rs the
+        // dbus_name equals the display name with whitespace removed (D-Bus
+        // names can't contain spaces, e.g. "NextCloud Talk" → "NextCloudTalk"),
+        // so derive it that way — no per-service lookup table needed.
+        const dbusServiceName = displayName.replace(/\s+/g, '');
 
         const showHideItem = new PopupMenu.PopupMenuItem('Show');
         showHideItem.connect('activate', () => {
@@ -734,7 +735,8 @@ export default class LoftShellHelper extends Extension {
 
         // One compact row per service: name + unread dot + [Show/Hide] [DND] [Quit]
         for (const [name, svc] of this._combinedServices) {
-            const dbusName = svc.displayName;
+            // dbus_name == display name with whitespace stripped (see service.rs).
+            const dbusName = svc.displayName.replace(/\s+/g, '');
 
             const item = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
 

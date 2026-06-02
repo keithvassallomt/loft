@@ -287,31 +287,142 @@ fn create_uninstalled_row(
     let lb = list_box.clone();
     let nv = nav_view.clone();
     button.connect_clicked(move |btn| {
-        match desktop::install_service(definition) {
-            Ok(helper_deployed) => {
-                if let Some(old_row) = btn
-                    .ancestor(libadwaita::ActionRow::static_type())
-                    .and_then(|w| w.downcast::<libadwaita::ActionRow>().ok())
-                {
-                    let idx = old_row.index();
-                    lb.remove(&old_row);
-                    let new_row = create_installed_row(definition, &lb, &nv);
-                    lb.insert(&new_row, idx);
-                }
-                // GNOME loads new extension JS only at session start.
-                if helper_deployed && is_gnome() {
-                    let window = btn
-                        .root()
-                        .and_then(|r| r.downcast::<libadwaita::ApplicationWindow>().ok());
-                    show_relogin_dialog(window.as_ref());
-                }
-            }
-            Err(e) => tracing::error!("Install failed: {}", e),
+        // NextCloud Talk has no default server, so the instance URL is required.
+        // Prompt for it up front rather than silently installing a broken service.
+        if definition.name == "talk" {
+            prompt_talk_url_then_install(btn, definition, &lb, &nv);
+        } else {
+            do_install(btn, definition, &lb, &nv);
         }
     });
 
     row.add_suffix(&button);
     row
+}
+
+/// Perform the install and swap the uninstalled row for an installed one.
+fn do_install(
+    btn: &gtk4::Button,
+    definition: &'static service::ServiceDefinition,
+    list_box: &gtk4::ListBox,
+    nav_view: &libadwaita::NavigationView,
+) {
+    match desktop::install_service(definition) {
+        Ok(helper_deployed) => {
+            if let Some(old_row) = btn
+                .ancestor(libadwaita::ActionRow::static_type())
+                .and_then(|w| w.downcast::<libadwaita::ActionRow>().ok())
+            {
+                let idx = old_row.index();
+                list_box.remove(&old_row);
+                let new_row = create_installed_row(definition, list_box, nav_view);
+                list_box.insert(&new_row, idx);
+            }
+            // GNOME loads new extension JS only at session start.
+            if helper_deployed && is_gnome() {
+                let window = btn
+                    .root()
+                    .and_then(|r| r.downcast::<libadwaita::ApplicationWindow>().ok());
+                show_relogin_dialog(window.as_ref());
+            }
+        }
+        Err(e) => tracing::error!("Install failed: {}", e),
+    }
+}
+
+/// Normalise a user-entered NextCloud address into a full Talk URL, or `None`
+/// for empty input. Adds `https://` when no scheme is given and appends
+/// `/apps/spreed/` unless the address already points at it (so pasting the full
+/// URL is idempotent, and a NextCloud-in-a-subdirectory setup still works).
+fn normalize_talk_url(input: &str) -> Option<String> {
+    let text = input.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let mut text = text.to_string();
+    if !text.contains("://") {
+        text = format!("https://{text}");
+    }
+    let base = text.trim_end_matches('/');
+    Some(if base.ends_with("/apps/spreed") {
+        format!("{base}/")
+    } else {
+        format!("{base}/apps/spreed/")
+    })
+}
+
+/// Prompt for the NextCloud server URL, then install Talk with it. The URL is
+/// saved after `install_service` (which writes a default config) and the
+/// extension is re-deployed so its manifest is templated with the instance
+/// origin — mirroring the detail page's custom-URL apply path.
+fn prompt_talk_url_then_install(
+    btn: &gtk4::Button,
+    definition: &'static service::ServiceDefinition,
+    list_box: &gtk4::ListBox,
+    nav_view: &libadwaita::NavigationView,
+) {
+    let window = btn
+        .root()
+        .and_then(|r| r.downcast::<libadwaita::ApplicationWindow>().ok());
+
+    let dialog = libadwaita::AlertDialog::new(
+        Some("NextCloud Server"),
+        Some(
+            "Enter the address of your NextCloud server (e.g. cloud.example.com). \
+             Loft adds the Talk path for you.",
+        ),
+    );
+
+    let entry = gtk4::Entry::new();
+    entry.set_placeholder_text(Some("cloud.example.com"));
+    entry.set_hexpand(true);
+    entry.set_margin_top(12);
+    entry.set_activates_default(true);
+    if let Some(existing) = ServiceConfig::load(&definition.name)
+        .ok()
+        .and_then(|c| c.custom_url)
+    {
+        entry.set_text(&existing);
+    }
+    dialog.set_extra_child(Some(&entry));
+
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("install", "Install");
+    dialog.set_response_appearance("install", libadwaita::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("install"));
+    dialog.set_close_response("cancel");
+
+    // Keep Install disabled until the user has typed something.
+    dialog.set_response_enabled("install", !entry.text().trim().is_empty());
+    let dlg = dialog.clone();
+    entry.connect_changed(move |e| {
+        dlg.set_response_enabled("install", !e.text().trim().is_empty());
+    });
+
+    let btn = btn.clone();
+    let lb = list_box.clone();
+    let nv = nav_view.clone();
+    dialog.connect_response(None, move |_, response| {
+        if response != "install" {
+            return;
+        }
+        let Some(url) = normalize_talk_url(&entry.text()) else {
+            return;
+        };
+        do_install(&btn, definition, &lb, &nv);
+        // Persist the URL and re-template the extension with its origin.
+        let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
+        cfg.custom_url = Some(url);
+        if let Err(e) = cfg.save(&definition.name) {
+            tracing::error!("Failed to save NextCloud Talk URL: {}", e);
+            return;
+        }
+        if let Err(e) = desktop::deploy_extension() {
+            tracing::error!("Failed to re-deploy extension after Talk install: {}", e);
+        }
+    });
+
+    dialog.present(window.as_ref());
 }
 
 /// Detail page for an installed service with settings and uninstall.
@@ -536,28 +647,29 @@ fn create_detail_page(
         }
 
         url_row.connect_apply(move |row| {
-            let mut text = row.text().trim().to_string();
-            // Normalise a bare host to https:// so it forms a valid origin.
-            if !text.is_empty() && !text.contains("://") {
-                text = format!("https://{text}");
-            }
-            // NextCloud Talk lives under /apps/spreed/ on the user's instance,
-            // so the user only enters their server address (host, or host with
-            // a subpath for a NextCloud-in-subdirectory setup) and Loft appends
-            // the Talk path. Idempotent if they paste the full URL themselves.
-            if definition.name == "talk" && !text.is_empty() {
-                let base = text.trim_end_matches('/');
-                text = if base.ends_with("/apps/spreed") {
-                    format!("{base}/")
+            let normalized = if definition.name == "talk" {
+                // Talk lives under /apps/spreed/; let the user enter just their
+                // server address and reflect the resolved URL back into the row.
+                let u = normalize_talk_url(&row.text());
+                if let Some(ref u) = u {
+                    row.set_text(u);
+                }
+                u
+            } else {
+                // Normalise a bare host to https:// so it forms a valid origin.
+                let mut text = row.text().trim().to_string();
+                if text.is_empty() {
+                    None
                 } else {
-                    format!("{base}/apps/spreed/")
-                };
-                // Reflect the resolved URL back so the user sees what was saved.
-                row.set_text(&text);
-            }
+                    if !text.contains("://") {
+                        text = format!("https://{text}");
+                    }
+                    Some(text)
+                }
+            };
 
             let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
-            cfg.custom_url = if text.is_empty() { None } else { Some(text) };
+            cfg.custom_url = normalized;
             if let Err(e) = cfg.save(&definition.name) {
                 tracing::error!(
                     "Failed to save custom_url for {}: {}",

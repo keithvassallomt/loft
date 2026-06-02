@@ -112,7 +112,10 @@ pub const TALK: ServiceDefinition = ServiceDefinition {
     name: "talk",
     display_name: "NextCloud Talk",
     url: "https://cloud.nextcloud.com/apps/spreed/",
-    dbus_name: "Talk",
+    // Must equal `display_name` with whitespace removed: the GNOME shell helper
+    // derives the D-Bus name from the display name that way (it isn't told the
+    // dbus_name directly). D-Bus bus names can't contain spaces anyway.
+    dbus_name: "NextCloudTalk",
     app_icon_svg: include_str!("../assets/icons/talk.svg"),
     app_icon_png: include_bytes!("../assets/icons/talk.png"),
     tray_icon_svg: include_str!("../assets/icons/talk-symbolic.svg"),

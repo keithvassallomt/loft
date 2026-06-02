@@ -47,20 +47,29 @@
   //
   // Element serves avatars either as blob: object URLs or as authenticated
   // Matrix media URLs that only the page can fetch (Element's service worker
-  // attaches the access token). The daemon can't fetch those, so for Element
-  // we fetch the icon in-page and inline it as a data: URL (the daemon decodes
-  // data: URIs). Other services keep the original behaviour: pass https URLs
-  // through for the daemon to download, drop anything else.
+  // attaches the access token). NextCloud Talk serves avatars from root-relative
+  // paths (e.g. /index.php/avatar/<user>/64) that need the session cookie. The
+  // daemon can't fetch either, so for Element/Talk we fetch the icon in-page and
+  // inline it as a data: URL (the daemon decodes data: URIs). Other services
+  // keep the original behaviour: pass https URLs through for the daemon to
+  // download, drop anything else.
   function resolveIcon(icon) {
     if (typeof icon !== "string" || !icon) return Promise.resolve("");
     if (icon.startsWith("data:")) return Promise.resolve(icon);
 
-    const fetchable =
-      icon.startsWith("blob:") ||
-      icon.startsWith("https://") ||
-      icon.startsWith("http://");
-    if ((isElementPage() || isTalkPage()) && fetchable) {
-      return fetch(icon)
+    // Resolve relative icon URLs (NextCloud passes root-relative avatar paths)
+    // against the page so they become fetchable.
+    let abs = icon;
+    if (!/^(blob:|https?:)/.test(icon)) {
+      try {
+        abs = new URL(icon, window.location.href).href;
+      } catch {
+        return Promise.resolve("");
+      }
+    }
+
+    if ((isElementPage() || isTalkPage()) && /^(blob:|https?:)/.test(abs)) {
+      return fetch(abs)
         .then((r) => (r.ok ? r.blob() : Promise.reject(new Error("fetch failed"))))
         .then(
           (blob) =>
@@ -73,14 +82,37 @@
             })
         )
         // Fall back to the original URL if it's at least daemon-downloadable.
-        .catch(() => (icon.startsWith("https://") ? icon : ""));
+        .catch(() => (abs.startsWith("https://") ? abs : ""));
     }
 
-    return Promise.resolve(icon.startsWith("https://") ? icon : "");
+    return Promise.resolve(abs.startsWith("https://") ? abs : "");
+  }
+
+  // NextCloud's Notifications app hands `new Notification()` the *Talk app icon*
+  // (the spreed logo), never the sender's avatar. Recover the avatar from the
+  // conversation list instead: each row's avatar element carries the display
+  // name in its `title` attribute and wraps an <img> whose src is the
+  // (cookie-authenticated, root-relative) avatar URL. The notification title
+  // begins with that same name ("<Name> sent you a private message", "<Name>
+  // mentioned you in …"), so match on it. resolveIcon() then inlines the URL.
+  // Returns `fallback` off Talk pages or when no row matches.
+  function talkAvatarIcon(title, fallback) {
+    if (!isTalkPage() || typeof title !== "string") return fallback;
+    let best = null;
+    for (const span of document.querySelectorAll(".conversation-icon__avatar[title]")) {
+      const name = span.getAttribute("title");
+      const src = span.querySelector("img")?.getAttribute("src");
+      // Prefer the longest matching name so a short name that is a substring of
+      // another conversation's name doesn't win.
+      if (name && src && title.includes(name) && (!best || name.length > best.name.length)) {
+        best = { name, src };
+      }
+    }
+    return best ? best.src : fallback;
   }
 
   function relayMetadata(title, options = {}) {
-    resolveIcon(options.icon).then((icon) => {
+    resolveIcon(talkAvatarIcon(title, options.icon)).then((icon) => {
       window.postMessage(
         {
           __loft_notification: true,

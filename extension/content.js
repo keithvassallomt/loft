@@ -196,7 +196,12 @@
     shadow.appendChild(bar);
     // Append (not prepend) so the host is last in DOM order — ensures it
     // paints on top of any same-z-index fixed elements inside the app.
-    document.body.appendChild(host);
+    // Attach to <html>, not <body>: NextCloud Talk's push-down transforms
+    // <body>, and a host inside body would be shifted along with it (leaving a
+    // blank band at the top). As a child of the un-transformed <html> the
+    // fixed-position bar stays pinned to the viewport top. Harmless for other
+    // services (a fixed element resolves against the viewport either way).
+    document.documentElement.appendChild(host);
 
     // Find the app's root container (works for WhatsApp #app, Messenger, etc.)
     function getAppRoot() {
@@ -230,11 +235,40 @@
     // content (a transient hover element) instead of reflowing the app.
     const shiftRoot = service !== "telegram" && service !== "element";
 
+    // NextCloud Talk has no single full-height root to shift: its header is a
+    // fixed element and the content is a separate offset container, so the
+    // generic getAppRoot() shift can't move the actual content. Translating
+    // <body> instead moves everything — a transform makes <body> the containing
+    // block for the fixed header too — and shrinking its height keeps the bottom
+    // on-screen. The titlebar host lives on <html> (outside this transform), so
+    // it stays pinned to the viewport top. Structure-agnostic, reverted on hide.
+    const useRootTransform = service === "talk";
+
+    function shiftRootTransform(on) {
+      const body = document.body;
+      if (on) {
+        body.style.setProperty('transition', 'transform 0.2s ease', 'important');
+        body.style.setProperty('transform', 'translateY(' + TITLEBAR_HEIGHT + 'px)', 'important');
+        body.style.setProperty('height', 'calc(100vh - ' + TITLEBAR_HEIGHT + 'px)', 'important');
+        body.style.setProperty('overflow', 'hidden', 'important');
+      } else {
+        body.style.setProperty('transform', 'translateY(0)', 'important');
+        body.style.setProperty('height', '100vh', 'important');
+        setTimeout(() => {
+          body.style.removeProperty('transform');
+          body.style.removeProperty('height');
+          body.style.removeProperty('overflow');
+          body.style.removeProperty('transition');
+        }, 200);
+      }
+    }
+
     function showBar() {
       if (hideTimeout) { clearTimeout(hideTimeout); hideTimeout = null; }
       if (barVisible || !titlebarEnabled) return;
       barVisible = true;
       host.style.top = '0';
+      if (useRootTransform) { shiftRootTransform(true); return; }
       if (!shiftRoot) return;
       const root = getAppRoot();
       if (root) {
@@ -253,6 +287,7 @@
       if (!barVisible) return;
       barVisible = false;
       host.style.top = '-' + TITLEBAR_HEIGHT + 'px';
+      if (useRootTransform) { shiftRootTransform(false); return; }
       if (!shiftRoot) return;
       const root = getAppRoot();
       if (root) {
@@ -503,6 +538,28 @@
     }
     setInterval(scanElementUnreads, 2000);
     setTimeout(scanElementUnreads, 3000);
+  }
+
+  // NextCloud Talk: hide NextCloud's global header (logo, app menu, search,
+  // notifications, user avatar). In a single-purpose Talk window the Loft
+  // titlebar already provides window controls, so the global bar just wastes
+  // vertical space. NextCloud reserves room for the (absolutely-positioned)
+  // header via the --header-height variable, so zero it as well to pull the
+  // content up to the top instead of leaving the gap behind.
+  if (service === "talk") {
+    if (!document.getElementById('loft-talk-fix')) {
+      const style = document.createElement('style');
+      style.id = 'loft-talk-fix';
+      // Also drop #content's reserved margin and #content-vue's inset
+      // (rounded corners + reduced width) so the app fills the window edge to
+      // edge instead of floating on the body background.
+      style.textContent =
+        '#header { display: none !important; } ' +
+        ':root, body { --header-height: 0px !important; } ' +
+        '#content { margin: 0 !important; } ' +
+        '#content-vue { width: 100% !important; height: 100% !important; border-radius: 0 !important; }';
+      document.head.appendChild(style);
+    }
   }
 
   // NextCloud Talk: count unread conversations from the conversation list's

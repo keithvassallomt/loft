@@ -243,10 +243,24 @@ conversation list renders an unread badge per conversation as
 `<div class="counter-bubble__counter">N</div>`; `content.js` sums the numbers
 across all `.counter-bubble__counter` elements (non-numeric/mention bubbles
 count as 1). Notifications flow through the shared `notification-override.js`
-path like Element/Slack; because NextCloud avatars are served from the instance
-and usually need the session cookie, `notification-override.js` detects a Talk
-page via the `window.OCA.Talk` global and fetches the avatar in-page, inlining
-it as a `data:` URL (the daemon can't authenticate) — same treatment as Element.
+path like Element/Slack, but the avatar needs extra work: NextCloud's
+Notifications app calls `new Notification()` with the *Talk app icon* (the
+spreed logo), never the sender's avatar. So `talkAvatarIcon()` recovers it from
+the conversation list — each row's `.conversation-icon__avatar[title]` holds the
+display name and wraps an `<img>` whose root-relative `/avatar/<name>/64/dark`
+src needs the session cookie — by matching the row whose `title` appears in the
+notification title. `resolveIcon()` then resolves that relative URL and fetches
+it in-page (Talk detected via the `window.OCA.Talk` global), inlining it as a
+`data:` URL since the daemon can't authenticate — same treatment as Element.
+
+The Talk window is also de-chromed for an app feel (`content.js`, gated on
+`service === "talk"`): NextCloud's global `#header` is hidden and `--header-height`
+zeroed, and `#content`/`#content-vue` are stretched edge-to-edge (no margin,
+full width/height, no border-radius). Because Talk's header is fixed and its
+content is a separate offset container, the Loft titlebar can't use the normal
+`getAppRoot()` shift — it instead translates `<body>` down (a transform makes
+`<body>` the containing block for the fixed header too) while the titlebar host
+is attached to `<html>` so it stays pinned at the viewport top.
 
 ## Tech Stack
 
@@ -324,13 +338,21 @@ cargo test
 
 ## Development
 
+For local iteration and testing, use a **debug build** — it compiles far faster
+and, crucially, uses much less RAM than a release build. Release turns on full
+LLVM optimization, whose optimizer + final link are memory-hungry enough to OOM
+a laptop. Only build `--release` when producing a package to distribute or
+measuring real runtime performance (e.g. video-call smoothness), and ideally
+with bounded parallelism (`cargo build --release -j2`) on a machine with RAM to
+spare.
+
 ```sh
-# Build
+# Build + run for local testing (fast, low memory)
+cargo build
+./target/debug/loft
+./target/debug/loft --service whatsapp
+
+# Release build — only for packaging / perf measurement (heavy; OOM risk)
 cargo build --release
-
-# Run manager UI
 ./target/release/loft
-
-# Run a service directly
-./target/release/loft --service whatsapp
 ```
