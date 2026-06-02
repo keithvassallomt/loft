@@ -34,6 +34,15 @@
     return !!document.getElementById("matrixchat");
   }
 
+  // NextCloud Talk exposes the global OCA.Talk app object. Avatars are served
+  // from the NextCloud instance and usually require the session cookie, so —
+  // like Element — they must be fetched in-page and inlined (the daemon can't
+  // authenticate). Detected lazily; the globals exist long before any
+  // notification fires.
+  function isTalkPage() {
+    return !!(window.OCA && window.OCA.Talk);
+  }
+
   // Resolve a notification icon to something the daemon can display.
   //
   // Element serves avatars either as blob: object URLs or as authenticated
@@ -50,7 +59,7 @@
       icon.startsWith("blob:") ||
       icon.startsWith("https://") ||
       icon.startsWith("http://");
-    if (isElementPage() && fetchable) {
+    if ((isElementPage() || isTalkPage()) && fetchable) {
       return fetch(icon)
         .then((r) => (r.ok ? r.blob() : Promise.reject(new Error("fetch failed"))))
         .then(

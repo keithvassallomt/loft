@@ -1,6 +1,6 @@
 # Loft
 
-Linux desktop integration layer for web apps (WhatsApp, Facebook Messenger, Slack, Telegram, Element) that provides full functionality including voice/video calling, system tray integration, and proper desktop presence.
+Linux desktop integration layer for web apps (WhatsApp, Facebook Messenger, Slack, Telegram, Element, NextCloud Talk) that provides full functionality including voice/video calling, system tray integration, and proper desktop presence.
 
 ## Problem
 
@@ -37,7 +37,7 @@ loft-whatsapp.desktop (or user clicks tray icon)
 ### Components
 
 1. **Loft Manager** — Adwaita GUI (`loft` with no args)
-   - Lists available services (WhatsApp, Messenger, Slack, Telegram, Element)
+   - Lists available services (WhatsApp, Messenger, Slack, Telegram, Element, NextCloud Talk)
    - Install: creates `.desktop` file, registers autostart, sets up native messaging host
    - Uninstall: removes `.desktop` file, removes autostart, cleans up
    - Minimal UI — just a list of services with install/uninstall controls
@@ -211,6 +211,7 @@ Only Google Chrome is officially supported (proprietary codecs required for vide
 | Slack              | https://app.slack.com/client/    |
 | Telegram           | https://web.telegram.org/a/      |
 | Element (Matrix)   | https://app.element.io/      |
+| NextCloud Talk     | self-hosted only (`custom_url`)  |
 
 Element is self-hostable, so its per-service config supports a `custom_url`
 (set in the manager's service detail page) to point at a self-hosted Element
@@ -228,6 +229,24 @@ not DOM-scraped (Element's room list uses hashed CSS-module classes and is
 virtualized). Notifications use the standard `Notification` API with no focus
 gating, so they flow through the shared `notification-override.js` + daemon
 D-Bus path like Slack/WhatsApp — no Element-specific notification code.
+
+NextCloud Talk is **always self-hosted** — there is no central instance, so
+unlike Element its built-in `url`/`chrome_desktop_id` in the service registry
+are placeholders and `custom_url` is effectively *required*. The manager's
+Connection field is the only way to make it work; once set, the daemon derives
+the window class from that URL and `deploy_extension()` templates the manifest
+with its origin (same `loft-overrides.js` `origin → service` mechanism as a
+self-hosted Element). The content script recognises the origin as `talk`.
+
+Talk specifics: badge count is **DOM-scraped** (not title-based) — the
+conversation list renders an unread badge per conversation as
+`<div class="counter-bubble__counter">N</div>`; `content.js` sums the numbers
+across all `.counter-bubble__counter` elements (non-numeric/mention bubbles
+count as 1). Notifications flow through the shared `notification-override.js`
+path like Element/Slack; because NextCloud avatars are served from the instance
+and usually need the session cookie, `notification-override.js` detects a Talk
+page via the `window.OCA.Talk` global and fetches the avatar in-page, inlining
+it as a `data:` URL (the daemon can't authenticate) — same treatment as Element.
 
 ## Tech Stack
 

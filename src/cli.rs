@@ -35,6 +35,7 @@ pub enum ServiceName {
     Slack,
     Telegram,
     Element,
+    Talk,
 }
 
 impl std::fmt::Display for ServiceName {
@@ -45,6 +46,7 @@ impl std::fmt::Display for ServiceName {
             ServiceName::Slack => write!(f, "slack"),
             ServiceName::Telegram => write!(f, "telegram"),
             ServiceName::Element => write!(f, "element"),
+            ServiceName::Talk => write!(f, "talk"),
         }
     }
 }
@@ -118,6 +120,12 @@ mod tests {
     fn test_service_element() {
         let args = Args::try_parse_from(["loft", "--service", "element"]).unwrap();
         assert!(matches!(args.service, Some(ServiceName::Element)));
+    }
+
+    #[test]
+    fn test_service_talk() {
+        let args = Args::try_parse_from(["loft", "--service", "talk"]).unwrap();
+        assert!(matches!(args.service, Some(ServiceName::Talk)));
     }
 
     #[test]

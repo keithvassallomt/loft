@@ -506,19 +506,30 @@ fn create_detail_page(
     outer.append(&appearance_group);
 
     // --- Connection group (custom server URL) ---
-    // Element (Matrix) can be self-hosted, so allow pointing at a custom
-    // Element Web instance instead of app.element.io. Loft templates the
-    // extension manifest with this origin at deploy time.
-    if definition.name == "element" {
+    // Self-hostable services (Element, NextCloud Talk) let the user point at
+    // their own instance. Loft templates the extension manifest with this
+    // origin at deploy time. NextCloud Talk has no public default, so the URL
+    // is effectively required for it.
+    if definition.name == "element" || definition.name == "talk" {
+        let description = if definition.name == "talk" {
+            "Enter the address of your NextCloud server \
+             (e.g. cloud.example.com) — Loft adds the Talk path for you. \
+             Required: NextCloud Talk has no default server. Takes effect \
+             next time the service starts."
+        } else {
+            "Use a self-hosted Element Web instance instead of app.element.io. \
+             Leave empty for the default. Takes effect next time the service starts."
+        };
         let connection_group = libadwaita::PreferencesGroup::new();
         connection_group.set_title("Connection");
-        connection_group.set_description(Some(
-            "Use a self-hosted Element Web instance instead of app.element.io. \
-             Leave empty for the default. Takes effect next time the service starts.",
-        ));
+        connection_group.set_description(Some(description));
 
         let url_row = libadwaita::EntryRow::new();
-        url_row.set_title("Custom Server URL");
+        url_row.set_title(if definition.name == "talk" {
+            "NextCloud Server URL"
+        } else {
+            "Custom Server URL"
+        });
         url_row.set_show_apply_button(true);
         if let Some(u) = config.custom_url.as_deref() {
             url_row.set_text(u);
@@ -529,6 +540,20 @@ fn create_detail_page(
             // Normalise a bare host to https:// so it forms a valid origin.
             if !text.is_empty() && !text.contains("://") {
                 text = format!("https://{text}");
+            }
+            // NextCloud Talk lives under /apps/spreed/ on the user's instance,
+            // so the user only enters their server address (host, or host with
+            // a subpath for a NextCloud-in-subdirectory setup) and Loft appends
+            // the Talk path. Idempotent if they paste the full URL themselves.
+            if definition.name == "talk" && !text.is_empty() {
+                let base = text.trim_end_matches('/');
+                text = if base.ends_with("/apps/spreed") {
+                    format!("{base}/")
+                } else {
+                    format!("{base}/apps/spreed/")
+                };
+                // Reflect the resolved URL back so the user sees what was saved.
+                row.set_text(&text);
             }
 
             let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();

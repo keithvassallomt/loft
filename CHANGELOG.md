@@ -5,12 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased] - TEST BUNDLED WITH FLATPAK
 
 ### Added
 
 - Element (Matrix) is now a supported service, using `https://app.element.io/`. The tray badge reflects the number of rooms with unread notifications, and notifications respect Do Not Disturb like the other services.
 - Element can point at a self-hosted Element Web instance via a custom server URL in the service's settings. Loft templates its extension manifest with the custom origin at deploy time, so badge, notification, and titlebar integration work on any domain without a browser permission prompt.
+- NextCloud Talk is now a supported service. Because Talk is always self-hosted, there is no default server — point it at your NextCloud instance via the custom server URL in the service's settings (e.g. `https://cloud.example.com/apps/spreed/`). The tray badge reflects unread conversations, and notifications (including contact avatars) flow through the daemon and respect Do Not Disturb like the other services.
 - When Loft installs or updates its bundled GNOME Shell helper (because the installed copy is missing or older than the one shipped — e.g. while an Extensions website update is still pending review), it now prompts you to log out and back in, since GNOME only loads new extension code at session start. The bundled helper is only deployed when it's newer than what's installed, so a more recent build is never downgraded.
 
 ### Fixed

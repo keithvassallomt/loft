@@ -103,7 +103,25 @@ pub const ELEMENT: ServiceDefinition = ServiceDefinition {
     chrome_desktop_id: "chrome-app.element.io__-Default",
 };
 
-pub const ALL_SERVICES: &[&ServiceDefinition] = &[&WHATSAPP, &MESSENGER, &SLACK, &TELEGRAM, &ELEMENT];
+// NextCloud Talk is always self-hosted — there is no central instance like
+// app.element.io. The `url`/`chrome_desktop_id` below are placeholders; Talk
+// only integrates once the user sets a `custom_url` (manager → Connection),
+// at which point the daemon derives the window class from that URL and templates
+// the extension manifest with its origin (see deploy_extension).
+pub const TALK: ServiceDefinition = ServiceDefinition {
+    name: "talk",
+    display_name: "NextCloud Talk",
+    url: "https://cloud.nextcloud.com/apps/spreed/",
+    dbus_name: "Talk",
+    app_icon_svg: include_str!("../assets/icons/talk.svg"),
+    app_icon_png: include_bytes!("../assets/icons/talk.png"),
+    tray_icon_svg: include_str!("../assets/icons/talk-symbolic.svg"),
+    app_icon_filename: "talk.svg",
+    chrome_desktop_id: "chrome-cloud.nextcloud.com__apps_spreed_-Default",
+};
+
+pub const ALL_SERVICES: &[&ServiceDefinition] =
+    &[&WHATSAPP, &MESSENGER, &SLACK, &TELEGRAM, &ELEMENT, &TALK];
 
 pub fn get_definition(name: &ServiceName) -> &'static ServiceDefinition {
     match name {
@@ -112,6 +130,7 @@ pub fn get_definition(name: &ServiceName) -> &'static ServiceDefinition {
         ServiceName::Slack => &SLACK,
         ServiceName::Telegram => &TELEGRAM,
         ServiceName::Element => &ELEMENT,
+        ServiceName::Talk => &TALK,
     }
 }
 
@@ -160,5 +179,8 @@ mod tests {
 
         let element = get_definition(&ServiceName::Element);
         assert_eq!(element.name, "element");
+
+        let talk = get_definition(&ServiceName::Talk);
+        assert_eq!(talk.name, "talk");
     }
 }

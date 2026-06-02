@@ -505,6 +505,34 @@
     setTimeout(scanElementUnreads, 3000);
   }
 
+  // NextCloud Talk: count unread conversations from the conversation list's
+  // counter bubbles. Talk renders an unread badge per conversation as
+  // <div class="counter-bubble__counter ...">N</div> (a "highlighted" variant
+  // marks mentions). We sum the numbers across all bubbles; a non-numeric
+  // bubble counts as 1. The exact total matters less than "is anything unread"
+  // — scraping by the stable counter-bubble class is more reliable than Talk's
+  // hashed Vue scoped-style attributes.
+  if (service === "talk") {
+    function scanTalkUnreads() {
+      let count = 0;
+      document.querySelectorAll(".counter-bubble__counter").forEach((el) => {
+        const n = parseInt((el.textContent || "").trim(), 10);
+        count += Number.isFinite(n) ? n : 1;
+      });
+      if (count !== lastBadgeCount) {
+        lastBadgeCount = count;
+        safeSendMessage({ type: "badge_update", count });
+      }
+    }
+
+    const talkObserver = new MutationObserver(scanTalkUnreads);
+    talkObserver.observe(document.body, {
+      childList: true, subtree: true, characterData: true,
+    });
+    setInterval(scanTalkUnreads, 2000);
+    setTimeout(scanTalkUnreads, 3000);
+  }
+
   // Telegram: count sidebar badges (unread conversation indicators)
   if (service === "telegram") {
     const tgLoadTime = Date.now();
