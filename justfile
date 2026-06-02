@@ -9,9 +9,11 @@ build:
     rm -rf {{ dist_dir }}
     mkdir -p {{ dist_dir }}
     @echo "==> Building RPM..."
+    rm -f target/generate-rpm/*.rpm
     cargo generate-rpm
     cp target/generate-rpm/*.rpm {{ dist_dir }}/
     @echo "==> Building DEB..."
+    rm -f target/debian/*.deb
     cargo deb --no-build
     cp target/debian/*.deb {{ dist_dir }}/
     @echo "==> Building AppImage..."
@@ -134,6 +136,10 @@ release new_version:
     # Compile (validates the build + refreshes Cargo.lock) and build packages.
     echo "==> Building binary + packages"
     just build
+    # Standalone .flatpak bundle (heavy: full release compile in a sandbox).
+    # Runs after `just build` so its dist clean doesn't wipe the bundle.
+    echo "==> Building Flatpak bundle"
+    just build-flatpak
 
     # ---- Confirmation: last stop before anything leaves your machine ----
     echo
