@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The service manager now shows whether each installed service is running, along with its unread message count, and keeps this up to date live while the window is open.
+
+### Changed
+
+- The service manager has been redesigned to be cleaner and less cluttered, and to stay that way as more services are added. Your installed services and the ones available to add now appear in separate sections; each installed service has its own **Open** and settings buttons (clicking the row no longer opens settings), available services are shown as a grid of tiles, and the window sizes itself to fit its contents.
+
 ### Fixed
 
 - Showing a service from the GNOME activities overview (via its panel/tray icon) now takes you straight to the window. Previously the overview stayed open with the window invisible until you manually left it.
