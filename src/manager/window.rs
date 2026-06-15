@@ -1277,7 +1277,7 @@ fn show_about_dialog(parent: &libadwaita::ApplicationWindow) {
         .website("https://github.com/keithvassallomt/loft")
         .issue_url("https://github.com/keithvassallomt/loft/issues")
         .license_type(gtk4::License::Gpl30)
-        .comments("Desktop integration for Meta web apps on Linux")
+        .comments("Desktop integration for messaging apps on Linux")
         .build();
 
     dialog.present(Some(parent));
