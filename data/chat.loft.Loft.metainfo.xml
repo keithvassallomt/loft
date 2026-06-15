@@ -72,6 +72,16 @@
   </screenshots>
 
   <releases>
+    <release version="0.2.0" date="2026-06-15">
+      <description>
+        <ul>
+          <li>The service manager has a cleaner, less cluttered look that stays tidy as you add more services. Your installed services and the ones you can add now sit in separate sections, each installed service has its own Open and settings buttons, and the window sizes itself to fit.</li>
+          <li>The manager now shows which of your services are running and how many unread messages each has, updating live while the window is open.</li>
+          <li>Opening a service from the GNOME activities overview now takes you straight to its window, instead of leaving the overview open with the window hidden.</li>
+          <li>Loft services now keep their place in the GNOME Alt+Tab switcher — the one you just used stays at the front of the list.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.4" date="2026-06-02">
       <description>
         <ul>
