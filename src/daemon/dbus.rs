@@ -133,6 +133,28 @@ pub async fn call_show(definition: &ServiceDefinition) -> Result<()> {
     Ok(())
 }
 
+/// Query a running daemon's status: `(visible, badge, dnd)`.
+/// Errors if no daemon is currently running for this service (i.e. the bus
+/// name has no owner), which callers treat as "not running".
+pub async fn call_get_status(definition: &ServiceDefinition) -> Result<(bool, u32, bool)> {
+    let connection = zbus::Connection::session().await?;
+    let bus_name = bus_name_for(definition)?;
+    let path = object_path_for(definition)?;
+    let iface = InterfaceName::try_from("chat.loft.Service")
+        .map_err(|e| anyhow::anyhow!("Invalid interface: {}", e))?;
+    let reply = connection
+        .call_method(
+            Some(BusName::from(bus_name)),
+            path,
+            Some(iface),
+            "GetStatus",
+            &(),
+        )
+        .await?;
+    let status: (bool, u32, bool) = reply.body().deserialize()?;
+    Ok(status)
+}
+
 /// Send a SetShowTitlebar() call to the already-running daemon instance.
 pub async fn call_set_show_titlebar(definition: &ServiceDefinition, show: bool) -> Result<()> {
     let connection = zbus::Connection::session().await?;
