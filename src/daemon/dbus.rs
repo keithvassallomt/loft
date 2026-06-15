@@ -133,6 +133,47 @@ pub async fn call_show(definition: &ServiceDefinition) -> Result<()> {
     Ok(())
 }
 
+/// Query running status for multiple services over a single session-bus
+/// connection. Returns a map from service name to `(visible, badge, dnd)` for
+/// those whose daemon responded; a service whose daemon isn't running (its bus
+/// name has no owner) is simply absent from the map.
+pub async fn get_statuses(
+    defs: &[&'static ServiceDefinition],
+) -> std::collections::HashMap<&'static str, (bool, u32, bool)> {
+    let mut map = std::collections::HashMap::new();
+    let connection = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!("Status query: could not connect to session bus: {}", e);
+            return map;
+        }
+    };
+    let iface = match InterfaceName::try_from("chat.loft.Service") {
+        Ok(i) => i,
+        Err(_) => return map,
+    };
+    for d in defs {
+        let (Ok(bus_name), Ok(path)) = (bus_name_for(d), object_path_for(d)) else {
+            continue;
+        };
+        if let Ok(reply) = connection
+            .call_method(
+                Some(BusName::from(bus_name)),
+                path,
+                Some(iface.clone()),
+                "GetStatus",
+                &(),
+            )
+            .await
+        {
+            if let Ok(status) = reply.body().deserialize::<(bool, u32, bool)>() {
+                map.insert(d.name, status);
+            }
+        }
+    }
+    map
+}
+
 /// Send a SetShowTitlebar() call to the already-running daemon instance.
 pub async fn call_set_show_titlebar(definition: &ServiceDefinition, show: bool) -> Result<()> {
     let connection = zbus::Connection::session().await?;

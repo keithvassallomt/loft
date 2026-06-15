@@ -1,4 +1,5 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gtk4::gio;
@@ -11,8 +12,8 @@ use crate::config::{GlobalConfig, ServiceConfig, TrayBackend};
 use crate::desktop;
 use crate::service;
 
-/// Build a 32x32 image widget from the service's app icon.
-fn service_icon(definition: &service::ServiceDefinition) -> gtk4::Image {
+/// Build an image widget from the service's app icon at the given pixel size.
+fn service_icon_sized(definition: &service::ServiceDefinition, size: i32) -> gtk4::Image {
     let icon_path = dirs::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share"))
         .join("loft/icons")
@@ -23,20 +24,131 @@ fn service_icon(definition: &service::ServiceDefinition) -> gtk4::Image {
     } else {
         gtk4::Image::from_icon_name("application-x-executable")
     };
-    image.set_pixel_size(32);
+    image.set_pixel_size(size);
     image
+}
+
+/// Build a 32x32 image widget from the service's app icon.
+fn service_icon(definition: &service::ServiceDefinition) -> gtk4::Image {
+    service_icon_sized(definition, 32)
+}
+
+/// Install the small amount of custom CSS the redesigned manager needs
+/// (an unread-count badge pill and tile padding). Adwaita has no badge widget,
+/// so we style a plain label with the accent colour.
+fn install_css() {
+    let provider = gtk4::CssProvider::new();
+    provider.load_from_data(
+        ".loft-badge { \
+            background-color: @accent_bg_color; \
+            color: @accent_fg_color; \
+            border-radius: 9999px; \
+            padding: 0 7px; \
+            font-weight: bold; \
+            font-size: 0.8em; \
+            min-width: 12px; \
+        } \
+        .loft-tile { padding: 16px; }",
+    );
+    if let Some(display) = gtk4::gdk::Display::default() {
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+}
+
+/// Launch (or focus) a service. Spawns `loft --service <name>`; the daemon's
+/// singleton enforcement turns this into a `Show()` on the running instance, or
+/// starts a fresh daemon if none is running. This is the universal "open".
+fn launch_service(definition: &service::ServiceDefinition) {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("Could not determine loft binary path: {}", e);
+            return;
+        }
+    };
+    if let Err(e) = std::process::Command::new(exe)
+        .arg("--service")
+        .arg(definition.name)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        tracing::error!("Failed to launch service {}: {}", definition.name, e);
+    }
+}
+
+/// Query running status for the given services and return a map from service
+/// name to `(visible, badge, dnd)` for those whose daemon responded. Runs on a
+/// dedicated tokio-runtime thread because the manager's GLib main loop has no
+/// tokio runtime (zbus's async path would panic there). Services whose daemon
+/// isn't running are simply absent from the map.
+fn query_statuses(
+    defs: &[&'static service::ServiceDefinition],
+) -> HashMap<&'static str, (bool, u32, bool)> {
+    if defs.is_empty() {
+        return HashMap::new();
+    }
+    let defs: Vec<&'static service::ServiceDefinition> = defs.to_vec();
+    let handle = std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                tracing::error!("Failed to create tokio runtime for status query: {}", e);
+                return HashMap::new();
+            }
+        };
+        rt.block_on(crate::daemon::dbus::get_statuses(&defs))
+    });
+    handle.join().unwrap_or_default()
+}
+
+/// Reflect a service's status onto its installed-row widgets. `None` means the
+/// daemon isn't running.
+fn apply_status(
+    row: &libadwaita::ActionRow,
+    badge: &gtk4::Label,
+    status: Option<(bool, u32, bool)>,
+) {
+    match status {
+        Some((_visible, count, _dnd)) => {
+            row.set_subtitle("Running");
+            if count > 0 {
+                badge.set_text(&count.to_string());
+                badge.set_visible(true);
+            } else {
+                badge.set_visible(false);
+            }
+        }
+        None => {
+            row.set_subtitle("Not running");
+            badge.set_visible(false);
+        }
+    }
 }
 
 pub fn build_window(app: &libadwaita::Application) {
     // Deploy all service icons from embedded assets (instant, no network)
     desktop::ensure_icons();
+    // Register the manager's custom CSS (badge pill, tile padding)
+    install_css();
 
     let window = libadwaita::ApplicationWindow::builder()
         .application(app)
         .title("Loft")
         .icon_name("loft")
+        // Width is fixed; height is intentionally left unset so the window sizes
+        // to its content's natural height (see `propagate_natural_height` on the
+        // scroller). The scrollbar is the fallback when content exceeds the
+        // screen (e.g. the fresh-install 6-tile grid).
         .default_width(500)
-        .default_height(550)
         .build();
 
     // Setup window actions (preferences, about)
@@ -192,141 +304,706 @@ fn show_chrome_not_found(window: &libadwaita::ApplicationWindow) {
 
 fn show_main_content(window: &libadwaita::ApplicationWindow) {
     let nav_view = libadwaita::NavigationView::new();
-    let main_page = create_main_page(&nav_view);
+    let main_page = ManagerUi::build_main_page(&nav_view);
     nav_view.add(&main_page);
     window.set_content(Some(&nav_view));
 }
 
-fn create_main_page(nav_view: &libadwaita::NavigationView) -> libadwaita::NavigationPage {
-    let toolbar_view = libadwaita::ToolbarView::new();
-    let header = libadwaita::HeaderBar::new();
-    header.pack_end(&create_menu_button());
-    toolbar_view.add_top_bar(&header);
-
-    let scrolled = gtk4::ScrolledWindow::new();
-    scrolled.set_vexpand(true);
-
-    let clamp = libadwaita::Clamp::new();
-    clamp.set_maximum_size(600);
-    clamp.set_margin_top(24);
-    clamp.set_margin_bottom(24);
-    clamp.set_margin_start(12);
-    clamp.set_margin_end(12);
-
-    let group = libadwaita::PreferencesGroup::new();
-
-    let list_box = gtk4::ListBox::new();
-    list_box.set_selection_mode(gtk4::SelectionMode::None);
-    list_box.add_css_class("boxed-list");
-
-    for definition in service::ALL_SERVICES {
-        create_service_row(definition, &list_box, nav_view);
-    }
-
-    group.add(&list_box);
-    clamp.set_child(Some(&group));
-    scrolled.set_child(Some(&clamp));
-    toolbar_view.set_content(Some(&scrolled));
-
-    libadwaita::NavigationPage::new(&toolbar_view, "Loft")
+/// The status-bearing widgets of one installed row, kept so the periodic
+/// running-status poll can update them in place (no row rebuild → no flicker).
+struct RowWidgets {
+    row: libadwaita::ActionRow,
+    badge: gtk4::Label,
 }
 
-/// Append the appropriate row (installed or uninstalled) for a service.
-fn create_service_row(
-    definition: &'static service::ServiceDefinition,
-    list_box: &gtk4::ListBox,
-    nav_view: &libadwaita::NavigationView,
-) {
-    if desktop::is_service_installed(definition) {
-        let row = create_installed_row(definition, list_box, nav_view);
-        list_box.append(&row);
-    } else {
-        let row = create_uninstalled_row(definition, list_box, nav_view);
-        list_box.append(&row);
-    }
+/// Holds the widgets that make up the main page so install/uninstall actions can
+/// repopulate both sections (moving a service between Installed and Available)
+/// and toggle the empty states, without surgical per-row mutation.
+struct ManagerUi {
+    nav_view: libadwaita::NavigationView,
+    welcome: gtk4::Widget,
+    installed_group: libadwaita::PreferencesGroup,
+    installed_list: gtk4::ListBox,
+    available_group: libadwaita::PreferencesGroup,
+    available_flow: gtk4::FlowBox,
+    /// Installed-row widgets keyed by service name, for live status updates.
+    rows: RefCell<HashMap<&'static str, RowWidgets>>,
 }
 
-/// Row for an installed service: clickable ActionRow that navigates to a detail page.
-fn create_installed_row(
-    definition: &'static service::ServiceDefinition,
-    list_box: &gtk4::ListBox,
-    nav_view: &libadwaita::NavigationView,
-) -> libadwaita::ActionRow {
-    let row = libadwaita::ActionRow::new();
-    row.set_title(definition.display_name);
-    row.add_prefix(&service_icon(definition));
-    row.set_activatable(true);
+impl ManagerUi {
+    fn build_main_page(nav_view: &libadwaita::NavigationView) -> libadwaita::NavigationPage {
+        let toolbar_view = libadwaita::ToolbarView::new();
+        let header = libadwaita::HeaderBar::new();
+        header.pack_end(&create_menu_button());
+        toolbar_view.add_top_bar(&header);
 
-    let chevron = gtk4::Image::from_icon_name("go-next-symbolic");
-    row.add_suffix(&chevron);
+        let scrolled = gtk4::ScrolledWindow::new();
+        scrolled.set_vexpand(true);
+        // Request the content's full natural height so the window can size to fit
+        // it (no clipping); the scrollbar is the fallback for the tall cases.
+        scrolled.set_propagate_natural_height(true);
 
-    let nav = nav_view.clone();
-    let lb = list_box.clone();
-    row.connect_activated(move |_| {
-        let detail_page = create_detail_page(definition, &nav, &lb);
-        nav.push(&detail_page);
-    });
+        let clamp = libadwaita::Clamp::new();
+        clamp.set_maximum_size(600);
+        clamp.set_margin_top(24);
+        clamp.set_margin_bottom(24);
+        clamp.set_margin_start(12);
+        clamp.set_margin_end(12);
 
-    row
-}
+        let outer = gtk4::Box::new(gtk4::Orientation::Vertical, 24);
 
-/// Row for an uninstalled service: ActionRow with an Install button.
-fn create_uninstalled_row(
-    definition: &'static service::ServiceDefinition,
-    list_box: &gtk4::ListBox,
-    nav_view: &libadwaita::NavigationView,
-) -> libadwaita::ActionRow {
-    let row = libadwaita::ActionRow::new();
-    row.set_title(definition.display_name);
-    row.add_prefix(&service_icon(definition));
+        // --- Welcome empty-state (shown only when nothing is installed) ---
+        let welcome = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
+        welcome.set_halign(gtk4::Align::Center);
+        welcome.set_margin_top(24);
+        welcome.set_margin_bottom(12);
+        let welcome_icon = gtk4::Image::from_icon_name("chat.loft.Loft");
+        welcome_icon.set_pixel_size(64);
+        let welcome_title = gtk4::Label::new(Some("Welcome to Loft"));
+        welcome_title.add_css_class("title-2");
+        let welcome_sub = gtk4::Label::new(Some("Add a messaging service below to get started."));
+        welcome_sub.add_css_class("dim-label");
+        welcome_sub.set_wrap(true);
+        welcome_sub.set_justify(gtk4::Justification::Center);
+        welcome.append(&welcome_icon);
+        welcome.append(&welcome_title);
+        welcome.append(&welcome_sub);
+        outer.append(&welcome);
 
-    let button = gtk4::Button::with_label("Install");
-    button.set_valign(gtk4::Align::Center);
-    button.add_css_class("suggested-action");
+        // --- Installed group: status list ---
+        let installed_group = libadwaita::PreferencesGroup::new();
+        installed_group.set_title("Installed");
+        let installed_list = gtk4::ListBox::new();
+        installed_list.set_selection_mode(gtk4::SelectionMode::None);
+        installed_list.add_css_class("boxed-list");
+        installed_group.add(&installed_list);
+        outer.append(&installed_group);
 
-    let lb = list_box.clone();
-    let nv = nav_view.clone();
-    button.connect_clicked(move |btn| {
-        // NextCloud Talk has no default server, so the instance URL is required.
-        // Prompt for it up front rather than silently installing a broken service.
-        if definition.name == "talk" {
-            prompt_talk_url_then_install(btn, definition, &lb, &nv);
-        } else {
-            do_install(btn, definition, &lb, &nv);
-        }
-    });
+        // --- Available group: reflowing grid of tiles ---
+        let available_group = libadwaita::PreferencesGroup::new();
+        available_group.set_title("Available");
+        let available_flow = gtk4::FlowBox::new();
+        available_flow.set_selection_mode(gtk4::SelectionMode::None);
+        available_flow.set_homogeneous(true);
+        available_flow.set_min_children_per_line(2);
+        available_flow.set_max_children_per_line(2);
+        available_flow.set_column_spacing(12);
+        available_flow.set_row_spacing(12);
+        available_group.add(&available_flow);
+        outer.append(&available_group);
 
-    row.add_suffix(&button);
-    row
-}
+        clamp.set_child(Some(&outer));
+        scrolled.set_child(Some(&clamp));
+        toolbar_view.set_content(Some(&scrolled));
 
-/// Perform the install and swap the uninstalled row for an installed one.
-fn do_install(
-    btn: &gtk4::Button,
-    definition: &'static service::ServiceDefinition,
-    list_box: &gtk4::ListBox,
-    nav_view: &libadwaita::NavigationView,
-) {
-    match desktop::install_service(definition) {
-        Ok(helper_deployed) => {
-            if let Some(old_row) = btn
-                .ancestor(libadwaita::ActionRow::static_type())
-                .and_then(|w| w.downcast::<libadwaita::ActionRow>().ok())
-            {
-                let idx = old_row.index();
-                list_box.remove(&old_row);
-                let new_row = create_installed_row(definition, list_box, nav_view);
-                list_box.insert(&new_row, idx);
+        let ui = Rc::new(ManagerUi {
+            nav_view: nav_view.clone(),
+            welcome: welcome.upcast(),
+            installed_group,
+            installed_list,
+            available_group,
+            available_flow,
+            rows: RefCell::new(HashMap::new()),
+        });
+        ui.populate();
+
+        // Poll running status while the window is open so rows flip
+        // Running/Not-running and badges update as daemons start, stop, or
+        // receive messages. The timer holds a weak ref and stops itself once the
+        // UI is gone (all rows/tiles — which hold the strong refs — destroyed).
+        let ui_weak = Rc::downgrade(&ui);
+        glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
+            match ui_weak.upgrade() {
+                Some(ui) => {
+                    ui.refresh_running_status();
+                    glib::ControlFlow::Continue
+                }
+                None => glib::ControlFlow::Break,
             }
-            // GNOME loads new extension JS only at session start.
-            if helper_deployed && is_gnome() {
-                let window = btn
+        });
+
+        libadwaita::NavigationPage::new(&toolbar_view, "Loft")
+    }
+
+    /// Clear and rebuild both sections from the current install state, toggling
+    /// the welcome / Available-group visibility for the empty cases.
+    fn populate(self: &Rc<Self>) {
+        self.rows.borrow_mut().clear();
+        while let Some(child) = self.installed_list.first_child() {
+            self.installed_list.remove(&child);
+        }
+        while let Some(child) = self.available_flow.first_child() {
+            self.available_flow.remove(&child);
+        }
+
+        let installed_defs: Vec<&'static service::ServiceDefinition> = service::ALL_SERVICES
+            .iter()
+            .copied()
+            .filter(|d| desktop::is_service_installed(d))
+            .collect();
+        let statuses = query_statuses(&installed_defs);
+
+        let mut installed = 0u32;
+        let mut available = 0u32;
+        for definition in service::ALL_SERVICES {
+            if desktop::is_service_installed(definition) {
+                installed += 1;
+                let status = statuses.get(definition.name).copied();
+                let row = self.build_installed_row(definition, status);
+                self.installed_list.append(&row);
+            } else {
+                available += 1;
+                let tile = self.build_available_tile(definition);
+                self.available_flow.insert(&tile, -1);
+            }
+        }
+
+        // Empty states: welcome replaces an empty Installed list; an empty
+        // Available group is hidden entirely.
+        self.welcome.set_visible(installed == 0);
+        self.installed_group.set_visible(installed > 0);
+        self.available_group.set_visible(available > 0);
+    }
+
+    /// Re-query the running status of every installed service and update its row
+    /// widgets in place. Called on a timer and shortly after an `Open` click.
+    fn refresh_running_status(self: &Rc<Self>) {
+        let rows = self.rows.borrow();
+        if rows.is_empty() {
+            return;
+        }
+        let defs: Vec<&'static service::ServiceDefinition> = service::ALL_SERVICES
+            .iter()
+            .copied()
+            .filter(|d| rows.contains_key(d.name))
+            .collect();
+        let statuses = query_statuses(&defs);
+        for (name, widgets) in rows.iter() {
+            apply_status(&widgets.row, &widgets.badge, statuses.get(name).copied());
+        }
+    }
+
+    /// Installed row: app + status, with a separate `Open` button (launch/focus)
+    /// and a gear button (settings) so the two intents don't share one target.
+    fn build_installed_row(
+        self: &Rc<Self>,
+        definition: &'static service::ServiceDefinition,
+        status: Option<(bool, u32, bool)>,
+    ) -> libadwaita::ActionRow {
+        let row = libadwaita::ActionRow::new();
+        row.set_title(definition.display_name);
+        row.add_prefix(&service_icon(definition));
+
+        let suffix = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        suffix.set_valign(gtk4::Align::Center);
+
+        let badge = gtk4::Label::new(None);
+        badge.add_css_class("loft-badge");
+        badge.set_valign(gtk4::Align::Center);
+        badge.set_visible(false);
+
+        let open = gtk4::Button::with_label("Open");
+        open.add_css_class("suggested-action");
+        open.set_valign(gtk4::Align::Center);
+        open.set_tooltip_text(Some(&format!("Open {}", definition.display_name)));
+        let ui = self.clone();
+        open.connect_clicked(move |_| {
+            launch_service(definition);
+            // Reflect the new running state promptly rather than waiting for the
+            // next poll tick (the daemon needs a moment to claim its bus name).
+            let ui = ui.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(1200), move || {
+                ui.refresh_running_status();
+            });
+        });
+
+        let gear = gtk4::Button::from_icon_name("emblem-system-symbolic");
+        gear.add_css_class("flat");
+        gear.set_valign(gtk4::Align::Center);
+        gear.set_tooltip_text(Some("Settings"));
+        let ui = self.clone();
+        gear.connect_clicked(move |_| {
+            let page = ui.create_detail_page(definition);
+            ui.nav_view.push(&page);
+        });
+
+        suffix.append(&badge);
+        suffix.append(&open);
+        suffix.append(&gear);
+        row.add_suffix(&suffix);
+
+        // Reflect the pre-fetched status, and register the widgets so the
+        // periodic poll can update them in place.
+        apply_status(&row, &badge, status);
+        self.rows.borrow_mut().insert(
+            definition.name,
+            RowWidgets {
+                row: row.clone(),
+                badge: badge.clone(),
+            },
+        );
+
+        row
+    }
+
+    /// Available tile: icon-forward card with an inline `Add` button. Returned as
+    /// an explicit `FlowBoxChild` so the grid keeps consistent cells.
+    fn build_available_tile(
+        self: &Rc<Self>,
+        definition: &'static service::ServiceDefinition,
+    ) -> gtk4::FlowBoxChild {
+        let card = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+        card.add_css_class("card");
+        card.add_css_class("loft-tile");
+
+        let icon = service_icon_sized(definition, 48);
+        icon.set_halign(gtk4::Align::Center);
+
+        let name = gtk4::Label::new(Some(definition.display_name));
+        name.add_css_class("heading");
+        name.set_halign(gtk4::Align::Center);
+        name.set_wrap(true);
+        name.set_justify(gtk4::Justification::Center);
+
+        let add = gtk4::Button::with_label("Add");
+        add.add_css_class("suggested-action");
+        add.add_css_class("pill");
+        add.set_halign(gtk4::Align::Center);
+        let ui = self.clone();
+        add.connect_clicked(move |btn| {
+            // NextCloud Talk has no default server, so prompt for the instance
+            // URL up front rather than installing a broken service.
+            if definition.name == "talk" {
+                ui.prompt_talk_url_then_install(btn, definition);
+            } else {
+                ui.install(btn, definition);
+            }
+        });
+
+        card.append(&icon);
+        card.append(&name);
+        card.append(&add);
+
+        let child = gtk4::FlowBoxChild::new();
+        child.set_child(Some(&card));
+        child
+    }
+
+    /// Perform the install and rebuild both sections.
+    fn install(self: &Rc<Self>, btn: &gtk4::Button, definition: &'static service::ServiceDefinition) {
+        match desktop::install_service(definition) {
+            Ok(helper_deployed) => {
+                self.populate();
+                // GNOME loads new extension JS only at session start.
+                if helper_deployed && is_gnome() {
+                    let window = btn
+                        .root()
+                        .and_then(|r| r.downcast::<libadwaita::ApplicationWindow>().ok());
+                    show_relogin_dialog(window.as_ref());
+                }
+            }
+            Err(e) => tracing::error!("Install failed: {}", e),
+        }
+    }
+
+    /// Prompt for the NextCloud server URL, then install Talk with it. The URL is
+    /// saved after `install_service` (which writes a default config) and the
+    /// extension is re-deployed so its manifest is templated with the instance
+    /// origin.
+    fn prompt_talk_url_then_install(
+        self: &Rc<Self>,
+        btn: &gtk4::Button,
+        definition: &'static service::ServiceDefinition,
+    ) {
+        let window = btn
+            .root()
+            .and_then(|r| r.downcast::<libadwaita::ApplicationWindow>().ok());
+
+        let dialog = libadwaita::AlertDialog::new(
+            Some("NextCloud Server"),
+            Some(
+                "Enter the address of your NextCloud server (e.g. cloud.example.com). \
+                 Loft adds the Talk path for you.",
+            ),
+        );
+
+        let entry = gtk4::Entry::new();
+        entry.set_placeholder_text(Some("cloud.example.com"));
+        entry.set_hexpand(true);
+        entry.set_margin_top(12);
+        entry.set_activates_default(true);
+        if let Some(existing) = ServiceConfig::load(&definition.name)
+            .ok()
+            .and_then(|c| c.custom_url)
+        {
+            entry.set_text(&existing);
+        }
+        dialog.set_extra_child(Some(&entry));
+
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("install", "Install");
+        dialog.set_response_appearance("install", libadwaita::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("install"));
+        dialog.set_close_response("cancel");
+
+        // Keep Install disabled until the user has typed something.
+        dialog.set_response_enabled("install", !entry.text().trim().is_empty());
+        let dlg = dialog.clone();
+        entry.connect_changed(move |e| {
+            dlg.set_response_enabled("install", !e.text().trim().is_empty());
+        });
+
+        let ui = self.clone();
+        let btn = btn.clone();
+        dialog.connect_response(None, move |_, response| {
+            if response != "install" {
+                return;
+            }
+            let Some(url) = normalize_talk_url(&entry.text()) else {
+                return;
+            };
+            ui.install(&btn, definition);
+            // Persist the URL and re-template the extension with its origin.
+            let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
+            cfg.custom_url = Some(url);
+            if let Err(e) = cfg.save(&definition.name) {
+                tracing::error!("Failed to save NextCloud Talk URL: {}", e);
+                return;
+            }
+            if let Err(e) = desktop::deploy_extension() {
+                tracing::error!("Failed to re-deploy extension after Talk install: {}", e);
+            }
+        });
+
+        dialog.present(window.as_ref());
+    }
+
+    /// Detail page for an installed service with settings and uninstall.
+    fn create_detail_page(
+        self: &Rc<Self>,
+        definition: &'static service::ServiceDefinition,
+    ) -> libadwaita::NavigationPage {
+        let toolbar_view = libadwaita::ToolbarView::new();
+        let header = libadwaita::HeaderBar::new();
+        toolbar_view.add_top_bar(&header);
+
+        let scrolled = gtk4::ScrolledWindow::new();
+        scrolled.set_vexpand(true);
+
+        let clamp = libadwaita::Clamp::new();
+        clamp.set_maximum_size(600);
+        clamp.set_margin_top(24);
+        clamp.set_margin_bottom(24);
+        clamp.set_margin_start(12);
+        clamp.set_margin_end(12);
+
+        let outer = gtk4::Box::new(gtk4::Orientation::Vertical, 24);
+
+        // --- Startup group ---
+        let startup_group = libadwaita::PreferencesGroup::new();
+        startup_group.set_title("Startup");
+
+        let config = ServiceConfig::load(&definition.name).unwrap_or_default();
+
+        // Autostart toggle
+        let autostart_row = libadwaita::SwitchRow::new();
+        autostart_row.set_title("Start at Login");
+
+        // Start Hidden toggle (created before autostart handler so it can be referenced)
+        let start_hidden_row = libadwaita::SwitchRow::new();
+        start_hidden_row.set_title("Start Hidden");
+        start_hidden_row.set_subtitle("Start with the window hidden in the tray");
+        start_hidden_row.set_active(config.start_hidden);
+        start_hidden_row.set_sensitive(config.autostart);
+
+        let suppress = Rc::new(Cell::new(false));
+        autostart_row.set_active(config.autostart);
+
+        let suppress_clone = suppress.clone();
+        let start_hidden_row_ref = start_hidden_row.clone();
+        autostart_row.connect_active_notify(move |switch| {
+            if suppress_clone.get() {
+                return;
+            }
+
+            let enabled = switch.is_active();
+            let switch_clone = switch.clone();
+            let suppress_inner = suppress_clone.clone();
+            let hidden_row = start_hidden_row_ref.clone();
+            let window = switch
+                .root()
+                .and_then(|r| r.downcast::<gtk4::Window>().ok());
+
+            // Enable/disable the Start Hidden row based on autostart state
+            hidden_row.set_sensitive(enabled);
+            if !enabled {
+                hidden_row.set_active(false);
+                // Persist start_hidden = false when autostart is disabled
+                let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
+                cfg.start_hidden = false;
+                if let Err(e) = cfg.save(&definition.name) {
+                    tracing::error!(
+                        "Failed to save start_hidden for {}: {}",
+                        definition.display_name,
+                        e
+                    );
+                }
+            }
+
+            glib::spawn_future_local(async move {
+                let result =
+                    crate::autostart::set_autostart(definition, enabled, window.as_ref()).await;
+
+                if let Err(e) = result {
+                    tracing::error!(
+                        "Failed to set autostart for {}: {}",
+                        definition.display_name,
+                        e
+                    );
+                    suppress_inner.set(true);
+                    switch_clone.set_active(!enabled);
+                    // Revert Start Hidden row sensitivity on failure
+                    hidden_row.set_sensitive(!enabled);
+                    suppress_inner.set(false);
+                }
+            });
+        });
+
+        startup_group.add(&autostart_row);
+
+        start_hidden_row.connect_active_notify(move |switch| {
+            let enabled = switch.is_active();
+            let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
+            cfg.start_hidden = enabled;
+            if let Err(e) = cfg.save(&definition.name) {
+                tracing::error!(
+                    "Failed to save start_hidden for {}: {}",
+                    definition.display_name,
+                    e
+                );
+            }
+
+            // Regenerate the autostart entry so it picks up the new --minimized flag
+            if cfg.autostart {
+                let window = switch
                     .root()
-                    .and_then(|r| r.downcast::<libadwaita::ApplicationWindow>().ok());
-                show_relogin_dialog(window.as_ref());
+                    .and_then(|r| r.downcast::<gtk4::Window>().ok());
+                glib::spawn_future_local(async move {
+                    if let Err(e) =
+                        crate::autostart::set_autostart(definition, true, window.as_ref()).await
+                    {
+                        tracing::error!(
+                            "Failed to update autostart for {}: {}",
+                            definition.display_name,
+                            e
+                        );
+                    }
+                });
             }
+        });
+
+        startup_group.add(&start_hidden_row);
+        outer.append(&startup_group);
+
+        // --- Appearance group ---
+        let appearance_group = libadwaita::PreferencesGroup::new();
+        appearance_group.set_title("Appearance");
+
+        // Show Loft Titlebar toggle
+        let titlebar_row = libadwaita::SwitchRow::new();
+        titlebar_row.set_title("Show Loft Titlebar");
+        titlebar_row.set_subtitle("In-page toolbar with hide-to-tray button");
+        titlebar_row.set_active(config.show_titlebar);
+
+        titlebar_row.connect_active_notify(move |switch| {
+            let show = switch.is_active();
+            let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
+            cfg.show_titlebar = show;
+            if let Err(e) = cfg.save(&definition.name) {
+                tracing::error!(
+                    "Failed to save show_titlebar for {}: {}",
+                    definition.display_name,
+                    e
+                );
+            }
+
+            // Update running daemon via D-Bus (fire-and-forget)
+            glib::spawn_future_local(async move {
+                if let Err(e) = crate::daemon::dbus::call_set_show_titlebar(definition, show).await {
+                    tracing::debug!("Could not update running daemon titlebar setting: {}", e);
+                }
+            });
+        });
+
+        appearance_group.add(&titlebar_row);
+
+        // Show Badges toggle
+        let badges_row = libadwaita::SwitchRow::new();
+        badges_row.set_title("Show Badges");
+        badges_row.set_subtitle("Display unread message indicator on tray icon");
+        badges_row.set_active(config.badges_enabled);
+
+        badges_row.connect_active_notify(move |switch| {
+            let enabled = switch.is_active();
+            let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
+            cfg.badges_enabled = enabled;
+            if let Err(e) = cfg.save(&definition.name) {
+                tracing::error!(
+                    "Failed to save badges_enabled for {}: {}",
+                    definition.display_name,
+                    e
+                );
+            }
+
+            // Update running daemon via D-Bus (fire-and-forget)
+            glib::spawn_future_local(async move {
+                if let Err(e) =
+                    crate::daemon::dbus::call_set_badges_enabled(definition, enabled).await
+                {
+                    tracing::debug!("Could not update running daemon badges setting: {}", e);
+                }
+            });
+        });
+
+        appearance_group.add(&badges_row);
+        outer.append(&appearance_group);
+
+        // --- Connection group (custom server URL) ---
+        // Self-hostable services (Element, NextCloud Talk) let the user point at
+        // their own instance. Loft templates the extension manifest with this
+        // origin at deploy time. NextCloud Talk has no public default, so the URL
+        // is effectively required for it.
+        if definition.name == "element" || definition.name == "talk" {
+            let description = if definition.name == "talk" {
+                "Enter the address of your NextCloud server \
+                 (e.g. cloud.example.com) — Loft adds the Talk path for you. \
+                 Required: NextCloud Talk has no default server. Takes effect \
+                 next time the service starts."
+            } else {
+                "Use a self-hosted Element Web instance instead of app.element.io. \
+                 Leave empty for the default. Takes effect next time the service starts."
+            };
+            let connection_group = libadwaita::PreferencesGroup::new();
+            connection_group.set_title("Connection");
+            connection_group.set_description(Some(description));
+
+            let url_row = libadwaita::EntryRow::new();
+            url_row.set_title(if definition.name == "talk" {
+                "NextCloud Server URL"
+            } else {
+                "Custom Server URL"
+            });
+            url_row.set_show_apply_button(true);
+            if let Some(u) = config.custom_url.as_deref() {
+                url_row.set_text(u);
+            }
+
+            url_row.connect_apply(move |row| {
+                let normalized = if definition.name == "talk" {
+                    // Talk lives under /apps/spreed/; let the user enter just their
+                    // server address and reflect the resolved URL back into the row.
+                    let u = normalize_talk_url(&row.text());
+                    if let Some(ref u) = u {
+                        row.set_text(u);
+                    }
+                    u
+                } else {
+                    // Normalise a bare host to https:// so it forms a valid origin.
+                    let mut text = row.text().trim().to_string();
+                    if text.is_empty() {
+                        None
+                    } else {
+                        if !text.contains("://") {
+                            text = format!("https://{text}");
+                        }
+                        Some(text)
+                    }
+                };
+
+                let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
+                cfg.custom_url = normalized;
+                if let Err(e) = cfg.save(&definition.name) {
+                    tracing::error!(
+                        "Failed to save custom_url for {}: {}",
+                        definition.display_name,
+                        e
+                    );
+                    return;
+                }
+                // Re-template the extension so the new origin is in the manifest.
+                if let Err(e) = desktop::deploy_extension() {
+                    tracing::error!("Failed to re-deploy extension after URL change: {}", e);
+                }
+            });
+
+            connection_group.add(&url_row);
+            outer.append(&connection_group);
         }
-        Err(e) => tracing::error!("Install failed: {}", e),
+
+        // --- Uninstall button ---
+        let uninstall_button = gtk4::Button::with_label("Uninstall\u{2026}");
+        uninstall_button.add_css_class("destructive-action");
+        uninstall_button.add_css_class("pill");
+        uninstall_button.set_halign(gtk4::Align::Center);
+        uninstall_button.set_margin_top(12);
+
+        let ui = self.clone();
+        uninstall_button.connect_clicked(move |btn| {
+            ui.show_uninstall_dialog(btn, definition);
+        });
+
+        outer.append(&uninstall_button);
+
+        clamp.set_child(Some(&outer));
+        scrolled.set_child(Some(&clamp));
+        toolbar_view.set_content(Some(&scrolled));
+
+        libadwaita::NavigationPage::new(&toolbar_view, definition.display_name)
+    }
+
+    fn show_uninstall_dialog(
+        self: &Rc<Self>,
+        btn: &gtk4::Button,
+        definition: &'static service::ServiceDefinition,
+    ) {
+        let window = btn
+            .root()
+            .and_then(|r| r.downcast::<gtk4::Window>().ok());
+
+        let dialog = libadwaita::AlertDialog::new(
+            Some(&format!("Uninstall {}?", definition.display_name)),
+            Some("The service will be removed from your desktop."),
+        );
+
+        let delete_check = gtk4::CheckButton::with_label("Also delete login data and profile");
+        delete_check.set_margin_top(12);
+        dialog.set_extra_child(Some(&delete_check));
+
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("uninstall", "Uninstall");
+        dialog.set_response_appearance("uninstall", libadwaita::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+
+        let ui = self.clone();
+        dialog.connect_response(None, move |_, response| {
+            if response != "uninstall" {
+                return;
+            }
+            let delete_data = delete_check.is_active();
+            match desktop::uninstall_service(definition, delete_data) {
+                Ok(()) => {
+                    // Pop back to the main page and rebuild both sections.
+                    ui.nav_view.pop();
+                    ui.populate();
+                }
+                Err(e) => {
+                    tracing::error!("Uninstall failed: {}", e);
+                }
+            }
+        });
+
+        dialog.present(window.as_ref());
     }
 }
 
@@ -349,425 +1026,6 @@ fn normalize_talk_url(input: &str) -> Option<String> {
     } else {
         format!("{base}/apps/spreed/")
     })
-}
-
-/// Prompt for the NextCloud server URL, then install Talk with it. The URL is
-/// saved after `install_service` (which writes a default config) and the
-/// extension is re-deployed so its manifest is templated with the instance
-/// origin — mirroring the detail page's custom-URL apply path.
-fn prompt_talk_url_then_install(
-    btn: &gtk4::Button,
-    definition: &'static service::ServiceDefinition,
-    list_box: &gtk4::ListBox,
-    nav_view: &libadwaita::NavigationView,
-) {
-    let window = btn
-        .root()
-        .and_then(|r| r.downcast::<libadwaita::ApplicationWindow>().ok());
-
-    let dialog = libadwaita::AlertDialog::new(
-        Some("NextCloud Server"),
-        Some(
-            "Enter the address of your NextCloud server (e.g. cloud.example.com). \
-             Loft adds the Talk path for you.",
-        ),
-    );
-
-    let entry = gtk4::Entry::new();
-    entry.set_placeholder_text(Some("cloud.example.com"));
-    entry.set_hexpand(true);
-    entry.set_margin_top(12);
-    entry.set_activates_default(true);
-    if let Some(existing) = ServiceConfig::load(&definition.name)
-        .ok()
-        .and_then(|c| c.custom_url)
-    {
-        entry.set_text(&existing);
-    }
-    dialog.set_extra_child(Some(&entry));
-
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("install", "Install");
-    dialog.set_response_appearance("install", libadwaita::ResponseAppearance::Suggested);
-    dialog.set_default_response(Some("install"));
-    dialog.set_close_response("cancel");
-
-    // Keep Install disabled until the user has typed something.
-    dialog.set_response_enabled("install", !entry.text().trim().is_empty());
-    let dlg = dialog.clone();
-    entry.connect_changed(move |e| {
-        dlg.set_response_enabled("install", !e.text().trim().is_empty());
-    });
-
-    let btn = btn.clone();
-    let lb = list_box.clone();
-    let nv = nav_view.clone();
-    dialog.connect_response(None, move |_, response| {
-        if response != "install" {
-            return;
-        }
-        let Some(url) = normalize_talk_url(&entry.text()) else {
-            return;
-        };
-        do_install(&btn, definition, &lb, &nv);
-        // Persist the URL and re-template the extension with its origin.
-        let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
-        cfg.custom_url = Some(url);
-        if let Err(e) = cfg.save(&definition.name) {
-            tracing::error!("Failed to save NextCloud Talk URL: {}", e);
-            return;
-        }
-        if let Err(e) = desktop::deploy_extension() {
-            tracing::error!("Failed to re-deploy extension after Talk install: {}", e);
-        }
-    });
-
-    dialog.present(window.as_ref());
-}
-
-/// Detail page for an installed service with settings and uninstall.
-fn create_detail_page(
-    definition: &'static service::ServiceDefinition,
-    nav_view: &libadwaita::NavigationView,
-    list_box: &gtk4::ListBox,
-) -> libadwaita::NavigationPage {
-    let toolbar_view = libadwaita::ToolbarView::new();
-    let header = libadwaita::HeaderBar::new();
-    toolbar_view.add_top_bar(&header);
-
-    let scrolled = gtk4::ScrolledWindow::new();
-    scrolled.set_vexpand(true);
-
-    let clamp = libadwaita::Clamp::new();
-    clamp.set_maximum_size(600);
-    clamp.set_margin_top(24);
-    clamp.set_margin_bottom(24);
-    clamp.set_margin_start(12);
-    clamp.set_margin_end(12);
-
-    let outer = gtk4::Box::new(gtk4::Orientation::Vertical, 24);
-
-    // --- Startup group ---
-    let startup_group = libadwaita::PreferencesGroup::new();
-    startup_group.set_title("Startup");
-
-    let config = ServiceConfig::load(&definition.name).unwrap_or_default();
-
-    // Autostart toggle
-    let autostart_row = libadwaita::SwitchRow::new();
-    autostart_row.set_title("Start at Login");
-
-    // Start Hidden toggle (created before autostart handler so it can be referenced)
-    let start_hidden_row = libadwaita::SwitchRow::new();
-    start_hidden_row.set_title("Start Hidden");
-    start_hidden_row.set_subtitle("Start with the window hidden in the tray");
-    start_hidden_row.set_active(config.start_hidden);
-    start_hidden_row.set_sensitive(config.autostart);
-
-    let suppress = Rc::new(Cell::new(false));
-    autostart_row.set_active(config.autostart);
-
-    let suppress_clone = suppress.clone();
-    let start_hidden_row_ref = start_hidden_row.clone();
-    autostart_row.connect_active_notify(move |switch| {
-        if suppress_clone.get() {
-            return;
-        }
-
-        let enabled = switch.is_active();
-        let switch_clone = switch.clone();
-        let suppress_inner = suppress_clone.clone();
-        let hidden_row = start_hidden_row_ref.clone();
-        let window = switch
-            .root()
-            .and_then(|r| r.downcast::<gtk4::Window>().ok());
-
-        // Enable/disable the Start Hidden row based on autostart state
-        hidden_row.set_sensitive(enabled);
-        if !enabled {
-            hidden_row.set_active(false);
-            // Persist start_hidden = false when autostart is disabled
-            let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
-            cfg.start_hidden = false;
-            if let Err(e) = cfg.save(&definition.name) {
-                tracing::error!(
-                    "Failed to save start_hidden for {}: {}",
-                    definition.display_name,
-                    e
-                );
-            }
-        }
-
-        glib::spawn_future_local(async move {
-            let result =
-                crate::autostart::set_autostart(definition, enabled, window.as_ref()).await;
-
-            if let Err(e) = result {
-                tracing::error!(
-                    "Failed to set autostart for {}: {}",
-                    definition.display_name,
-                    e
-                );
-                suppress_inner.set(true);
-                switch_clone.set_active(!enabled);
-                // Revert Start Hidden row sensitivity on failure
-                hidden_row.set_sensitive(!enabled);
-                suppress_inner.set(false);
-            }
-        });
-    });
-
-    startup_group.add(&autostart_row);
-
-    start_hidden_row.connect_active_notify(move |switch| {
-        let enabled = switch.is_active();
-        let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
-        cfg.start_hidden = enabled;
-        if let Err(e) = cfg.save(&definition.name) {
-            tracing::error!(
-                "Failed to save start_hidden for {}: {}",
-                definition.display_name,
-                e
-            );
-        }
-
-        // Regenerate the autostart entry so it picks up the new --minimized flag
-        if cfg.autostart {
-            let window = switch
-                .root()
-                .and_then(|r| r.downcast::<gtk4::Window>().ok());
-            glib::spawn_future_local(async move {
-                if let Err(e) =
-                    crate::autostart::set_autostart(definition, true, window.as_ref()).await
-                {
-                    tracing::error!(
-                        "Failed to update autostart for {}: {}",
-                        definition.display_name,
-                        e
-                    );
-                }
-            });
-        }
-    });
-
-    startup_group.add(&start_hidden_row);
-    outer.append(&startup_group);
-
-    // --- Appearance group ---
-    let appearance_group = libadwaita::PreferencesGroup::new();
-    appearance_group.set_title("Appearance");
-
-    // Show Loft Titlebar toggle
-    let titlebar_row = libadwaita::SwitchRow::new();
-    titlebar_row.set_title("Show Loft Titlebar");
-    titlebar_row.set_subtitle("In-page toolbar with hide-to-tray button");
-    titlebar_row.set_active(config.show_titlebar);
-
-    titlebar_row.connect_active_notify(move |switch| {
-        let show = switch.is_active();
-        let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
-        cfg.show_titlebar = show;
-        if let Err(e) = cfg.save(&definition.name) {
-            tracing::error!(
-                "Failed to save show_titlebar for {}: {}",
-                definition.display_name,
-                e
-            );
-        }
-
-        // Update running daemon via D-Bus (fire-and-forget)
-        glib::spawn_future_local(async move {
-            if let Err(e) = crate::daemon::dbus::call_set_show_titlebar(definition, show).await {
-                tracing::debug!("Could not update running daemon titlebar setting: {}", e);
-            }
-        });
-    });
-
-    appearance_group.add(&titlebar_row);
-
-    // Show Badges toggle
-    let badges_row = libadwaita::SwitchRow::new();
-    badges_row.set_title("Show Badges");
-    badges_row.set_subtitle("Display unread message indicator on tray icon");
-    badges_row.set_active(config.badges_enabled);
-
-    badges_row.connect_active_notify(move |switch| {
-        let enabled = switch.is_active();
-        let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
-        cfg.badges_enabled = enabled;
-        if let Err(e) = cfg.save(&definition.name) {
-            tracing::error!(
-                "Failed to save badges_enabled for {}: {}",
-                definition.display_name,
-                e
-            );
-        }
-
-        // Update running daemon via D-Bus (fire-and-forget)
-        glib::spawn_future_local(async move {
-            if let Err(e) =
-                crate::daemon::dbus::call_set_badges_enabled(definition, enabled).await
-            {
-                tracing::debug!("Could not update running daemon badges setting: {}", e);
-            }
-        });
-    });
-
-    appearance_group.add(&badges_row);
-    outer.append(&appearance_group);
-
-    // --- Connection group (custom server URL) ---
-    // Self-hostable services (Element, NextCloud Talk) let the user point at
-    // their own instance. Loft templates the extension manifest with this
-    // origin at deploy time. NextCloud Talk has no public default, so the URL
-    // is effectively required for it.
-    if definition.name == "element" || definition.name == "talk" {
-        let description = if definition.name == "talk" {
-            "Enter the address of your NextCloud server \
-             (e.g. cloud.example.com) — Loft adds the Talk path for you. \
-             Required: NextCloud Talk has no default server. Takes effect \
-             next time the service starts."
-        } else {
-            "Use a self-hosted Element Web instance instead of app.element.io. \
-             Leave empty for the default. Takes effect next time the service starts."
-        };
-        let connection_group = libadwaita::PreferencesGroup::new();
-        connection_group.set_title("Connection");
-        connection_group.set_description(Some(description));
-
-        let url_row = libadwaita::EntryRow::new();
-        url_row.set_title(if definition.name == "talk" {
-            "NextCloud Server URL"
-        } else {
-            "Custom Server URL"
-        });
-        url_row.set_show_apply_button(true);
-        if let Some(u) = config.custom_url.as_deref() {
-            url_row.set_text(u);
-        }
-
-        url_row.connect_apply(move |row| {
-            let normalized = if definition.name == "talk" {
-                // Talk lives under /apps/spreed/; let the user enter just their
-                // server address and reflect the resolved URL back into the row.
-                let u = normalize_talk_url(&row.text());
-                if let Some(ref u) = u {
-                    row.set_text(u);
-                }
-                u
-            } else {
-                // Normalise a bare host to https:// so it forms a valid origin.
-                let mut text = row.text().trim().to_string();
-                if text.is_empty() {
-                    None
-                } else {
-                    if !text.contains("://") {
-                        text = format!("https://{text}");
-                    }
-                    Some(text)
-                }
-            };
-
-            let mut cfg = ServiceConfig::load(&definition.name).unwrap_or_default();
-            cfg.custom_url = normalized;
-            if let Err(e) = cfg.save(&definition.name) {
-                tracing::error!(
-                    "Failed to save custom_url for {}: {}",
-                    definition.display_name,
-                    e
-                );
-                return;
-            }
-            // Re-template the extension so the new origin is in the manifest.
-            if let Err(e) = desktop::deploy_extension() {
-                tracing::error!("Failed to re-deploy extension after URL change: {}", e);
-            }
-        });
-
-        connection_group.add(&url_row);
-        outer.append(&connection_group);
-    }
-
-    // --- Uninstall button ---
-    let uninstall_button = gtk4::Button::with_label("Uninstall\u{2026}");
-    uninstall_button.add_css_class("destructive-action");
-    uninstall_button.add_css_class("pill");
-    uninstall_button.set_halign(gtk4::Align::Center);
-    uninstall_button.set_margin_top(12);
-
-    let nav = nav_view.clone();
-    let lb = list_box.clone();
-    uninstall_button.connect_clicked(move |btn| {
-        show_uninstall_dialog(btn, definition, &nav, &lb);
-    });
-
-    outer.append(&uninstall_button);
-
-    clamp.set_child(Some(&outer));
-    scrolled.set_child(Some(&clamp));
-    toolbar_view.set_content(Some(&scrolled));
-
-    libadwaita::NavigationPage::new(&toolbar_view, definition.display_name)
-}
-
-fn show_uninstall_dialog(
-    btn: &gtk4::Button,
-    definition: &'static service::ServiceDefinition,
-    nav_view: &libadwaita::NavigationView,
-    list_box: &gtk4::ListBox,
-) {
-    let window = btn
-        .root()
-        .and_then(|r| r.downcast::<gtk4::Window>().ok());
-
-    let dialog = libadwaita::AlertDialog::new(
-        Some(&format!("Uninstall {}?", definition.display_name)),
-        Some("The service will be removed from your desktop."),
-    );
-
-    let delete_check = gtk4::CheckButton::with_label("Also delete login data and profile");
-    delete_check.set_margin_top(12);
-    dialog.set_extra_child(Some(&delete_check));
-
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("uninstall", "Uninstall");
-    dialog.set_response_appearance("uninstall", libadwaita::ResponseAppearance::Destructive);
-    dialog.set_default_response(Some("cancel"));
-    dialog.set_close_response("cancel");
-
-    let nav = nav_view.clone();
-    let lb = list_box.clone();
-    dialog.connect_response(None, move |_, response| {
-        if response != "uninstall" {
-            return;
-        }
-        let delete_data = delete_check.is_active();
-        match desktop::uninstall_service(definition, delete_data) {
-            Ok(()) => {
-                // Pop back to main page
-                nav.pop();
-                // Find and replace the row for this service
-                let mut idx = 0;
-                while let Some(row) = lb.row_at_index(idx) {
-                    if let Ok(action_row) = row.clone().downcast::<libadwaita::ActionRow>() {
-                        if action_row.title() == definition.display_name {
-                            let i = action_row.index();
-                            lb.remove(&action_row);
-                            let new_row = create_uninstalled_row(definition, &lb, &nav);
-                            lb.insert(&new_row, i);
-                            break;
-                        }
-                    }
-                    idx += 1;
-                }
-            }
-            Err(e) => {
-                tracing::error!("Uninstall failed: {}", e);
-            }
-        }
-    });
-
-    dialog.present(window.as_ref());
 }
 
 fn show_preferences_window(parent: &libadwaita::ApplicationWindow) {
