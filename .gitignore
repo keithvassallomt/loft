@@ -1,5 +1,6 @@
 /target
 /dev
+/dev_local
 
 # Flatpak build artifacts (created by `just build-flatpak` / `just release`)
 /.flatpak-builder/
