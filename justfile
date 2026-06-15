@@ -163,7 +163,7 @@ release new_version:
     else
         git commit -m "Release $tag"
     fi
-    git tag -a "$tag" -m "$tag"
+    git tag -s "$tag" -m "$tag"
 
     echo "==> Generating FriendlyHub submission files (pins $tag)"
     just update-flatpak-submission
