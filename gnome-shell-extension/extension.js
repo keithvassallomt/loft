@@ -167,12 +167,19 @@ export default class LoftShellHelper extends Extension {
                     i => i.app?.get_id?.() === targetId
                 );
                 if (currentIdx >= 0) {
+                    // _initialSelection signals its choice by calling
+                    // this._select() — show() ignores the return value — so we
+                    // must select here, not return an index. Pick the app after
+                    // (or before) the focused Loft service, wrapping around.
+                    const len = this._items.length;
                     if (backward || binding === 'switch-applications-backward')
-                        return (currentIdx - 1 + this._items.length) % this._items.length;
-                    return (currentIdx + 1) % this._items.length;
+                        this._select((currentIdx - 1 + len) % len);
+                    else
+                        this._select((currentIdx + 1) % len);
+                    return;
                 }
             }
-            return _origAppSwitcherInitialSelection.call(this, backward, binding);
+            _origAppSwitcherInitialSelection.call(this, backward, binding);
         };
 
         // Activities overview: same treatment.
@@ -221,8 +228,44 @@ export default class LoftShellHelper extends Extension {
                 loftWinsByClass.get(wc).push(w);
             }
 
+            // Per-service Loft apps to inject, ordered most-recently-used
+            // first. Chrome collapses every Loft window into a single C-side
+            // app, so the native MRU sort tracks one timestamp for the whole
+            // group and can't order the services. Derive per-service recency
+            // ourselves from each window's last user-interaction time.
+            const loftApps = [];
+            for (const [wc, wins] of loftWinsByClass) {
+                if (wins.every(w => w.minimized))
+                    continue;
+                const svcApp = appSystem_running.lookup_app(`${wc}.desktop`);
+                if (!svcApp)
+                    continue;
+                let recency = 0;
+                for (const w of wins) {
+                    const t = w.get_user_time?.() ?? 0;
+                    if (t > recency)
+                        recency = t;
+                }
+                loftApps.push({ app: svcApp, recency });
+            }
+            loftApps.sort((a, b) => b.recency - a.recency);
+
             const result = [];
             const seenIds = new Set();
+            let loftInjected = false;
+            const injectLoft = () => {
+                if (loftInjected)
+                    return;
+                loftInjected = true;
+                for (const { app } of loftApps) {
+                    const id = app.get_id();
+                    if (seenIds.has(id))
+                        continue;
+                    seenIds.add(id);
+                    result.push(app);
+                }
+            };
+
             for (const app of apps) {
                 const id = app.get_id?.() ?? '';
                 const windows = app.get_windows();
@@ -231,6 +274,12 @@ export default class LoftShellHelper extends Extension {
                     const nonLoft = windows.filter(
                         w => !wmClasses.has(w.get_wm_class?.() ?? '')
                     );
+                    // Chrome sits in the MRU slot of the most-recently-focused
+                    // Loft window (focusing any Loft window bumps Chrome's
+                    // last_used on the C side). Inject the Loft services right
+                    // here so the one you just used keeps its MRU position
+                    // instead of being dumped at the end of the switcher.
+                    injectLoft();
                     if (nonLoft.length === 0)
                         continue;
                 }
@@ -245,18 +294,9 @@ export default class LoftShellHelper extends Extension {
                 result.push(app);
             }
 
-            for (const [wc, wins] of loftWinsByClass) {
-                if (wins.every(w => w.minimized))
-                    continue;
-                const svcApp = appSystem_running.lookup_app(`${wc}.desktop`);
-                if (!svcApp)
-                    continue;
-                const svcId = svcApp.get_id();
-                if (seenIds.has(svcId))
-                    continue;
-                seenIds.add(svcId);
-                result.push(svcApp);
-            }
+            // Safety net: if Chrome wasn't in the running list (e.g. only Loft
+            // windows are open), the services were never injected above.
+            injectLoft();
 
             return result;
         };
@@ -876,6 +916,14 @@ export default class LoftShellHelper extends Extension {
                     if (win.get_workspace() !== currentWs)
                         win.change_workspace(currentWs);
                     win.activate(global.get_current_time());
+                    // An explicit Show from within the overview should take the
+                    // user to the window. win.activate() focuses it but, being a
+                    // raw compositor activation, doesn't dismiss the overview —
+                    // and the overview gate (_isOverviewWindow) won't surface a
+                    // thumbnail either, so the window would stay invisible until
+                    // the user manually leaves the overview. Close it ourselves.
+                    if (Main.overview.visible)
+                        Main.overview.hide();
                     invocation.return_value(GLib.Variant.new('(b)', [true]));
                 } else {
                     invocation.return_value(GLib.Variant.new('(b)', [false]));

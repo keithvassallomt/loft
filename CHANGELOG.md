@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Showing a service from the GNOME activities overview (via its panel/tray icon) now takes you straight to the window. Previously the overview stayed open with the window invisible until you manually left it.
+- Loft services now keep their place in the GNOME Alt+Tab switcher. A service you just switched to now appears at the front of the list (most recently used) instead of being pushed to the end, and the switcher reliably highlights the next app on the following Alt+Tab.
+
 ## [0.1.4] - 2026-06-02
 
 ### Added
