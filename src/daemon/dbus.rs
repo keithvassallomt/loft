@@ -133,26 +133,45 @@ pub async fn call_show(definition: &ServiceDefinition) -> Result<()> {
     Ok(())
 }
 
-/// Query a running daemon's status: `(visible, badge, dnd)`.
-/// Errors if no daemon is currently running for this service (i.e. the bus
-/// name has no owner), which callers treat as "not running".
-pub async fn call_get_status(definition: &ServiceDefinition) -> Result<(bool, u32, bool)> {
-    let connection = zbus::Connection::session().await?;
-    let bus_name = bus_name_for(definition)?;
-    let path = object_path_for(definition)?;
-    let iface = InterfaceName::try_from("chat.loft.Service")
-        .map_err(|e| anyhow::anyhow!("Invalid interface: {}", e))?;
-    let reply = connection
-        .call_method(
-            Some(BusName::from(bus_name)),
-            path,
-            Some(iface),
-            "GetStatus",
-            &(),
-        )
-        .await?;
-    let status: (bool, u32, bool) = reply.body().deserialize()?;
-    Ok(status)
+/// Query running status for multiple services over a single session-bus
+/// connection. Returns a map from service name to `(visible, badge, dnd)` for
+/// those whose daemon responded; a service whose daemon isn't running (its bus
+/// name has no owner) is simply absent from the map.
+pub async fn get_statuses(
+    defs: &[&'static ServiceDefinition],
+) -> std::collections::HashMap<&'static str, (bool, u32, bool)> {
+    let mut map = std::collections::HashMap::new();
+    let connection = match zbus::Connection::session().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!("Status query: could not connect to session bus: {}", e);
+            return map;
+        }
+    };
+    let iface = match InterfaceName::try_from("chat.loft.Service") {
+        Ok(i) => i,
+        Err(_) => return map,
+    };
+    for d in defs {
+        let (Ok(bus_name), Ok(path)) = (bus_name_for(d), object_path_for(d)) else {
+            continue;
+        };
+        if let Ok(reply) = connection
+            .call_method(
+                Some(BusName::from(bus_name)),
+                path,
+                Some(iface.clone()),
+                "GetStatus",
+                &(),
+            )
+            .await
+        {
+            if let Ok(status) = reply.body().deserialize::<(bool, u32, bool)>() {
+                map.insert(d.name, status);
+            }
+        }
+    }
+    map
 }
 
 /// Send a SetShowTitlebar() call to the already-running daemon instance.

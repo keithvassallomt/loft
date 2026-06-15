@@ -1,4 +1,5 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use gtk4::gio;
@@ -88,7 +89,10 @@ fn launch_service(definition: &service::ServiceDefinition) {
 /// isn't running are simply absent from the map.
 fn query_statuses(
     defs: &[&'static service::ServiceDefinition],
-) -> std::collections::HashMap<&'static str, (bool, u32, bool)> {
+) -> HashMap<&'static str, (bool, u32, bool)> {
+    if defs.is_empty() {
+        return HashMap::new();
+    }
     let defs: Vec<&'static service::ServiceDefinition> = defs.to_vec();
     let handle = std::thread::spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread()
@@ -98,20 +102,36 @@ fn query_statuses(
             Ok(rt) => rt,
             Err(e) => {
                 tracing::error!("Failed to create tokio runtime for status query: {}", e);
-                return std::collections::HashMap::new();
+                return HashMap::new();
             }
         };
-        rt.block_on(async move {
-            let mut map = std::collections::HashMap::new();
-            for d in defs {
-                if let Ok(status) = crate::daemon::dbus::call_get_status(d).await {
-                    map.insert(d.name, status);
-                }
-            }
-            map
-        })
+        rt.block_on(crate::daemon::dbus::get_statuses(&defs))
     });
     handle.join().unwrap_or_default()
+}
+
+/// Reflect a service's status onto its installed-row widgets. `None` means the
+/// daemon isn't running.
+fn apply_status(
+    row: &libadwaita::ActionRow,
+    badge: &gtk4::Label,
+    status: Option<(bool, u32, bool)>,
+) {
+    match status {
+        Some((_visible, count, _dnd)) => {
+            row.set_subtitle("Running");
+            if count > 0 {
+                badge.set_text(&count.to_string());
+                badge.set_visible(true);
+            } else {
+                badge.set_visible(false);
+            }
+        }
+        None => {
+            row.set_subtitle("Not running");
+            badge.set_visible(false);
+        }
+    }
 }
 
 pub fn build_window(app: &libadwaita::Application) {
@@ -289,6 +309,13 @@ fn show_main_content(window: &libadwaita::ApplicationWindow) {
     window.set_content(Some(&nav_view));
 }
 
+/// The status-bearing widgets of one installed row, kept so the periodic
+/// running-status poll can update them in place (no row rebuild → no flicker).
+struct RowWidgets {
+    row: libadwaita::ActionRow,
+    badge: gtk4::Label,
+}
+
 /// Holds the widgets that make up the main page so install/uninstall actions can
 /// repopulate both sections (moving a service between Installed and Available)
 /// and toggle the empty states, without surgical per-row mutation.
@@ -299,6 +326,8 @@ struct ManagerUi {
     installed_list: gtk4::ListBox,
     available_group: libadwaita::PreferencesGroup,
     available_flow: gtk4::FlowBox,
+    /// Installed-row widgets keyed by service name, for live status updates.
+    rows: RefCell<HashMap<&'static str, RowWidgets>>,
 }
 
 impl ManagerUi {
@@ -374,8 +403,24 @@ impl ManagerUi {
             installed_list,
             available_group,
             available_flow,
+            rows: RefCell::new(HashMap::new()),
         });
         ui.populate();
+
+        // Poll running status while the window is open so rows flip
+        // Running/Not-running and badges update as daemons start, stop, or
+        // receive messages. The timer holds a weak ref and stops itself once the
+        // UI is gone (all rows/tiles — which hold the strong refs — destroyed).
+        let ui_weak = Rc::downgrade(&ui);
+        glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
+            match ui_weak.upgrade() {
+                Some(ui) => {
+                    ui.refresh_running_status();
+                    glib::ControlFlow::Continue
+                }
+                None => glib::ControlFlow::Break,
+            }
+        });
 
         libadwaita::NavigationPage::new(&toolbar_view, "Loft")
     }
@@ -383,6 +428,7 @@ impl ManagerUi {
     /// Clear and rebuild both sections from the current install state, toggling
     /// the welcome / Available-group visibility for the empty cases.
     fn populate(self: &Rc<Self>) {
+        self.rows.borrow_mut().clear();
         while let Some(child) = self.installed_list.first_child() {
             self.installed_list.remove(&child);
         }
@@ -419,6 +465,24 @@ impl ManagerUi {
         self.available_group.set_visible(available > 0);
     }
 
+    /// Re-query the running status of every installed service and update its row
+    /// widgets in place. Called on a timer and shortly after an `Open` click.
+    fn refresh_running_status(self: &Rc<Self>) {
+        let rows = self.rows.borrow();
+        if rows.is_empty() {
+            return;
+        }
+        let defs: Vec<&'static service::ServiceDefinition> = service::ALL_SERVICES
+            .iter()
+            .copied()
+            .filter(|d| rows.contains_key(d.name))
+            .collect();
+        let statuses = query_statuses(&defs);
+        for (name, widgets) in rows.iter() {
+            apply_status(&widgets.row, &widgets.badge, statuses.get(name).copied());
+        }
+    }
+
     /// Installed row: app + status, with a separate `Open` button (launch/focus)
     /// and a gear button (settings) so the two intents don't share one target.
     fn build_installed_row(
@@ -442,8 +506,15 @@ impl ManagerUi {
         open.add_css_class("suggested-action");
         open.set_valign(gtk4::Align::Center);
         open.set_tooltip_text(Some(&format!("Open {}", definition.display_name)));
+        let ui = self.clone();
         open.connect_clicked(move |_| {
             launch_service(definition);
+            // Reflect the new running state promptly rather than waiting for the
+            // next poll tick (the daemon needs a moment to claim its bus name).
+            let ui = ui.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(1200), move || {
+                ui.refresh_running_status();
+            });
         });
 
         let gear = gtk4::Button::from_icon_name("emblem-system-symbolic");
@@ -461,20 +532,16 @@ impl ManagerUi {
         suffix.append(&gear);
         row.add_suffix(&suffix);
 
-        // Reflect running state + unread badge from the pre-fetched status.
-        // `None` means the daemon isn't running (GetStatus had no bus owner).
-        match status {
-            Some((_visible, count, _dnd)) => {
-                row.set_subtitle("Running");
-                if count > 0 {
-                    badge.set_text(&count.to_string());
-                    badge.set_visible(true);
-                }
-            }
-            None => {
-                row.set_subtitle("Not running");
-            }
-        }
+        // Reflect the pre-fetched status, and register the widgets so the
+        // periodic poll can update them in place.
+        apply_status(&row, &badge, status);
+        self.rows.borrow_mut().insert(
+            definition.name,
+            RowWidgets {
+                row: row.clone(),
+                badge: badge.clone(),
+            },
+        );
 
         row
     }
