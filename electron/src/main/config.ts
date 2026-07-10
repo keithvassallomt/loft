@@ -14,6 +14,8 @@ export interface ServiceConfig {
   customUrl?: string;
   window?: WindowState;
   openOnStartup?: boolean;
+  /** Per-service Do Not Disturb; persisted + reflected in the tray menu (gating notifications is Stage 3b). */
+  dnd?: boolean;
 }
 
 export interface LoftConfig {
