@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import * as dbus from 'dbus-next';
 
 const { Interface, ACCESS_READ } = dbus.interface;
@@ -6,7 +8,11 @@ type Variant = dbus.Variant;
 
 /** The state the menu is rendered from (produced by `TrayModel`). */
 export interface MenuModel {
-  services: Array<{ id: string; label: string; unread: boolean; dnd: boolean; visible: boolean }>;
+  globalDnd: boolean;
+  /** Services with a live window (hidden-to-tray still counts). */
+  running: Array<{ id: string; label: string; unread: boolean; dnd: boolean; visible: boolean }>;
+  /** Configured services with no live window (click to launch). */
+  available: Array<{ id: string; label: string }>;
 }
 
 /** dbusmenu property map: `a{sv}`. */
@@ -23,34 +29,53 @@ type LayoutNode = [number, Props, Variant[]];
 
 const LAYOUT_SIGNATURE = '(ia{sv}av)';
 
+// Service icon bytes (full-colour PNG) for dbusmenu `icon-data`. Cached; a
+// missing file just omits the icon rather than breaking the menu.
+const iconCache = new Map<string, number[] | null>();
+function serviceIconData(id: string): number[] | null {
+  const cached = iconCache.get(id);
+  if (cached !== undefined) return cached;
+  let bytes: number[] | null = null;
+  try {
+    // dist/main/tray → dist/assets/icons/<id>.png (copied by copy-assets).
+    bytes = Array.from(readFileSync(join(__dirname, '..', '..', 'assets', 'icons', `${id}.png`)));
+  } catch {
+    bytes = null;
+  }
+  iconCache.set(id, bytes);
+  return bytes;
+}
+
 /**
  * The `com.canonical.dbusmenu` object backing the SNI tray's left-click menu.
- * Rebuilt from a `MenuModel` on every change (`setModel`), which bumps the
- * revision and emits `LayoutUpdated`. Leaf clicks arrive via `Event(id,
- * "clicked", …)` and dispatch to `onEvent(actionId)`.
+ * Rebuilt from a `MenuModel` on every change (`setModel`), bumping the revision
+ * and emitting `LayoutUpdated`. Leaf clicks arrive via `Event(id, "clicked", …)`
+ * and dispatch to `onEvent(actionId)`.
  *
- * Layout (per plan §3a Task 4):
- *   Show / Hide Loft            (hub)
+ * Layout:
+ *   ☑ Do Not Disturb (all)            (global:dnd)
  *   ──────────
- *   <Service> [•]               submenu (bullet when unread)
- *     Do Not Disturb  ☑         (svc:<id>:dnd)
- *     Show/Hide Window          (svc:<id>:toggle)
- *   …one submenu per service…
+ *   <Service> [•]                     (svc:<id>:toggle → show/hide)
+ *   Do Not Disturb ☑                  (svc:<id>:dnd)
+ *   Quit                              (svc:<id>:quit → stop the service)
+ *   …one group per running service…
+ *   ──────────                        (only if any available)
+ *   <Service>                         (svc:<id>:launch)
  *   ──────────
- *   Settings…                   (settings)
- *   Quit                        (quit)
+ *   Settings…                         (settings)
+ *   Quit Loft                         (quit)
  */
 export class DbusMenu extends Interface {
   private revision = 1;
   private root: MenuNode;
   private actions = new Map<number, string>();
 
-  /** Invoked with a stable action id (`hub` | `settings` | `quit` | `svc:<id>:toggle` | `svc:<id>:dnd`). */
+  /** Invoked with a stable action id (`global:dnd` | `settings` | `quit` | `svc:<id>:{toggle,dnd,quit,launch}`). */
   onEvent: (actionId: string) => void = () => {};
 
   constructor() {
     super('com.canonical.dbusmenu');
-    const built = buildTree({ services: [] });
+    const built = buildTree({ globalDnd: false, running: [], available: [] });
     this.root = built.root;
     this.actions = built.actions;
   }
@@ -179,27 +204,49 @@ function buildTree(model: MenuModel): { root: MenuNode; actions: Map<number, str
     props: { type: V('s', 'separator'), visible: V('b', true) },
     children: [],
   });
+  const svcIcon = (id: string): Props => {
+    const bytes = serviceIconData(id);
+    return bytes ? { 'icon-data': V('ay', bytes) } : {};
+  };
+  const toggle = (state: boolean): Props => ({
+    'toggle-type': V('s', 'checkmark'),
+    'toggle-state': V('i', state ? 1 : 0),
+  });
 
   const children: MenuNode[] = [];
-  children.push(item('Show / Hide Loft', 'hub'));
+
+  // Global DND toggle.
+  children.push(
+    item('Do Not Disturb (all)', 'global:dnd', {
+      ...toggle(model.globalDnd),
+      'icon-name': V('s', 'notifications-disabled-symbolic'),
+    }),
+  );
   children.push(separator());
 
-  for (const s of model.services) {
-    const title = s.unread ? `${s.label} •` : s.label; // • bullet when unread
-    const sub = item(title, undefined, { 'children-display': V('s', 'submenu') });
-    sub.children.push(
+  // Running services: the service row toggles show/hide; DND + Quit sit under it.
+  for (const s of model.running) {
+    children.push(item(s.unread ? `${s.label} •` : s.label, `svc:${s.id}:toggle`, svcIcon(s.id)));
+    children.push(
       item('Do Not Disturb', `svc:${s.id}:dnd`, {
-        'toggle-type': V('s', 'checkmark'),
-        'toggle-state': V('i', s.dnd ? 1 : 0),
+        ...toggle(s.dnd),
+        'icon-name': V('s', 'notifications-disabled-symbolic'),
       }),
-      item(s.visible ? 'Hide Window' : 'Show Window', `svc:${s.id}:toggle`),
     );
-    children.push(sub);
+    children.push(item('Quit', `svc:${s.id}:quit`, { 'icon-name': V('s', 'window-close-symbolic') }));
+  }
+
+  // Configured-but-not-running services: click launches them.
+  if (model.available.length > 0) {
+    children.push(separator());
+    for (const s of model.available) {
+      children.push(item(s.label, `svc:${s.id}:launch`, svcIcon(s.id)));
+    }
   }
 
   children.push(separator());
-  children.push(item('Settings…', 'settings'));
-  children.push(item('Quit', 'quit'));
+  children.push(item('Settings…', 'settings', { 'icon-name': V('s', 'preferences-system-symbolic') }));
+  children.push(item('Quit Loft', 'quit', { 'icon-name': V('s', 'application-exit-symbolic') }));
 
   const root: MenuNode = { id: 0, props: { 'children-display': new Variant('s', 'submenu') }, children };
   return { root, actions };

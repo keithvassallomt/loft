@@ -20,6 +20,8 @@ export interface ServiceConfig {
 
 export interface LoftConfig {
   services: Record<string, ServiceConfig>;
+  /** Global Do Not Disturb (mutes every service); persisted + reflected in the tray. */
+  globalDnd?: boolean;
 }
 
 export function defaultConfig(): LoftConfig {
@@ -38,7 +40,7 @@ export function loadConfig(path: string): LoftConfig {
       parsed.services && typeof parsed.services === 'object' && !Array.isArray(parsed.services)
         ? (parsed.services as Record<string, ServiceConfig>)
         : {};
-    return { services };
+    return parsed.globalDnd === true ? { services, globalDnd: true } : { services };
   } catch {
     return defaultConfig();
   }

@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run bundle-preload && npm run copy-assets",
     "bundle-preload": "esbuild src/preload/service.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/service.js",
-    "copy-assets": "mkdir -p dist/renderer/titlebar dist/assets && cp src/renderer/titlebar/index.html src/renderer/titlebar/titlebar.css dist/renderer/titlebar/ && cp assets/loft.png dist/assets/",
+    "copy-assets": "mkdir -p dist/renderer/titlebar dist/assets/icons && cp src/renderer/titlebar/index.html src/renderer/titlebar/titlebar.css dist/renderer/titlebar/ && cp assets/loft.png dist/assets/ && cp assets/icons/*.png dist/assets/icons/",
     "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
     "whatsapp": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=whatsapp",
     "messenger": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=messenger",
