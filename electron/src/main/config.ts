@@ -32,7 +32,11 @@ export function configPath(): string {
 export function loadConfig(path: string): LoftConfig {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<LoftConfig>;
-    return { services: parsed.services ?? {} };
+    const services =
+      parsed.services && typeof parsed.services === 'object' && !Array.isArray(parsed.services)
+        ? (parsed.services as Record<string, ServiceConfig>)
+        : {};
+    return { services };
   } catch {
     return defaultConfig();
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig, saveConfig, defaultConfig } from '../src/main/config';
@@ -23,6 +23,16 @@ describe('config', () => {
     const p = join(dir, 'bad.json');
     saveConfig(p, defaultConfig());
     require('node:fs').writeFileSync(p, '{ not json');
+    expect(loadConfig(p)).toEqual(defaultConfig());
+  });
+  it('returns the default config when services is a string', () => {
+    const p = join(dir, 'string-services.json');
+    writeFileSync(p, '{"services":"not-an-object"}', 'utf8');
+    expect(loadConfig(p)).toEqual(defaultConfig());
+  });
+  it('returns the default config when services is an array', () => {
+    const p = join(dir, 'array-services.json');
+    writeFileSync(p, '{"services":[1,2,3]}', 'utf8');
     expect(loadConfig(p)).toEqual(defaultConfig());
   });
 });
