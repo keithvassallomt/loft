@@ -26,5 +26,8 @@
     "jsdom": "^25.0.1",
     "typescript": "~5.9",
     "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "dbus-next": "^0.10.2"
   }
 }
