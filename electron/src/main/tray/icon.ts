@@ -51,14 +51,20 @@ function loadBaseArgb(size: number): Buffer {
   const img = nativeImage.createFromPath(baseIconPath());
   if (img.isEmpty()) return argb; // transparent base; overlay still renders
   const resized = img.resize({ width: size, height: size });
-  const bgra = resized.toBitmap(); // Electron returns B,G,R,A per pixel
+  const bgra = resized.toBitmap(); // Electron returns *premultiplied* B,G,R,A per pixel
   if (bgra.length < size * size * 4) return argb;
+  // toBitmap() is premultiplied-alpha; SNI hosts (KDE QImage Format_ARGB32,
+  // GNOME GdkPixbuf) read IconPixmap as straight alpha, so un-premultiply the
+  // colour channels — otherwise anti-aliased logo edges render with a dark
+  // fringe. (tray.rs reads straight RGBA via the `image` crate; this matches it.)
   for (let i = 0; i < size * size; i++) {
     const o = i * 4;
-    argb[o] = bgra[o + 3]; // A
-    argb[o + 1] = bgra[o + 2]; // R
-    argb[o + 2] = bgra[o + 1]; // G
-    argb[o + 3] = bgra[o]; // B
+    const a = bgra[o + 3];
+    argb[o] = a; // A
+    if (a === 0) continue; // fully transparent → leave RGB at 0
+    argb[o + 1] = Math.min(255, Math.round((bgra[o + 2] * 255) / a)); // R
+    argb[o + 2] = Math.min(255, Math.round((bgra[o + 1] * 255) / a)); // G
+    argb[o + 3] = Math.min(255, Math.round((bgra[o] * 255) / a)); // B
   }
   return argb;
 }

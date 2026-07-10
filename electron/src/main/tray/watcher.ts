@@ -48,20 +48,30 @@ export async function connectSni(exp: SniExports): Promise<SniHandle> {
   };
 
   let attempt = 0;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   const tryRegister = async (): Promise<void> => {
-    if (await register()) return;
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
+    }
+    if (await register()) {
+      attempt = 0;
+      return;
+    }
     const delay = nextBackoff(attempt++);
-    setTimeout(() => void tryRegister(), delay * 1000);
+    retryTimer = setTimeout(() => void tryRegister(), delay * 1000);
   };
   await tryRegister();
 
   // Re-register when the watcher (re)appears on the bus (e.g. GNOME shell restart / suspend).
+  // Use the same backoff schedule — a single attempt can lose the race if the name is
+  // owned a beat before RegisterStatusNotifierItem is served, and then never retry.
   const dbusObj = await bus.getProxyObject('org.freedesktop.DBus', '/org/freedesktop/DBus');
   const dbusIface = dbusObj.getInterface('org.freedesktop.DBus');
   dbusIface.on('NameOwnerChanged', (name: string, _old: string, next: string) => {
     if (name === WATCHER_NAME && next) {
       attempt = 0;
-      void register();
+      void tryRegister();
     }
   });
 
