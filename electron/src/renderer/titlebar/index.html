@@ -1,10 +1,19 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-<head>
-  <meta charset="UTF-8" />
-  <title>Loft Titlebar</title>
-  <link rel="stylesheet" href="titlebar.css" />
-</head>
-<body>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="titlebar.css" />
+  </head>
+  <body>
+    <div class="titlebar">
+      <div class="left"><span id="name">Loft</span></div>
+      <div class="drag"></div>
+      <div class="controls">
+        <button id="zoom-out" title="Smaller text">A<span class="arr">▾</span></button>
+        <button id="zoom-in" title="Larger text">A<span class="arr">▴</span></button>
+        <button id="close" title="Hide to tray">✕</button>
+      </div>
+    </div>
+    <script src="titlebar.js"></script>
+  </body>
 </html>
