@@ -32,28 +32,32 @@ const talk: BadgeParser = (doc) => {
 };
 
 const telegram: BadgeParser = (doc) => {
-  // Port of content.js scanTelegramUnreads' count: sum the numeric sidebar badges.
-  // NOTE: verify the selector against extension/content.js and the live sidebar.
+  // Faithful to content.js scanTelegramUnreads: count conversations with a numeric
+  // unread badge (`.chat-badge-transition` whose text is all digits — skips action
+  // buttons like "Open"). It is a conversation COUNT, not a sum of unread numbers.
   let count = 0;
-  doc.querySelectorAll('.ChatBadge, .unread').forEach((el) => {
-    const n = parseInt((el.textContent || '').trim(), 10);
-    if (Number.isFinite(n)) count += n;
+  doc.querySelectorAll('.chat-badge-transition').forEach((badge) => {
+    if (/^\d+$/.test((badge.textContent || '').trim())) count++;
   });
   return count;
 };
 
 const messenger: BadgeParser = (doc) => {
-  let count = 0;
+  // Faithful to content.js: count UNIQUE unread, non-muted conversations by href
+  // (Messenger can render the same thread as more than one anchor).
+  const unread = new Set<string>();
   for (const a of doc.querySelectorAll('a[href*="/messages/"]')) {
+    const href = a.getAttribute('href');
+    if (!href) continue;
     const walker = doc.createTreeWalker(a, NodeFilter.SHOW_TEXT, null);
-    let unread = false;
+    let isUnread = false;
     let n: Node | null;
     while ((n = walker.nextNode())) {
-      if ((n.textContent || '').trim() === 'Unread message:') { unread = true; break; }
+      if ((n.textContent || '').trim() === 'Unread message:') { isUnread = true; break; }
     }
-    if (unread && !a.querySelector('[style*="--disabled-icon"]')) count++;
+    if (isUnread && !a.querySelector('[style*="--disabled-icon"]')) unread.add(href);
   }
-  return count;
+  return unread.size;
 };
 
 export const BADGE_PARSERS: Record<string, BadgeParser> = {

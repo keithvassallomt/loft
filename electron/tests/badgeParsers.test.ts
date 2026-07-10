@@ -43,4 +43,19 @@ describe('badge parsers', () => {
     );
     expect(BADGE_PARSERS.messenger(doc)).toBe(1);
   });
+  it('messenger dedupes the same unread thread across multiple anchors', () => {
+    const doc = docFrom(
+      '<a href="/messages/t/9"><span>Unread message:</span></a>' +
+      '<a href="/messages/t/9"><span>Unread message:</span></a>',
+    );
+    expect(BADGE_PARSERS.messenger(doc)).toBe(1);
+  });
+  it('telegram counts numeric unread badges, skipping action buttons', () => {
+    const doc = docFrom(
+      '<span class="chat-badge-transition">3</span>' +
+      '<span class="chat-badge-transition">12</span>' +
+      '<span class="chat-badge-transition">Open</span>',
+    );
+    expect(BADGE_PARSERS.telegram(doc)).toBe(2);
+  });
 });

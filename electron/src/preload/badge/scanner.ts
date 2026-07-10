@@ -13,7 +13,14 @@ export function startBadgeScanner(serviceId: string, send: (count: number) => vo
     }
   };
 
-  const observer = new MutationObserver(scan);
+  // Messenger/Telegram parsers are heavier (per-anchor tree-walks); debounce their
+  // mutation-driven scans like content.js does. Light services scan directly.
+  const heavy = serviceId === 'messenger' || serviceId === 'telegram';
+  let debounce: ReturnType<typeof setTimeout> | null = null;
+  const onMutation = heavy
+    ? () => { if (debounce) clearTimeout(debounce); debounce = setTimeout(scan, 500); }
+    : scan;
+  const observer = new MutationObserver(onMutation);
   const observeTarget = () => {
     // Element reports its count via document.title; others via the body DOM.
     const target = serviceId === 'element' ? document.querySelector('title') ?? document.body : document.body;

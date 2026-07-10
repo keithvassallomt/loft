@@ -54,8 +54,8 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on('titlebar:zoom-out', (e) => findBySenderId(e.sender.id)?.setZoom(-0.1));
   ipcMain.on('titlebar:close', (e) => findBySenderId(e.sender.id)?.hide());
 
-  ipcMain.on('service:badge', (e, payload: { count: number }) => {
-    findBySenderId(e.sender.id)?.setBadge(payload.count);
+  ipcMain.on('service:badge', (e, payload?: { count?: number }) => {
+    if (typeof payload?.count === 'number') findBySenderId(e.sender.id)?.setBadge(payload.count);
   });
 
   app.whenReady().then(() => {

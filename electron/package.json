@@ -5,7 +5,8 @@
   "license": "GPL-3.0-or-later",
   "main": "dist/main/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && npm run copy-assets",
+    "build": "tsc -p tsconfig.json && npm run bundle-preload && npm run copy-assets",
+    "bundle-preload": "esbuild src/preload/service.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/service.js",
     "copy-assets": "mkdir -p dist/renderer/titlebar && cp src/renderer/titlebar/index.html src/renderer/titlebar/titlebar.css dist/renderer/titlebar/",
     "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
     "test": "vitest run",
@@ -15,6 +16,7 @@
     "@types/jsdom": "^21.1.7",
     "@types/node": "^22.20.1",
     "electron": "^43.1.0",
+    "esbuild": "^0.28.1",
     "jsdom": "^25.0.1",
     "typescript": "~5.9",
     "vitest": "^4.1.10"
