@@ -13,6 +13,10 @@ export interface ServiceWindow {
   titlebarView: WebContentsView;
   show(): void;
   hide(): void;
+  /** Adjust the service view's zoom by delta (clamped 0.3–3.0), apply, and persist. */
+  setZoom(delta: number): void;
+  /** Write current bounds + zoom into the in-memory config. */
+  persist(): void;
 }
 
 export function createServiceWindow(
@@ -71,9 +75,12 @@ export function createServiceWindow(
   relayout();
   window.on('resize', relayout);
 
-  // Restore zoom.
-  const zoom = saved?.zoom ?? 1;
-  serviceView.webContents.on('did-finish-load', () => serviceView.webContents.setZoomFactor(zoom));
+  // Zoom: track the live factor so user changes survive in-page reloads (Electron
+  // resets zoom on a full navigation) and so persist() records the current value.
+  let currentZoom = saved?.zoom ?? 1;
+  serviceView.webContents.on('did-finish-load', () =>
+    serviceView.webContents.setZoomFactor(currentZoom),
+  );
 
   // Close-to-tray: hide unless the app is actually quitting.
   window.on('close', (e) => {
@@ -83,17 +90,20 @@ export function createServiceWindow(
     }
   });
 
-  // Persist bounds + zoom on the way out (Stage 1: in-memory cfg object; Stage 4 wires saveConfig).
+  // Persist bounds + zoom into the in-memory config (index.ts saveConfig runs on
+  // before-quit). Bind to resize/move AND hide so a session that only zooms or never
+  // moves the window still records its state.
   const persist = () => {
     const [w, h] = window.getSize();
     const [x, y] = window.getPosition();
     cfg.services[def.id] = {
       ...cfg.services[def.id],
-      window: { x, y, width: w, height: h, zoom: serviceView.webContents.getZoomFactor() },
+      window: { x, y, width: w, height: h, zoom: currentZoom },
     };
   };
   window.on('resize', persist);
   window.on('move', persist);
+  window.on('hide', persist);
 
   serviceView.webContents.loadURL(effectiveUrl(def, cfg.services[def.id]?.customUrl));
 
@@ -104,6 +114,13 @@ export function createServiceWindow(
     titlebarView: titlebar,
     show: () => { window.show(); window.focus(); },
     hide: () => window.hide(),
+    setZoom: (delta: number) => {
+      // Round to 0.1 steps to avoid float drift; clamp to the 0.3–3.0 range.
+      currentZoom = Math.min(3, Math.max(0.3, Math.round((currentZoom + delta) * 10) / 10));
+      serviceView.webContents.setZoomFactor(currentZoom);
+      persist();
+    },
+    persist,
   };
 
   if (!opts.minimized) api.show();
