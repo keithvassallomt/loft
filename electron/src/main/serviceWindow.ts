@@ -138,7 +138,11 @@ export function createServiceWindow(
       persist();
     },
     persist,
-    setBadge: (count: number) => window.setTitle(formatWindowTitle(def.displayName, count)),
+    setBadge: (count: number) => {
+      const title = formatWindowTitle(def.displayName, count);
+      window.setTitle(title); // OS window title (alt-tab / taskbar / overview)
+      titlebar.webContents.send('titlebar:set-service', title); // our visible titlebar strip
+    },
   };
 
   if (!opts.minimized) api.show();
