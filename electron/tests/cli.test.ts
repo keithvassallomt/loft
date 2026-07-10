@@ -16,4 +16,10 @@ describe('parseArgs', () => {
     expect(a.verbose).toBe(true);
     expect(a.minimized).toBe(true);
   });
+  it('does not consume a flag as --service value', () => {
+    expect(parseArgs(['electron', '.', '--service', '--verbose'])).toEqual({ service: undefined, verbose: true, minimized: false });
+  });
+  it('parses -v alias for verbose', () => {
+    expect(parseArgs(['electron', '.', '-v']).verbose).toBe(true);
+  });
 });

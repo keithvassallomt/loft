@@ -11,7 +11,7 @@ export function parseArgs(argv: string[]): CliArgs {
     if (a === '--verbose' || a === '-v') args.verbose = true;
     else if (a === '--minimized') args.minimized = true;
     else if (a.startsWith('--service=')) args.service = a.slice('--service='.length);
-    else if (a === '--service' && i + 1 < argv.length) args.service = argv[++i];
+    else if (a === '--service' && i + 1 < argv.length && !argv[i + 1].startsWith('--')) args.service = argv[++i];
   }
   return args;
 }
