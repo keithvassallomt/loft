@@ -47,9 +47,14 @@ export class SniItem extends Interface {
   get IconThemePath(): string {
     return '';
   }
-  /** Themed-icon fallback used by hosts that ignore the pixmap. */
+  /**
+   * Intentionally empty. Some SNI/AppIndicator hosts prefer a themed `IconName`
+   * and, on `NewIcon`, only re-resolve the (unchanged) name instead of re-reading
+   * `IconPixmap` — so our composited unread/DND overlay never appears. With no
+   * name, the host must use the pixmap we push on every change.
+   */
   get IconName(): string {
-    return 'loft';
+    return '';
   }
   get IconPixmap(): IconPixmap[] {
     return this.iconPixmap;
