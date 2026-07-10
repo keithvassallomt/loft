@@ -5,6 +5,8 @@ import { effectiveUrl } from './registry';
 import type { LoftConfig } from './config';
 import { computeLayout } from './layout';
 import { configureSession } from './session';
+import { dechromeCssFor } from './dechromeCss';
+import { formatWindowTitle } from './serviceTitle';
 
 export interface ServiceWindow {
   def: ServiceDef;
@@ -17,6 +19,8 @@ export interface ServiceWindow {
   setZoom(delta: number): void;
   /** Write current bounds + zoom into the in-memory config. */
   persist(): void;
+  /** Reflect the unread count in the window title (until the tray lands in Stage 3). */
+  setBadge(count: number): void;
 }
 
 export function createServiceWindow(
@@ -51,11 +55,24 @@ export function createServiceWindow(
   );
   titlebar.webContents.loadFile(join(__dirname, '../renderer/titlebar/index.html'));
 
-  // Service view (remote URL) — the isolated per-service partition.
+  // Service view (remote URL) — the isolated per-service partition + our preload.
   const serviceView = new WebContentsView({
-    webPreferences: { partition, backgroundThrottling: false },
+    webPreferences: {
+      partition,
+      backgroundThrottling: false,
+      preload: join(__dirname, '../preload/service.js'),
+      additionalArguments: [`--loft-service=${def.id}`],
+    },
   });
   serviceView.webContents.setUserAgent(ses.getUserAgent());
+
+  // Static de-chrome CSS (the dynamic Messenger-banner bit runs in the preload).
+  const dechromeCss = dechromeCssFor(def.id);
+  if (dechromeCss) {
+    serviceView.webContents.on('did-finish-load', () => {
+      void serviceView.webContents.insertCSS(dechromeCss);
+    });
+  }
 
   // Calls may open in a window.open popup (Messenger). Allow + inherit UA/session.
   serviceView.webContents.setWindowOpenHandler(() => ({
@@ -121,6 +138,7 @@ export function createServiceWindow(
       persist();
     },
     persist,
+    setBadge: (count: number) => window.setTitle(formatWindowTitle(def.displayName, count)),
   };
 
   if (!opts.minimized) api.show();
