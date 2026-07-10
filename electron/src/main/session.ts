@@ -28,14 +28,18 @@ export function configureSession(ses: Session, partition: string): void {
   // Screen share — desktopCapturer.getSources triggers the Wayland portal picker.
   ses.setDisplayMediaRequestHandler(
     (_request, callback) => {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { desktopCapturer } = require('electron');
-      desktopCapturer
-        .getSources({ types: ['screen', 'window'] })
-        .then((sources: Electron.DesktopCapturerSource[]) =>
-          callback(sources[0] ? { video: sources[0] } : {}),
-        )
-        .catch(() => callback({}));
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { desktopCapturer } = require('electron');
+        desktopCapturer
+          .getSources({ types: ['screen', 'window'] })
+          .then((sources: Electron.DesktopCapturerSource[]) =>
+            callback(sources[0] ? { video: sources[0] } : {}),
+          )
+          .catch(() => callback({}));
+      } catch {
+        callback({});
+      }
     },
     { useSystemPicker: true },
   );
