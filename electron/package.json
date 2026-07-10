@@ -1,0 +1,20 @@
+{
+  "name": "loft",
+  "version": "0.3.0-dev",
+  "description": "Linux desktop integration for messaging web apps",
+  "license": "GPL-3.0-or-later",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && npm run copy-assets",
+    "copy-assets": "mkdir -p dist/renderer/titlebar && cp src/renderer/titlebar/index.html src/renderer/titlebar/titlebar.css dist/renderer/titlebar/",
+    "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "electron": "^43.1.0",
+    "typescript": "~5.9",
+    "vitest": "^4.1.10"
+  }
+}
