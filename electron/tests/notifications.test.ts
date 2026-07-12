@@ -145,42 +145,6 @@ describe('startNotifications', () => {
     expect(deps.pushHiddenCalls.at(-1)).toEqual(['slack', false]); // focused + visible → not hidden
   });
 
-  it('forces hidden=false during per-service DND so the page mutes its own sound', async () => {
-    connectNotificationServerMock.mockResolvedValue(makeFakeServer());
-    const deps = makeDeps();
-    const n = await startNotifications(deps);
-
-    // Visible but unfocused → normally told hidden=true so the app fires (and dings).
-    n.setVisible('slack', true);
-    n.setFocused('slack', false);
-    expect(deps.pushHiddenCalls.at(-1)).toEqual(['slack', true]);
-
-    // DND on → must tell the page hidden=false so the web app treats the user as
-    // present and stays silent (main already drops the desktop banner).
-    n.setServiceDnd('slack', true);
-    expect(deps.pushHiddenCalls.at(-1)).toEqual(['slack', false]);
-
-    // DND off → back to hidden=true (still unfocused) so notifications resume.
-    n.setServiceDnd('slack', false);
-    expect(deps.pushHiddenCalls.at(-1)).toEqual(['slack', true]);
-  });
-
-  it('global DND forces hidden=false for every known service', async () => {
-    connectNotificationServerMock.mockResolvedValue(makeFakeServer());
-    const deps = makeDeps();
-    const n = await startNotifications(deps);
-
-    n.setVisible('whatsapp', true);
-    n.setFocused('whatsapp', false); // unfocused → hidden=true baseline
-    expect(deps.pushHiddenCalls.at(-1)).toEqual(['whatsapp', true]);
-
-    n.setGlobalDnd(true);
-    expect(deps.pushHiddenCalls.at(-1)).toEqual(['whatsapp', false]);
-
-    n.setGlobalDnd(false);
-    expect(deps.pushHiddenCalls.at(-1)).toEqual(['whatsapp', true]);
-  });
-
   it('degrades without throwing when the notification server is unreachable', async () => {
     connectNotificationServerMock.mockRejectedValue(new Error('no bus'));
     const deps = makeDeps();

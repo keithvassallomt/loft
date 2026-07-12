@@ -4,6 +4,7 @@ import {
 } from './avatar';
 import { MessengerNotifier, type NotifyPayload } from './messenger';
 import { TelegramNotifier } from './telegram';
+import { installNotificationSoundGate } from './notificationSound';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface BridgeDeps {
@@ -37,6 +38,11 @@ export function startNotifyBridge(serviceId: string, deps: BridgeDeps): void {
   const { ipc, win, doc } = deps;
 
   const overrideHandle = installNotificationOverride(win, doc, (n) => { void handleNotice(n); });
+
+  // Gate the web app's OWN notification ding (played in-page, e.g. Messenger's
+  // <audio>) by the same DND + focus rule as the banner. Calls, ringtones, and
+  // user-initiated media are left alone (see notificationSound.ts).
+  const soundGate = installNotificationSoundGate(win);
 
   async function handleNotice(n: OverrideNotice): Promise<void> {
     // Messenger/Telegram: the DOM-scrape scanner (startConversationScanner
@@ -72,9 +78,13 @@ export function startNotifyBridge(serviceId: string, deps: BridgeDeps): void {
     const v = !!enabled;
     messenger?.setDnd(v);
     telegram?.setDnd(v);
+    soundGate.setDnd(v);
   });
 
-  ipc.on('service:visibility', (_e: unknown, hidden?: unknown) => overrideHandle.setHidden(!!hidden));
+  ipc.on('service:visibility', (_e: unknown, hidden?: unknown) => {
+    overrideHandle.setHidden(!!hidden);
+    soundGate.setHidden(!!hidden);
+  });
 
   // Messenger only: notification click routes here from main. Try SPA
   // navigation via the matching anchor first, else fall back to a full
