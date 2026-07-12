@@ -152,4 +152,19 @@ describe('startNotifications', () => {
 
     await expect(n.handle('slack', { title: 'Ann', body: 'hi' })).resolves.toBeUndefined();
   });
+
+  it('swallows+logs notify() failures in handle() without rejecting', async () => {
+    const server = makeFakeServer();
+    server.notify = vi.fn().mockRejectedValue(new Error('D-Bus hiccup'));
+    connectNotificationServerMock.mockResolvedValue(server);
+    const deps = makeDeps();
+    const n = await startNotifications(deps);
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const result = await n.handle('slack', { title: 'Ann', body: 'hi' });
+
+    expect(result).toBeUndefined();
+    expect(consoleSpy).toHaveBeenCalledWith('notify failed:', expect.any(Error));
+    consoleSpy.mockRestore();
+  });
 });

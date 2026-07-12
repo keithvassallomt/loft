@@ -108,14 +108,18 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
       };
       const imagePath = await resolveAvatar(p.icon, avatarDeps, avatarCacheDir());
 
-      const notifId = await server.notify({
-        appName: deps.displayName(id),
-        appIcon: deps.serviceIconPath(id),
-        summary: p.title,
-        body: p.body,
-        imagePath,
-      });
-      pending.set(notifId, { id, href: p.href });
+      try {
+        const notifId = await server.notify({
+          appName: deps.displayName(id),
+          appIcon: deps.serviceIconPath(id),
+          summary: p.title,
+          body: p.body,
+          imagePath,
+        });
+        pending.set(notifId, { id, href: p.href });
+      } catch (err) {
+        console.error('notify failed:', err);
+      }
     },
 
     setServiceDnd(id, v) {
