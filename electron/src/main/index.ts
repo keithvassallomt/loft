@@ -1,4 +1,4 @@
-import { app, ipcMain } from 'electron';
+import { app, ipcMain, session } from 'electron';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
@@ -6,6 +6,7 @@ import { getService, ServiceDef } from './registry';
 import { loadConfig, saveConfig, configPath, LoftConfig } from './config';
 import { createServiceWindow, ServiceWindow } from './serviceWindow';
 import { startTray, Tray, TrayServiceSeed } from './tray';
+import { startNotifications, Notifications } from './notifications';
 
 app.setName('Loft');
 app.setAppUserModelId('chat.loft.Loft');
@@ -15,6 +16,14 @@ app.setPath('userData', join(dataHome, 'loft'));
 
 let quitting = false;
 let tray: Tray | undefined;
+let notifications: Notifications | undefined;
+
+// dist/main → dist/assets/icons/<id>.png (copied by copy-assets; same deployed
+// dir the tray's dbusMenu/icon modules read from — those live one directory
+// deeper, under dist/main/tray, hence their extra '..').
+function serviceIconPath(id: string): string {
+  return join(__dirname, '..', 'assets', 'icons', `${id}.png`);
+}
 
 const config: LoftConfig = loadConfig(configPath());
 const windows = new Map<string, ServiceWindow>();
@@ -29,10 +38,19 @@ function openService(def: ServiceDef, minimized: boolean): void {
   // Keep the tray's visibility state in sync with the window (drives Show/Hide label).
   sw.window.on('show', () => tray?.setVisible(def.id, true));
   sw.window.on('hide', () => tray?.setVisible(def.id, false));
+  // Notification gate: focus/visibility feed shouldNotify()/pushHidden(); a
+  // fresh (re)load re-registers the service so the view gets current DND/hidden.
+  sw.window.on('focus', () => notifications?.setFocused(def.id, true));
+  sw.window.on('blur', () => notifications?.setFocused(def.id, false));
+  sw.window.on('show', () => notifications?.setVisible(def.id, true));
+  sw.window.on('hide', () => notifications?.setVisible(def.id, false));
+  sw.serviceView.webContents.on('did-finish-load', () => notifications?.registerService(def.id));
   windows.set(def.id, sw);
   tray?.addService({ id: def.id, displayName: def.displayName, dnd: config.services[def.id]?.dnd ?? false });
   tray?.setRunning(def.id, true);
   tray?.setVisible(def.id, sw.window.isVisible());
+  notifications?.setVisible(def.id, sw.window.isVisible());
+  notifications?.setFocused(def.id, sw.window.isFocused());
 }
 
 // Tray menu "Show/Hide" for a service: show if hidden, hide if visible.
@@ -105,6 +123,12 @@ if (!app.requestSingleInstanceLock()) {
     tray?.setBadge(sw.def.id, payload.count);
   });
 
+  ipcMain.on('service:notify', (e, p?: { title?: string; body?: string; icon?: string; href?: string }) => {
+    const sw = findBySenderId(e.sender.id);
+    if (!sw || !p || typeof p.title !== 'string' || typeof p.body !== 'string') return;
+    void notifications?.handle(sw.def.id, { title: p.title, body: p.body, icon: p.icon, href: p.href });
+  });
+
   app.whenReady().then(async () => {
     const args = parseArgs(process.argv);
     const def = args.service ? getService(args.service) : undefined;
@@ -130,8 +154,8 @@ if (!app.requestSingleInstanceLock()) {
         onToggleService: (id) => toggleService(id),
         onLaunchService: (id) => { const d = getService(id); if (d) openService(d, false); },
         onQuitService: (id) => quitService(id),
-        onToggleDnd: (id, enabled) => { setServiceDnd(id, enabled); tray?.setDnd(id, enabled); },
-        onToggleGlobalDnd: (enabled) => setGlobalDnd(enabled),
+        onToggleDnd: (id, enabled) => { setServiceDnd(id, enabled); tray?.setDnd(id, enabled); notifications?.setServiceDnd(id, enabled); },
+        onToggleGlobalDnd: (enabled) => { setGlobalDnd(enabled); notifications?.setGlobalDnd(enabled); },
         onShowHub: () => { for (const sw of windows.values()) { sw.show(); break; } }, // Stage 4: real hub
         onQuit: () => { quitting = true; app.quit(); },
       });
@@ -144,6 +168,36 @@ if (!app.requestSingleInstanceLock()) {
       }
     } catch (err) {
       console.error('Failed to start tray:', err);
+    }
+
+    // Desktop notification delivery + DND gating (Stage 3b).
+    try {
+      notifications = await startNotifications({
+        displayName: (id) => getService(id)?.displayName ?? id,
+        serviceIconPath,
+        sessionFetch: (id, url) => session.fromPartition(`persist:${id}`).fetch(url),
+        focusService: (id) => { const d = getService(id); if (d) openService(d, false); },
+        navigate: (id, url) => windows.get(id)?.navigate(url),
+        pushDnd: (id, v) => windows.get(id)?.pushDnd(v),
+        pushHidden: (id, hidden) => windows.get(id)?.pushHidden(hidden),
+      });
+      // Seed the gate from persisted config so DND holds across a restart,
+      // even for services not yet running (effectiveDnd is read back on
+      // registerService once/if they do launch).
+      for (const id of Object.keys(config.services)) {
+        notifications.setServiceDnd(id, config.services[id]?.dnd ?? false);
+      }
+      notifications.setGlobalDnd(config.globalDnd ?? false);
+      // Reflect windows already open before notifications came up (same
+      // bootstrap-ordering gap the tray loop above works around: the initial
+      // service window's focus/show fired during construction, before its
+      // listeners — and this variable — existed).
+      for (const [id, sw] of windows) {
+        notifications.setVisible(id, sw.window.isVisible());
+        notifications.setFocused(id, sw.window.isFocused());
+      }
+    } catch (err) {
+      console.error('Failed to start notifications:', err);
     }
   });
 
