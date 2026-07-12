@@ -52,12 +52,23 @@ export function createServiceWindow(
     title: def.displayName,
   });
 
+  // Sending to a view's webContents throws "Render frame was disposed before
+  // WebFrameMain could be accessed" when the frame is transiently gone — e.g. a
+  // Messenger call opening its popup, or any navigation — and these sends fire
+  // from window focus/blur/show/hide handlers that can land in that window. Guard
+  // them; dropped state is re-pushed on the view's did-finish-load (registerService).
+  const safeSend = (view: WebContentsView, channel: string, ...args: unknown[]): void => {
+    const wc = view.webContents;
+    if (wc.isDestroyed()) return;
+    try { wc.send(channel, ...args); } catch { /* render frame disposed transiently */ }
+  };
+
   // Titlebar view (our chrome) — its own partition-free session is fine.
   const titlebar = new WebContentsView({
     webPreferences: { preload: join(__dirname, '../preload/titlebar.js') },
   });
   titlebar.webContents.on('did-finish-load', () =>
-    titlebar.webContents.send('titlebar:set-service', def.displayName),
+    safeSend(titlebar, 'titlebar:set-service', def.displayName),
   );
   titlebar.webContents.loadFile(join(__dirname, '../renderer/titlebar/index.html'));
 
@@ -152,11 +163,11 @@ export function createServiceWindow(
     setBadge: (count: number) => {
       const title = formatWindowTitle(def.displayName, count);
       window.setTitle(title); // OS window title (alt-tab / taskbar / overview)
-      titlebar.webContents.send('titlebar:set-service', title); // our visible titlebar strip
+      safeSend(titlebar, 'titlebar:set-service', title); // our visible titlebar strip
     },
-    pushDnd: (enabled: boolean) => serviceView.webContents.send('service:dnd', enabled),
-    pushHidden: (hidden: boolean) => serviceView.webContents.send('service:visibility', hidden),
-    navigate: (url: string) => serviceView.webContents.send('service:navigate', url),
+    pushDnd: (enabled: boolean) => safeSend(serviceView, 'service:dnd', enabled),
+    pushHidden: (hidden: boolean) => safeSend(serviceView, 'service:visibility', hidden),
+    navigate: (url: string) => safeSend(serviceView, 'service:navigate', url),
   };
 
   if (!opts.minimized) api.show();
