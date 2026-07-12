@@ -96,11 +96,31 @@ export function createServiceWindow(
     });
   }
 
-  // Calls may open in a window.open popup (Messenger). Allow + inherit UA/session.
+  // Calls may open in a window.open popup (Messenger). A child window inherits the
+  // OPENER's webPreferences — so without overriding, the popup would inherit the
+  // service view's main-world/un-sandboxed prefs (contextIsolation:false,
+  // sandbox:false) + our preload + --loft-service, and its renderer SIGSEGVs
+  // (exitCode 139) doing WebRTC. Force a plain, sandboxed, isolated child (matching
+  // the POC's default popup) with no Loft preload/arg — it needs no integration.
   serviceView.webContents.setWindowOpenHandler(() => ({
     action: 'allow',
-    overrideBrowserWindowOptions: { webPreferences: { partition } },
+    overrideBrowserWindowOptions: {
+      webPreferences: {
+        partition,
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        additionalArguments: [],
+      },
+    },
   }));
+
+  // The call popup must present as real Chrome per-webContents (not just via the
+  // session default) — mirrors the POC (dev_local/electron_test/main.js), which
+  // set the child UA explicitly on did-create-window.
+  serviceView.webContents.on('did-create-window', (child) => {
+    child.webContents.setUserAgent(ses.getUserAgent());
+  });
 
   window.contentView.addChildView(titlebar);
   window.contentView.addChildView(serviceView);
