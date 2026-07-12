@@ -21,6 +21,12 @@ export interface ServiceWindow {
   persist(): void;
   /** Reflect the unread count in the window title (until the tray lands in Stage 3). */
   setBadge(count: number): void;
+  /** Push the current Do Not Disturb state to the page (gates Notification-API relays). */
+  pushDnd(enabled: boolean): void;
+  /** Tell the page whether the window is hidden (drives document.hidden/visibilityState). */
+  pushHidden(hidden: boolean): void;
+  /** Ask the page to navigate to a conversation (Messenger notification click). */
+  navigate(url: string): void;
 }
 
 export function createServiceWindow(
@@ -62,6 +68,11 @@ export function createServiceWindow(
       backgroundThrottling: false,
       preload: join(__dirname, '../preload/service.js'),
       additionalArguments: [`--loft-service=${def.id}`],
+      // Un-sandboxed, isolation-off so the preload runs in the page's real main
+      // world and can wrap window.Notification directly (Stage 3b). The
+      // titlebar view is unaffected — it keeps isolation + contextBridge.
+      sandbox: false,
+      contextIsolation: false,
     },
   });
   serviceView.webContents.setUserAgent(ses.getUserAgent());
@@ -143,6 +154,9 @@ export function createServiceWindow(
       window.setTitle(title); // OS window title (alt-tab / taskbar / overview)
       titlebar.webContents.send('titlebar:set-service', title); // our visible titlebar strip
     },
+    pushDnd: (enabled: boolean) => serviceView.webContents.send('service:dnd', enabled),
+    pushHidden: (hidden: boolean) => serviceView.webContents.send('service:visibility', hidden),
+    navigate: (url: string) => serviceView.webContents.send('service:navigate', url),
   };
 
   if (!opts.minimized) api.show();
