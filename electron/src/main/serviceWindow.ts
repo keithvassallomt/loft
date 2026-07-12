@@ -79,10 +79,11 @@ export function createServiceWindow(
       backgroundThrottling: false,
       preload: join(__dirname, '../preload/service.js'),
       additionalArguments: [`--loft-service=${def.id}`],
-      // Un-sandboxed, isolation-off so the preload runs in the page's real main
-      // world and can wrap window.Notification directly (Stage 3b). The
-      // titlebar view is unaffected — it keeps isolation + contextBridge.
-      sandbox: false,
+      // Sandboxed (a same-origin window.open call popup shares this opener's
+      // renderer process; a non-sandboxed WebRTC renderer SIGSEGVs on Intel Xe),
+      // but contextIsolation:false so the (sandboxed) preload still shares the
+      // page's main world and can wrap window.Notification directly (Stage 3b).
+      sandbox: true,
       contextIsolation: false,
     },
   });
