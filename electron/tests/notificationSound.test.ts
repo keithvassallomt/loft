@@ -30,7 +30,7 @@ describe('shouldAllowSound', () => {
 
 describe('installNotificationSoundGate', () => {
   function fakeWin() {
-    const listeners: Record<string, Array<() => void>> = {};
+    const listeners: Record<string, Array<(e?: unknown) => void>> = {};
     class HTMLMediaElement {
       muted = false; loop = false; srcObject: unknown = null;
       static _origCalls = 0;
@@ -38,8 +38,8 @@ describe('installNotificationSoundGate', () => {
     }
     const win: any = {
       HTMLMediaElement,
-      addEventListener: (t: string, cb: () => void) => { (listeners[t] ||= []).push(cb); },
-      _fire: (t: string) => { for (const cb of listeners[t] || []) cb(); },
+      addEventListener: (t: string, cb: (e?: unknown) => void) => { (listeners[t] ||= []).push(cb); },
+      _fire: (t: string, e?: unknown) => { for (const cb of listeners[t] || []) cb(e); },
     };
     return { win, HTMLMediaElement };
   }
@@ -64,7 +64,7 @@ describe('installNotificationSoundGate', () => {
     expect(HTMLMediaElement._origCalls).toBe(before + 1);
   });
 
-  it('allows a play right after a user gesture even under DND', async () => {
+  it('allows a play right after a click gesture even under DND', async () => {
     let t = 10_000;
     const { win, HTMLMediaElement } = fakeWin();
     const gate = installNotificationSoundGate(win, () => t);
@@ -76,5 +76,27 @@ describe('installNotificationSoundGate', () => {
     t = 10_500; // 500ms later → within window
     await el.play();
     expect(HTMLMediaElement._origCalls).toBe(before + 1); // user-initiated → played
+  });
+
+  it('allows Enter/Space activating a control (keyboard a11y) but NOT typing', async () => {
+    let t = 10_000;
+    const { win, HTMLMediaElement } = fakeWin();
+    const gate = installNotificationSoundGate(win, () => t);
+    gate.setDnd(false); gate.setHidden(false); // focused+visible → dings gated
+    const el = new HTMLMediaElement();
+
+    // Typing a reply in the compose box must NOT create a media gesture.
+    const beforeType = HTMLMediaElement._origCalls;
+    win._fire('keydown', { key: 'a', target: { tagName: 'DIV', isContentEditable: true } });
+    win._fire('keydown', { key: 'Enter', target: { tagName: 'DIV', isContentEditable: true } }); // Enter-to-send
+    t = 10_050;
+    await el.play(); // an incoming ding right after a keystroke
+    expect(HTMLMediaElement._origCalls).toBe(beforeType); // still gated — no ride-along ding
+
+    // Enter/Space activating a real control (e.g. a play button) IS a gesture.
+    win._fire('keydown', { key: 'Enter', target: { tagName: 'BUTTON' } });
+    t = 10_100;
+    await el.play();
+    expect(HTMLMediaElement._origCalls).toBe(beforeType + 1); // played
   });
 });

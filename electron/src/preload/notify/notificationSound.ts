@@ -68,9 +68,21 @@ export function installNotificationSoundGate(
   let lastGesture = -Infinity;
 
   const markGesture = (): void => { lastGesture = now(); };
-  for (const ev of ['pointerdown', 'mousedown', 'keydown', 'touchstart']) {
+  for (const ev of ['pointerdown', 'mousedown', 'touchstart']) {
     try { win.addEventListener(ev, markGesture, true); } catch { /* ignore */ }
   }
+  // Keyboard: only Enter/Space ACTIVATING a control (e.g. a voice-message play
+  // button — keyboard a11y) counts as a media gesture. Typing in a compose box
+  // (or Enter-to-send) must NOT, or an incoming ding could ride a keystroke and
+  // play while you're replying in the focused, active chat.
+  const isEditable = (t: any): boolean =>
+    !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable === true);
+  try {
+    win.addEventListener('keydown', (e: any) => {
+      const k = e && e.key;
+      if ((k === 'Enter' || k === ' ' || k === 'Spacebar') && !isEditable(e && e.target)) markGesture();
+    }, true);
+  } catch { /* ignore */ }
 
   const MediaEl = win.HTMLMediaElement;
   if (MediaEl && MediaEl.prototype && typeof MediaEl.prototype.play === 'function') {
