@@ -69,21 +69,31 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
     for (const id of knownIds) deps.pushDnd(id, gate.effectiveDnd(id));
   };
 
+  const recomputeHidden = (id: string): void => {
+    const isFocused = focused.get(id) ?? false;
+    const isVisible = visible.get(id) ?? false;
+    // During DND, tell the page it is NOT hidden so the web app treats the user as
+    // present and suppresses its OWN notification behaviour — banner AND sound. Main
+    // already drops delivery; this closes the in-page ding that delivery-gating alone
+    // can't reach (the page plays its notification sound whenever it believes it's
+    // hidden/unfocused, independent of the desktop notification we suppress).
+    const hidden = gate.effectiveDnd(id) ? false : !(isFocused && isVisible);
+    deps.pushHidden(id, hidden);
+  };
+  const recomputeHiddenAll = (): void => {
+    for (const id of knownIds) recomputeHidden(id);
+  };
+
   try {
     const watcher = watchSystemDnd((dnd) => {
       gate.setSystemDnd(dnd);
       pushDndToAll();
+      recomputeHiddenAll();
     });
     gate.setSystemDnd(watcher.current());
   } catch (err) {
     console.error('Failed to watch system Do Not Disturb; assuming disabled:', err);
   }
-
-  const recomputeHidden = (id: string): void => {
-    const isFocused = focused.get(id) ?? false;
-    const isVisible = visible.get(id) ?? false;
-    deps.pushHidden(id, !(isFocused && isVisible));
-  };
 
   return {
     async handle(id, p) {
@@ -126,11 +136,13 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
       knownIds.add(id);
       gate.setServiceDnd(id, v);
       deps.pushDnd(id, gate.effectiveDnd(id));
+      recomputeHidden(id);
     },
 
     setGlobalDnd(v) {
       gate.setGlobalDnd(v);
       pushDndToAll();
+      recomputeHiddenAll();
     },
 
     setFocused(id, v) {
