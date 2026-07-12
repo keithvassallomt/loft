@@ -39,6 +39,17 @@ export function startNotifyBridge(serviceId: string, deps: BridgeDeps): void {
   const overrideHandle = installNotificationOverride(win, doc, (n) => { void handleNotice(n); });
 
   async function handleNotice(n: OverrideNotice): Promise<void> {
+    // Messenger/Telegram: the DOM-scrape scanner (startConversationScanner
+    // below) is the sole authoritative `service:notify` source for these two
+    // services, matching the old extension (which suppressed their native
+    // notifications via chrome.contentSettings — a mechanism Electron lacks).
+    // The override is still installed for both (see installNotificationOverride
+    // call above) purely for its suppression side effect (SilentNotification
+    // keeps the page from showing its own native notification) and so
+    // DND/visibility overrides keep working; it must not also relay to IPC or
+    // every Messenger/Telegram message would notify twice.
+    if (serviceId === 'messenger' || serviceId === 'telegram') return;
+
     let icon: string;
     if (serviceId === 'slack') {
       icon = n.icon || findSlackAvatar(doc, slackCache, n.title, n.tag);
@@ -70,7 +81,15 @@ export function startNotifyBridge(serviceId: string, deps: BridgeDeps): void {
   // navigation (port of content.js's navigate_to_conversation handler).
   ipc.on('service:navigate', (_e: unknown, url?: unknown) => {
     if (serviceId !== 'messenger' || typeof url !== 'string') return;
-    const anchor = doc.querySelector(`a[href="${url}"]`);
+    let anchor: Element | null = null;
+    try {
+      anchor = doc.querySelector(`a[href="${url}"]`);
+    } catch {
+      // Malformed url (e.g. contains a stray `"`) breaks the attribute
+      // selector; fall back to full navigation below instead of throwing
+      // inside the IPC handler.
+      anchor = null;
+    }
     if (anchor) (anchor as HTMLElement).click();
     else win.location.href = `https://www.facebook.com${url}`;
   });
