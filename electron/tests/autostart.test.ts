@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { autostartContent, setAutostart, isAutostartEnabled } from '../src/main/autostart';
@@ -30,5 +30,14 @@ describe('autostart', () => {
     setAutostart(false, { env, execPath: '/usr/bin/loft', iconSourceDir: src });
     expect(existsSync(path)).toBe(false);
     expect(isAutostartEnabled(env)).toBe(false);
+  });
+  it('deploys loft.png into the icons dir when present in the source', () => {
+    const cfg = tmp();
+    const src = tmp();
+    const dataH = tmp();
+    const env = { XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: dataH } as NodeJS.ProcessEnv;
+    writeFileSync(join(src, 'loft.png'), 'PNG');
+    setAutostart(true, { env, execPath: '/usr/bin/loft', iconSourceDir: src });
+    expect(existsSync(join(dataH, 'loft', 'icons', 'loft.png'))).toBe(true);
   });
 });

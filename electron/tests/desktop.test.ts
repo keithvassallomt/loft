@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   isFlatpak, desktopExec, serviceLauncherContent, hubDesktopContent,
-  writeServiceLauncher, removeServiceLauncher, deployServiceIcon,
+  writeServiceLauncher, removeServiceLauncher, deployServiceIcon, ensureHubDesktopEntry,
 } from '../src/main/desktop';
 import { getService } from '../src/main/registry';
 
@@ -61,5 +61,43 @@ describe('desktop writers', () => {
 
     removeServiceLauncher(wa, env);
     expect(existsSync(launcher)).toBe(false);
+  });
+});
+
+describe('ensureHubDesktopEntry', () => {
+  it('skips under Flatpak', () => {
+    const data = tmp();
+    const env = { XDG_DATA_HOME: data, FLATPAK_ID: 'chat.loft.Loft' } as NodeJS.ProcessEnv;
+    ensureHubDesktopEntry({ env, execPath: '/usr/bin/loft', iconSourceDir: tmp() });
+    expect(existsSync(join(data, 'applications', 'chat.loft.Loft.desktop'))).toBe(false);
+  });
+  it('skips a dev electron binary path (node_modules or /electron), no APPIMAGE', () => {
+    const data = tmp();
+    const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
+    ensureHubDesktopEntry({ env, execPath: '/home/u/proj/node_modules/electron/dist/electron', iconSourceDir: tmp() });
+    ensureHubDesktopEntry({ env, execPath: '/opt/foo/electron', iconSourceDir: tmp() });
+    expect(existsSync(join(data, 'applications', 'chat.loft.Loft.desktop'))).toBe(false);
+  });
+  it('is idempotent — leaves an existing entry untouched', () => {
+    const data = tmp();
+    const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
+    const p = join(data, 'applications', 'chat.loft.Loft.desktop');
+    mkdirSync(join(data, 'applications'), { recursive: true });
+    writeFileSync(p, 'SENTINEL');
+    ensureHubDesktopEntry({ env, execPath: '/usr/bin/loft', iconSourceDir: tmp() });
+    expect(readFileSync(p, 'utf8')).toBe('SENTINEL');
+  });
+  it('writes the hub entry for a real (non-dev) exec, deploying the icon', () => {
+    const data = tmp();
+    const src = tmp();
+    writeFileSync(join(src, 'loft.png'), 'PNG');
+    const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
+    ensureHubDesktopEntry({ env, execPath: '/usr/bin/loft', iconSourceDir: src });
+    const p = join(data, 'applications', 'chat.loft.Loft.desktop');
+    expect(existsSync(p)).toBe(true);
+    const c = readFileSync(p, 'utf8');
+    expect(c).toContain('Name=Loft');
+    expect(c).toMatch(/Exec=\/usr\/bin\/loft\n/);
+    expect(existsSync(join(data, 'loft', 'icons', 'loft.png'))).toBe(true);
   });
 });
