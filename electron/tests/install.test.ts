@@ -38,6 +38,16 @@ describe('install', () => {
     expect(existsSync(part)).toBe(false);
   });
 
+  it('addService preserves existing service-config fields', () => {
+    const data = tmp();
+    const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
+    const cfg: LoftConfig = { services: { whatsapp: { dnd: true, badgesEnabled: false } } };
+    addService(wa, cfg, { env, execPath: '/usr/bin/loft', iconSourceDir: iconSrc(), customUrl: 'https://x' });
+    expect(cfg.services.whatsapp.dnd).toBe(true);
+    expect(cfg.services.whatsapp.badgesEnabled).toBe(false);
+    expect(cfg.services.whatsapp.customUrl).toBe('https://x');
+  });
+
   it('removeService keeps the partition when deleteData is false', () => {
     const data = tmp();
     const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
