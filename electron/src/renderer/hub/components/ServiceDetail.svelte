@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { HubState } from '../../../shared/hubTypes';
+  import Modal from './Modal.svelte';
   // NOTE: destructured local is renamed from `state` to `hubState` (the public
   // prop name is still `state`, matching App.svelte's `<ServiceDetail state=...>`).
   // A local binding literally named `state` collides with the `$state` rune below
@@ -15,11 +16,12 @@
   let urlDraft = $state('');
   $effect(() => { urlDraft = svc?.customUrl ?? ''; });
 
-  function remove() {
-    const del = window.confirm(`Remove ${svc.displayName}?\n\nClick OK to also delete its login data, Cancel to keep it.`);
-    // Two-step: confirm removal, then whether to wipe data.
-    if (!window.confirm(`Remove ${svc.displayName}?`)) return;
-    window.loftHub.removeService(id, del);
+  let showRemove = $state(false);
+  let deleteData = $state(false);
+
+  function confirmRemove() {
+    showRemove = false;
+    window.loftHub.removeService(id, deleteData);
     onBack();
   }
 </script>
@@ -47,7 +49,14 @@
     <span>Do Not Disturb</span>
   </label>
 
-  <button class="danger" onclick={remove}>Remove {svc.displayName}…</button>
+  <button class="danger" onclick={() => { deleteData = false; showRemove = true; }}>Remove {svc.displayName}…</button>
+
+  {#if showRemove}
+    <Modal title={`Remove ${svc.displayName}?`} confirmLabel="Remove" destructive onConfirm={confirmRemove} onCancel={() => (showRemove = false)}>
+      <p class="remove-msg">This removes {svc.displayName} from your desktop.</p>
+      <label class="checkbox"><input type="checkbox" bind:checked={deleteData} /> Also delete login data</label>
+    </Modal>
+  {/if}
 {/if}
 
 <style>
@@ -57,4 +66,6 @@
   .toggle { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
   .toggle span { flex: 1; }
   .danger { margin-top: 24px; border: 0; border-radius: 999px; padding: 8px 18px; background: #c01c28; color: #fff; cursor: pointer; }
+  .remove-msg { margin: 0 0 12px; }
+  .checkbox { display: flex; align-items: center; gap: 8px; }
 </style>

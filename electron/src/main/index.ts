@@ -276,7 +276,11 @@ if (!app.requestSingleInstanceLock()) {
       // startTrayBackend never needs to dereference an absent helper.
       const backend = helper ? resolveTrayBackend(config.trayBackend, process.env) : 'sni';
       tray = await startTrayBackend(deps, { backend, helper: helper! });
-      // Reflect windows already open before the tray came up.
+      // Reflect any windows already open before the tray came up. Since the
+      // CLI/open-on-startup launch now runs *after* this block, `windows` is
+      // normally empty here and this loop is a defensive no-op — kept for
+      // symmetry with the notifications loop below and to cover any future
+      // path that opens a window before tray init.
       for (const [id, sw] of windows) {
         const d = getService(id);
         if (d) tray.addService({ id, displayName: d.displayName, dnd: config.services[id]?.dnd ?? false });
@@ -369,6 +373,7 @@ if (!app.requestSingleInstanceLock()) {
           // Re-push the current badge so enabling shows it immediately; disabling clears the indicator.
           sw?.setBadge(patch.badgesEnabled ? count : 0);
           tray?.setBadge(id, patch.badgesEnabled ? count : 0);
+          bgStatus?.refresh();
         }
         if (patch.customUrl !== undefined) {
           const d = getService(id); const sw = windows.get(id);
