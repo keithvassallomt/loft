@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
   dataHome, configHome, applicationsDir, loftDataDir, iconsDir, partitionDir, autostartDir,
 } from '../src/main/paths';
@@ -22,5 +24,11 @@ describe('paths', () => {
     expect(configHome(noXdg)).toBe('/home/u/.config');
     expect(applicationsDir(noXdg)).toBe('/home/u/.local/share/applications');
     expect(autostartDir(noXdg)).toBe('/home/u/.config/autostart');
+  });
+
+  it('falls back to os.homedir() when HOME is also unset', () => {
+    const env = {} as NodeJS.ProcessEnv;
+    expect(dataHome(env)).toBe(join(homedir(), '.local', 'share'));
+    expect(configHome(env)).toBe(join(homedir(), '.config'));
   });
 });
