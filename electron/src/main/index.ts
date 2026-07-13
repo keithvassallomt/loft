@@ -179,6 +179,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', (_e, argv) => {
     const def = resolveServiceFromArgs(argv);
     if (def) openService(def, false);
+    else hub?.open();
   });
 
   ipcMain.on('titlebar:zoom-in', (e) => findBySenderId(e.sender.id)?.setZoom(+0.1));
@@ -304,10 +305,10 @@ if (!app.requestSingleInstanceLock()) {
         notifications.setServiceDnd(id, config.services[id]?.dnd ?? false);
       }
       notifications.setGlobalDnd(config.globalDnd ?? false);
-      // Reflect windows already open before notifications came up (same
-      // bootstrap-ordering gap the tray loop above works around: the initial
-      // service window's focus/show fired during construction, before its
-      // listeners — and this variable — existed).
+      // Reflect any windows already open before notifications came up. Since the
+      // CLI/open-on-startup launch now runs *after* this block, this is normally
+      // a defensive no-op — kept for symmetry with the tray loop and to cover any
+      // future path that opens a window before notifications init.
       for (const [id, sw] of windows) {
         notifications.setVisible(id, sw.window.isVisible());
         notifications.setFocused(id, sw.window.isFocused());
