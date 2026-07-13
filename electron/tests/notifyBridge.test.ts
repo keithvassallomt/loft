@@ -1,5 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { startNotifyBridge } from '../src/preload/notify/bridge';
+import { MessengerNotifier } from '../src/preload/notify/messenger';
+import { TelegramNotifier } from '../src/preload/notify/telegram';
 
 (globalThis as any).Event = (globalThis as any).Event || class { constructor(public type: string) {} };
 
@@ -75,5 +77,50 @@ describe('startNotifyBridge routing', () => {
     startNotifyBridge('slack', { ipc, win, doc });
     handlers['service:navigate']?.({}, '/x');
     expect(win.location.href).toBe(before);
+  });
+
+  it('routes service:dnd to messenger/telegram/soundGate', () => {
+    // Spy on the real prototypes before creating instances
+    const messengerSetDndSpy = vi.spyOn(MessengerNotifier.prototype, 'setDnd');
+    const telegramSetDndSpy = vi.spyOn(TelegramNotifier.prototype, 'setDnd');
+
+    // Test messenger service: messenger exists, telegram does not
+    const { win: win1, doc: doc1, ipc: ipc1, handlers: handlers1 } = fakeEnv();
+    startNotifyBridge('messenger', { ipc: ipc1, win: win1, doc: doc1 });
+    handlers1['service:dnd']({}, true);
+    expect(messengerSetDndSpy).toHaveBeenCalledWith(true);
+    expect(telegramSetDndSpy).not.toHaveBeenCalled();
+
+    messengerSetDndSpy.mockClear();
+    telegramSetDndSpy.mockClear();
+
+    // Test telegram service: telegram exists, messenger does not
+    const { win: win2, doc: doc2, ipc: ipc2, handlers: handlers2 } = fakeEnv();
+    startNotifyBridge('telegram', { ipc: ipc2, win: win2, doc: doc2 });
+    handlers2['service:dnd']({}, false);
+    expect(telegramSetDndSpy).toHaveBeenCalledWith(false);
+    expect(messengerSetDndSpy).not.toHaveBeenCalled();
+
+    messengerSetDndSpy.mockRestore();
+    telegramSetDndSpy.mockRestore();
+  });
+
+  it('routes service:visibility to override and soundGate', () => {
+    const { win, doc, ipc, handlers } = fakeEnv();
+    startNotifyBridge('slack', { ipc, win, doc });
+
+    // Initially visible
+    expect(doc.hidden).toBe(false);
+    expect(doc.visibilityState).toBe('visible');
+
+    // Hide via service:visibility handler
+    handlers['service:visibility']({}, true);
+    expect(doc.hidden).toBe(true);
+    expect(doc.visibilityState).toBe('hidden');
+
+    // Show again
+    handlers['service:visibility']({}, false);
+    expect(doc.hidden).toBe(false);
+    expect(doc.visibilityState).toBe('visible');
   });
 });
