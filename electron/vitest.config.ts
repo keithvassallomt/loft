@@ -10,12 +10,12 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 // it, `mount()` throws `lifecycle_function_unavailable` under Vitest. This is the standard
 // fix documented by @testing-library/svelte for Vitest + Svelte 5.
 //
-// `globals: true` lets @testing-library/svelte's own auto-cleanup (it feature-detects a
-// global `beforeEach`/`afterEach`) register itself when serviceRow.test.ts imports render();
-// without it, DOM from one `it()` leaks into the next. Scoped per test file by Vitest's
-// module isolation, so it has no effect on the other (non-Svelte) test files.
+// `globals: true` injects describe/it/expect/beforeEach as true globals suite-wide —
+// required because @testing-library/svelte gates its auto-cleanup on a global `beforeEach`;
+// the other test files already import these explicitly, so the injected globals are just
+// unused shadow bindings there.
 export default defineConfig({
-  plugins: [svelte({ hot: false })],
+  plugins: [svelte()],
   resolve: {
     conditions: ['browser'],
   },
