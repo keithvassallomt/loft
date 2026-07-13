@@ -286,7 +286,9 @@ if (!app.requestSingleInstanceLock()) {
       bgStatus = startBackgroundStatus({
         collect: () => [...windows.values()].map((sw) => ({
           displayName: sw.def.displayName,
-          badge: currentBadge.get(sw.def.id) ?? 0,
+          // A badges-disabled service doesn't contribute its unread count to the
+          // aggregate status line (still counts as a running service).
+          badge: config.services[sw.def.id]?.badgesEnabled === false ? 0 : (currentBadge.get(sw.def.id) ?? 0),
         })),
       });
       bgStatus.refresh();
