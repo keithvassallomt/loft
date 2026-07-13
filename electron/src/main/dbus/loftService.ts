@@ -2,7 +2,7 @@ import * as dbus from 'dbus-next';
 import { SERVICES } from '../registry';
 import { dbusName } from './names';
 
-const { Interface } = dbus.interface;
+const { Interface, ACCESS_READ } = dbus.interface;
 const BUS = 'chat.loft.Loft';
 const IFACE = 'chat.loft.Service';
 
