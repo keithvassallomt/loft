@@ -39,6 +39,10 @@ if (gnome) {
     console.error('Failed to create GNOME Shell helper client:', err);
   }
 }
+// Stage 4.5 (KDE): the KWin-scripting equivalent of `helper` goes here — when
+// !gnome && isKde(), build a KwinClient (./kde/kwin.ts) and route focusWindow/
+// hideWindow through it. Until then, non-GNOME show/hide uses Electron's native
+// window methods (hide/unmap works; raising may not grab focus under KDE).
 
 // dist/main → dist/assets/icons/<id>.png (copied by copy-assets; same deployed
 // dir the tray's dbusMenu/icon modules read from — those live one directory

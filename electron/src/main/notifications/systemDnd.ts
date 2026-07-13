@@ -18,6 +18,12 @@ export interface SystemDndDeps {
 
 export interface SystemDndWatcher { current(): boolean; stop(): void }
 
+// Stage 4.5 (KDE): system-DND detection is GNOME-only today (gsettings show-banners).
+// KDE/Plasma has its own notification-inhibition (Do Not Disturb) mechanism — add a
+// `kdeDeps()` alongside gnomeDeps() and select it on Plasma so OS-level DND gates Loft
+// notifications there too. Per-service DND + the focus-gate already work on KDE; only
+// this system-wide auto-detect is missing. Confirm the exact Plasma D-Bus interface at
+// implementation (spec §13 open item), when there is a KDE test environment.
 function gnomeDeps(): SystemDndDeps {
   return {
     getInitial() {
