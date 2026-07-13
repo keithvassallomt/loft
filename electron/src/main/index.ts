@@ -1,8 +1,9 @@
-import { app, dialog, ipcMain, session } from 'electron';
+import { app, dialog, ipcMain, protocol, session } from 'electron';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
-import { getService, ServiceDef } from './registry';
+import { getService, SERVICES, ServiceDef, effectiveUrl } from './registry';
 import { loadConfig, saveConfig, configPath, LoftConfig } from './config';
 import { createServiceWindow, ServiceWindow } from './serviceWindow';
 import { Tray, TrayDeps, TrayServiceSeed } from './tray';
@@ -13,6 +14,13 @@ import { startLoftDbusService, type LoftServiceDeps } from './dbus/loftService';
 import { deployGnomeExtension } from './gnome/deploy';
 import { isGnome, resolveTrayBackend } from './trayBackend';
 import { startBackgroundStatus } from './gnome/backgroundStatus';
+import { createHub, type HubDeps } from './hubWindow';
+import { buildHubState } from './hubState';
+import { addService, removeService } from './install';
+import { setAutostart, isAutostartEnabled } from './autostart';
+import { ensureHubDesktopEntry } from './desktop';
+import { iconsDir } from './paths';
+import type { ServicePatch, GlobalPatch } from '../shared/hubTypes';
 
 app.setName('Loft');
 app.setAppUserModelId('chat.loft.Loft');
@@ -20,10 +28,20 @@ app.setAppUserModelId('chat.loft.Loft');
 const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
 app.setPath('userData', join(dataHome, 'loft'));
 
+// Custom scheme the hub renderer uses for service/app icons (keeps img-src 'self'
+// clean and avoids file:// path juggling). Registered as privileged so it can load
+// from the renderer under CSP.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'loft', privileges: { standard: true, secure: true, supportFetchAPI: true } },
+]);
+
 let quitting = false;
 let tray: Tray | undefined;
 let notifications: Notifications | undefined;
 let bgStatus: { refresh(): void } | undefined;
+let hub: ReturnType<typeof createHub> | undefined;
+// Bundled PNGs live in dist/assets/icons (copy-assets); one dir up from dist/main.
+const iconSourceDir = join(__dirname, '..', 'assets', 'icons');
 
 // GNOME-only: bypasses focus-stealing prevention (FocusWindow/HideWindow) and
 // hides minimized Loft windows from alt-tab/overview/dock (SetLoftWindows).
@@ -71,9 +89,12 @@ function openService(def: ServiceDef, minimized: boolean): void {
   // parallel with the native show — never await (a missing/erroring helper
   // must never block or crash a window action).
   if (existing) { existing.show(); helper?.focusWindow(def.displayName); return; }
-  // Launching marks the service "configured" so it persists in the tray's
-  // available section after Quit (until the Stage-4 hub manages this explicitly).
-  if (!config.services[def.id]) config.services[def.id] = {};
+  // First launch of a service implicitly Adds it (writes its launcher + icon) so a
+  // directly-launched service shows up as Installed in the hub.
+  if (!config.services[def.id]) {
+    addService(def, config, { execPath: process.execPath, iconSourceDir });
+    saveConfig(configPath(), config);
+  }
   const sw = createServiceWindow(def, config, { minimized, onQuit: () => quitting });
   // Keep the tray's visibility state in sync with the window (drives Show/Hide label).
   sw.window.on('show', () => tray?.setVisible(def.id, true));
@@ -94,6 +115,7 @@ function openService(def: ServiceDef, minimized: boolean): void {
   notifications?.setVisible(def.id, sw.window.isVisible());
   notifications?.setFocused(def.id, sw.window.isFocused());
   bgStatus?.refresh();
+  hub?.notifyChanged();
 }
 
 // Tray menu "Show/Hide" for a service: show if hidden, hide if visible.
@@ -108,6 +130,7 @@ function toggleService(id: string): void {
 function setServiceDnd(id: string, enabled: boolean): void {
   config.services[id] = { ...config.services[id], dnd: enabled };
   saveConfig(configPath(), config);
+  hub?.notifyChanged();
 }
 
 // Tray per-service "Quit": stop the service (destroy its window). It stays
@@ -121,6 +144,7 @@ function quitService(id: string): void {
   tray?.setVisible(id, false);
   sw.window.destroy();
   bgStatus?.refresh();
+  hub?.notifyChanged();
 }
 
 // Global DND: persist + reflect in the tray (notification gating is Stage 3b).
@@ -128,6 +152,7 @@ function setGlobalDnd(enabled: boolean): void {
   config.globalDnd = enabled;
   saveConfig(configPath(), config);
   tray?.setGlobalDnd(enabled);
+  hub?.notifyChanged();
 }
 
 function resolveServiceFromArgs(argv: string[]): ServiceDef | undefined {
@@ -166,6 +191,7 @@ if (!app.requestSingleInstanceLock()) {
     if (!sw) return;
     currentBadge.set(sw.def.id, payload.count);
     bgStatus?.refresh();
+    hub?.notifyChanged();
     // SetBadgesEnabled(false) keeps the true count in currentBadge (GetStatus
     // still reports it) but suppresses the visible tray/title indicator.
     if (config.services[sw.def.id]?.badgesEnabled === false) return;
@@ -180,6 +206,19 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    // loft://icon/<id> -> the deployed icon (added services) or the bundled asset
+    // (available/not-yet-added services + the 'loft' app icon). Read from disk and
+    // return the bytes: the main-process global fetch() does NOT support file://.
+    protocol.handle('loft', async (req) => {
+      const name = new URL(req.url).pathname.replace(/^\/+/, '') || 'loft';
+      for (const file of [join(iconsDir(), `${name}.png`), join(iconSourceDir, `${name}.png`)]) {
+        try {
+          return new Response(await readFile(file), { headers: { 'content-type': 'image/png' } });
+        } catch { /* try the next candidate */ }
+      }
+      return new Response(null, { status: 404 });
+    });
+
     // GNOME Shell only loads new extension JS at session start, so (re)deploying
     // the bundled helper (missing, or an EGO build not newer than ours) requires
     // telling the user to log out — port of daemon/mod.rs notify_gnome_helper_relogin.
@@ -207,12 +246,6 @@ if (!app.requestSingleInstanceLock()) {
       }
     }
 
-    const args = parseArgs(process.argv);
-    const def = args.service ? getService(args.service) : undefined;
-    if (def) openService(def, args.minimized);
-    // With no --service, Stage 1 opens WhatsApp so there is always a window to see.
-    else openService(getService('whatsapp')!, args.minimized);
-
     // One combined "Loft" tray icon for all services — SNI (Stage 3a) or, on
     // GNOME with a live helper, a native panel button (Stage 3c).
     try {
@@ -234,7 +267,7 @@ if (!app.requestSingleInstanceLock()) {
         onQuitService: (id) => quitService(id),
         onToggleDnd: (id, enabled) => { setServiceDnd(id, enabled); tray?.setDnd(id, enabled); notifications?.setServiceDnd(id, enabled); },
         onToggleGlobalDnd: (enabled) => { setGlobalDnd(enabled); notifications?.setGlobalDnd(enabled); },
-        onShowHub: () => { for (const sw of windows.values()) { sw.show(); break; } }, // Stage 4: real hub
+        onShowHub: () => hub?.open(),
         onQuit: () => { quitting = true; app.quit(); },
       };
       // gnome-panel requires a live helper; force sni when the helper factory
@@ -296,6 +329,73 @@ if (!app.requestSingleInstanceLock()) {
         })),
       });
       bgStatus.refresh();
+    }
+
+    // Ensure the hub's own launcher exists for dev/AppImage (packaged/Flatpak ship it).
+    try {
+      ensureHubDesktopEntry({ execPath: process.execPath, iconSourceDir });
+    } catch (err) { console.error('ensureHubDesktopEntry failed:', err); }
+
+    const hubDeps: HubDeps = {
+      buildState: () => buildHubState({
+        services: SERVICES,
+        config,
+        running: (id) => windows.has(id),
+        visible: (id) => windows.get(id)?.window.isVisible() ?? false,
+        badge: (id) => currentBadge.get(id) ?? 0,
+        trayBackend: config.trayBackend ?? 'auto',
+        startAtLogin: isAutostartEnabled(),
+      }),
+      openService: (id) => { const d = getService(id); if (d) openService(d, false); },
+      addService: (id, customUrl) => {
+        const d = getService(id); if (!d) return;
+        addService(d, config, { execPath: process.execPath, iconSourceDir, customUrl });
+        saveConfig(configPath(), config);
+      },
+      removeService: (id, deleteData) => {
+        const d = getService(id); if (!d) return;
+        quitService(id); // tear down a running window first
+        removeService(d, config, deleteData);
+        saveConfig(configPath(), config);
+      },
+      setServiceSetting: (id, patch: ServicePatch) => {
+        config.services[id] = { ...config.services[id], ...patch };
+        saveConfig(configPath(), config);
+        if (patch.dnd !== undefined) { tray?.setDnd(id, patch.dnd); notifications?.setServiceDnd(id, patch.dnd); windows.get(id)?.pushDnd(patch.dnd); }
+        if (patch.badgesEnabled !== undefined) {
+          const sw = windows.get(id);
+          const count = currentBadge.get(id) ?? 0;
+          // Re-push the current badge so enabling shows it immediately; disabling clears the indicator.
+          sw?.setBadge(patch.badgesEnabled ? count : 0);
+          tray?.setBadge(id, patch.badgesEnabled ? count : 0);
+        }
+        if (patch.customUrl !== undefined) {
+          const d = getService(id); const sw = windows.get(id);
+          if (d && sw) sw.serviceView.webContents.loadURL(effectiveUrl(d, patch.customUrl || undefined));
+        }
+      },
+      setGlobal: (patch: GlobalPatch) => {
+        if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; saveConfig(configPath(), config); }
+        if (patch.startAtLogin !== undefined) setAutostart(patch.startAtLogin, { execPath: process.execPath, iconSourceDir });
+      },
+      quitApp: () => { quitting = true; app.quit(); },
+      preloadPath: join(__dirname, '..', 'preload', 'hub.js'),
+      htmlPath: join(__dirname, '..', 'renderer', 'hub', 'index.html'),
+      iconPath: join(iconSourceDir, 'loft.png'),
+    };
+    hub = createHub(hubDeps);
+
+    const args = parseArgs(process.argv);
+    const def = args.service ? getService(args.service) : undefined;
+    if (def) {
+      openService(def, args.minimized);
+    } else {
+      // No --service: open every service flagged open-on-startup (minimized to tray),
+      // and show the hub as the app's home surface.
+      for (const id of Object.keys(config.services)) {
+        if (config.services[id]?.openOnStartup) { const d = getService(id); if (d) openService(d, true); }
+      }
+      if (!args.minimized) hub!.open();
     }
 
     // chat.loft.Loft D-Bus service (parity/scripting; also the target of the
