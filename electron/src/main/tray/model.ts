@@ -90,6 +90,11 @@ export class TrayModel {
     };
   }
 
+  /** Read-only per-service snapshot (id + raw badge) for the GNOME-panel backend. */
+  snapshotServices(): ReadonlyArray<{ id: string; badge: number }> {
+    return this.services.map((s) => ({ id: s.id, badge: s.badge }));
+  }
+
   private find(id: string): ServiceTrayState | undefined {
     return this.services.find((s) => s.id === id);
   }

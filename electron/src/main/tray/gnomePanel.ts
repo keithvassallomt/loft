@@ -1,0 +1,88 @@
+import { TrayModel } from './model';
+import type { Tray, TrayDeps } from './index';
+import type { ShellHelperClient } from '../gnome/shellHelper';
+
+export interface PanelSnapshot {
+  id: string;
+  displayName: string;
+  visible: boolean;
+  badge: number;
+  dnd: boolean;
+}
+
+/** Pure diff of previous vs current per-service snapshots (flash-avoidance, gnome.rs:186-199). */
+export function diffPanelServices(
+  prev: Map<string, PanelSnapshot>,
+  cur: Map<string, PanelSnapshot>,
+): { updates: PanelSnapshot[]; removals: string[] } {
+  const updates: PanelSnapshot[] = [];
+  const removals: string[] = [];
+  for (const id of prev.keys()) if (!cur.has(id)) removals.push(id);
+  for (const [id, s] of cur) {
+    const p = prev.get(id);
+    if (!p || p.displayName !== s.displayName || p.visible !== s.visible || p.badge !== s.badge || p.dnd !== s.dnd)
+      updates.push(s);
+  }
+  return { updates, removals };
+}
+
+export async function startGnomePanelTray(deps: TrayDeps, helper: ShellHelperClient): Promise<Tray> {
+  const model = new TrayModel();
+  model.setGlobalDnd(deps.globalDnd);
+  for (const s of deps.configuredServices)
+    model.addService({ id: s.id, displayName: s.displayName, badge: 0, dnd: s.dnd, visible: s.visible, running: s.running });
+
+  // Snapshot of only-running services (parity: the combined tray lists running services).
+  let prev = new Map<string, PanelSnapshot>();
+  const snapshot = (): Map<string, PanelSnapshot> => {
+    const mm = model.menuModel();
+    const m = new Map<string, PanelSnapshot>();
+    for (const r of mm.running) {
+      m.set(r.id, { id: r.id, displayName: r.label, visible: r.visible, badge: 0, dnd: r.dnd });
+    }
+    // menuModel doesn't carry raw badge; read it from the model's per-service view.
+    for (const s of model.snapshotServices()) if (m.has(s.id)) m.get(s.id)!.badge = s.badge;
+    return m;
+  };
+
+  const pushAll = (): void => {
+    for (const s of prev.values())
+      void helper.updateCombinedService(s.id, s.displayName, s.visible, s.badge, s.dnd, s.displayName);
+  };
+
+  const refresh = (): void => {
+    const cur = snapshot();
+    const { updates, removals } = diffPanelServices(prev, cur);
+    for (const id of removals) void helper.removeCombinedService(id);
+    for (const u of updates) void helper.updateCombinedService(u.id, u.displayName, u.visible, u.badge, u.dnd, u.displayName);
+    prev = cur;
+  };
+
+  // Register the combined icon once. The client is fire-and-forget (never
+  // rejects), so login/restart races are handled by onHelperAppeared below
+  // (re-register whenever chat.loft.ShellHelper (re)appears) rather than a
+  // backoff — this replaces gnome.rs's [0,2,4,8,16]s retry, whose purpose was
+  // to await a register() that could fail; ours can't.
+  await helper.registerCombined('loft-symbolic');
+  prev = snapshot();
+  pushAll();
+  model.onChange = refresh;
+
+  // Suspend/resume: extension disable()/enable() destroys the panel button;
+  // a helper restart re-owns the name → re-register + re-push everything
+  // (parity with monitor_shell_helper_restart, mod.rs:1307-1383).
+  helper.onHelperAppeared(() => {
+    void helper.registerCombined('loft-symbolic');
+    prev = snapshot();
+    pushAll();
+  });
+
+  return {
+    addService: (seed) => model.addService({ id: seed.id, displayName: seed.displayName, badge: 0, dnd: seed.dnd, visible: false, running: false }),
+    setBadge: (id, n) => model.setBadge(id, n),
+    setRunning: (id, running) => model.setRunning(id, running),
+    setVisible: (id, visible) => model.setVisible(id, visible),
+    setDnd: (id, enabled) => model.setDnd(id, enabled),
+    setGlobalDnd: (enabled) => model.setGlobalDnd(enabled),
+  };
+}
