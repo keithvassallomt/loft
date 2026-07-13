@@ -1,7 +1,9 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const UUID = 'loft-shell-helper@loft.chat';
+// Distinct UUID from the production (Rust) Loft helper (`loft-shell-helper@loft.chat`)
+// so the Electron rewrite's helper installs alongside it and never clobbers it.
+const UUID = 'loft-shell-helper-next@loft.chat';
 
 export function helperVersion(metadataJson: string): number[] {
   try {

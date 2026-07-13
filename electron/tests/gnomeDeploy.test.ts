@@ -44,7 +44,7 @@ describe('deployGnomeExtension', () => {
     const { wrote, enabled } = run();
     expect(wrote).toBe(true);
     expect(enabled).toBe(true);
-    const extDir = join(dataHome, 'gnome-shell/extensions/loft-shell-helper@loft.chat');
+    const extDir = join(dataHome, 'gnome-shell/extensions/loft-shell-helper-next@loft.chat');
     expect(existsSync(join(extDir, 'extension.js'))).toBe(true);
     expect(existsSync(join(extDir, 'icons/show-window-symbolic.svg'))).toBe(true);
     expect(existsSync(join(dataHome, 'icons/hicolor/scalable/apps/loft-symbolic.svg'))).toBe(true);
@@ -53,7 +53,7 @@ describe('deployGnomeExtension', () => {
   it('no-ops when installed version >= bundled (returns false)', () => {
     run();
     writeFileSync(
-      join(dataHome, 'gnome-shell/extensions/loft-shell-helper@loft.chat/metadata.json'),
+      join(dataHome, 'gnome-shell/extensions/loft-shell-helper-next@loft.chat/metadata.json'),
       '{"version-name":"1.4"}',
     );
     expect(run().wrote).toBe(false);
@@ -62,14 +62,14 @@ describe('deployGnomeExtension', () => {
   it('never downgrades a newer EGO build', () => {
     run();
     writeFileSync(
-      join(dataHome, 'gnome-shell/extensions/loft-shell-helper@loft.chat/metadata.json'),
+      join(dataHome, 'gnome-shell/extensions/loft-shell-helper-next@loft.chat/metadata.json'),
       '{"version-name":"1.9"}',
     );
     expect(run().wrote).toBe(false);
   });
 
   it('redeploys when installed is older', () => {
-    const extDir = join(dataHome, 'gnome-shell/extensions/loft-shell-helper@loft.chat');
+    const extDir = join(dataHome, 'gnome-shell/extensions/loft-shell-helper-next@loft.chat');
     mkdirSync(extDir, { recursive: true });
     writeFileSync(join(extDir, 'metadata.json'), '{"version-name":"1.3"}');
     expect(run().wrote).toBe(true);

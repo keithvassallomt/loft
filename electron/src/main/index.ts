@@ -185,7 +185,7 @@ if (!app.requestSingleInstanceLock()) {
           dataHome,
           resourcesDir: join(__dirname, '..', 'assets'),
           runGnomeExtensionsEnable: () => {
-            try { require('node:child_process').execFileSync('gnome-extensions', ['enable', 'loft-shell-helper@loft.chat']); }
+            try { require('node:child_process').execFileSync('gnome-extensions', ['enable', 'loft-shell-helper-next@loft.chat']); }
             catch { /* CLI absent or already enabled — best effort */ }
           },
         });

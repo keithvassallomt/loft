@@ -3,9 +3,9 @@
 // `bus.call(msg): Promise<Message>`, `bus.getProxyObject`, `dbus.Variant`.
 import * as dbus from 'dbus-next';
 
-const NAME = 'chat.loft.ShellHelper';
-const PATH = '/chat/loft/ShellHelper';
-const IFACE = 'chat.loft.ShellHelper';
+const NAME = 'chat.loft.ShellHelperNext';
+const PATH = '/chat/loft/ShellHelperNext';
+const IFACE = 'chat.loft.ShellHelperNext';
 
 export interface ShellHelperClient {
   setLoftWindows(keys: string[]): Promise<void>;
