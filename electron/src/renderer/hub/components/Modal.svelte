@@ -19,11 +19,15 @@
   } = $props();
 
   function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onCancel(); }
+
+  let dialogEl: HTMLDivElement | undefined = $state();
+  $effect(() => { dialogEl?.focus(); });
 </script>
 
 <svelte:window onkeydown={onKey} />
 <div class="backdrop" onclick={onCancel} role="presentation">
-  <div class="modal" role="dialog" aria-modal="true" onclick={(e) => e.stopPropagation()}>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="modal" role="dialog" aria-modal="true" tabindex="-1" bind:this={dialogEl} onclick={(e) => e.stopPropagation()}>
     <h2>{title}</h2>
     <div class="body">{@render children()}</div>
     <div class="actions">
@@ -36,6 +40,7 @@
 <style>
   .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 100; }
   .modal { background: var(--bg); color: var(--fg); border: 1px solid var(--divider); border-radius: 12px; padding: 20px; min-width: 320px; max-width: 90vw; box-shadow: 0 10px 40px rgba(0,0,0,0.3); }
+  .modal:focus { outline: none; }
   h2 { margin: 0 0 12px; font-size: 1.1em; }
   .body { margin-bottom: 20px; }
   .actions { display: flex; justify-content: flex-end; gap: 8px; }
