@@ -1,6 +1,7 @@
 import type { HubState, ServicePatch, GlobalPatch } from '../../../shared/hubTypes';
 
 declare global {
+  const __LOFT_VERSION__: string;
   interface Window {
     loftHub: {
       getState(): Promise<HubState>;

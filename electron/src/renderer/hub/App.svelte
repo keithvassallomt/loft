@@ -2,6 +2,9 @@
   import { onMount } from 'svelte';
   import { hubState, initStore } from './lib/store';
   import ServiceList from './components/ServiceList.svelte';
+  import ServiceDetail from './components/ServiceDetail.svelte';
+  import GlobalSettings from './components/GlobalSettings.svelte';
+  import About from './components/About.svelte';
 
   let view = $state<{ page: 'main' } | { page: 'detail'; id: string } | { page: 'settings' } | { page: 'about' }>({ page: 'main' });
   let menuOpen = $state(false);
@@ -30,7 +33,13 @@
       <ServiceList state={$hubState} onGear={gear} />
     {:else}
       <button class="back" onclick={() => (view = { page: 'main' })}>‹ Back</button>
-      <!-- detail / settings / about panels land in Task 9 -->
+      {#if view.page === 'detail'}
+        <ServiceDetail state={$hubState} id={view.id} onBack={() => (view = { page: 'main' })} />
+      {:else if view.page === 'settings'}
+        <GlobalSettings state={$hubState} />
+      {:else if view.page === 'about'}
+        <About version={__LOFT_VERSION__} />
+      {/if}
     {/if}
   {/if}
 </main>
