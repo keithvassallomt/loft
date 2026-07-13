@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import type { TrayBackend } from './trayBackend';
 
 export interface WindowState {
   x?: number;
@@ -22,6 +23,8 @@ export interface LoftConfig {
   services: Record<string, ServiceConfig>;
   /** Global Do Not Disturb (mutes every service); persisted + reflected in the tray. */
   globalDnd?: boolean;
+  /** Tray backend preference ('auto', 'gnome-panel', or 'sni'). */
+  trayBackend?: TrayBackend;
 }
 
 export function defaultConfig(): LoftConfig {
@@ -40,7 +43,14 @@ export function loadConfig(path: string): LoftConfig {
       parsed.services && typeof parsed.services === 'object' && !Array.isArray(parsed.services)
         ? (parsed.services as Record<string, ServiceConfig>)
         : {};
-    return parsed.globalDnd === true ? { services, globalDnd: true } : { services };
+    const trayBackend =
+      parsed.trayBackend === 'gnome-panel' || parsed.trayBackend === 'sni' || parsed.trayBackend === 'auto'
+        ? parsed.trayBackend
+        : undefined;
+    const base: LoftConfig = { services };
+    if (parsed.globalDnd === true) base.globalDnd = true;
+    if (trayBackend) base.trayBackend = trayBackend;
+    return base;
   } catch {
     return defaultConfig();
   }

@@ -35,4 +35,16 @@ describe('config', () => {
     writeFileSync(p, '{"services":[1,2,3]}', 'utf8');
     expect(loadConfig(p)).toEqual(defaultConfig());
   });
+  it('preserves trayBackend field when valid', () => {
+    const p = join(dir, 'with-tray.json');
+    writeFileSync(p, '{"services":{},"trayBackend":"sni"}', 'utf8');
+    const cfg = loadConfig(p);
+    expect(cfg.trayBackend).toBe('sni');
+  });
+  it('drops bogus trayBackend values', () => {
+    const p = join(dir, 'bad-tray.json');
+    writeFileSync(p, '{"services":{},"trayBackend":"invalid"}', 'utf8');
+    const cfg = loadConfig(p);
+    expect(cfg.trayBackend).toBeUndefined();
+  });
 });
