@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run bundle-preload && npm run copy-assets",
     "bundle-preload": "esbuild src/preload/service.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/service.js",
-    "copy-assets": "mkdir -p dist/renderer/titlebar dist/assets/icons && cp src/renderer/titlebar/index.html src/renderer/titlebar/titlebar.css dist/renderer/titlebar/ && cp assets/loft.png dist/assets/ && cp assets/icons/*.png dist/assets/icons/",
+    "copy-assets": "mkdir -p dist/renderer/titlebar dist/assets/icons && cp src/renderer/titlebar/index.html src/renderer/titlebar/titlebar.css dist/renderer/titlebar/ && cp assets/loft.png dist/assets/ && cp assets/icons/*.png dist/assets/icons/ && mkdir -p dist/assets/gnome-shell-extension/icons && cp ../gnome-shell-extension/metadata.json ../gnome-shell-extension/extension.js dist/assets/gnome-shell-extension/ && cp ../gnome-shell-extension/icons/show-window-symbolic.svg ../gnome-shell-extension/icons/hide-window-symbolic.svg dist/assets/gnome-shell-extension/icons/ && cp ../assets/icons/loft-symbolic.svg dist/assets/loft-symbolic.svg",
     "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
     "whatsapp": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=whatsapp",
     "messenger": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=messenger",
