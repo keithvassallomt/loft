@@ -746,6 +746,7 @@ export default class LoftShellHelper extends Extension {
         if (wmClass) {
             this._loftWmClasses?.add(wmClass);
             if (wmClass) this._loftTitleKeys?.add(wmClass);
+            // TODO(3d): re-key _loftOverviewVisible when the overview patch is re-keyed to titles (currently keyed by display-name, read by WM_CLASS — inert today).
             this._loftOverviewVisible?.set(wmClass, visible);
         }
 
@@ -974,7 +975,8 @@ export default class LoftShellHelper extends Extension {
 
         if (method === 'SetLoftWindows') {
             const [keys] = params.deep_unpack();
-            this._loftTitleKeys = new Set(keys);
+            this._loftTitleKeys.clear();
+            for (const k of keys) this._loftTitleKeys.add(k);
             invocation.return_value(null);
             return;
         }
