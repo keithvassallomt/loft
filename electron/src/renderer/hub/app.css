@@ -1,2 +1,10 @@
-:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-body { margin: 0; }
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, sans-serif;
+  --bg: #ffffff; --card: #f4f4f6; --divider: #e2e2e6; --accent: #3584e4; --fg: #1a1a1a;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1e1e20; --card: #2a2a2d; --divider: #3a3a3f; --accent: #62a0ea; --fg: #ededed; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); }
