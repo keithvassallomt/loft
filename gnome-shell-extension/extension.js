@@ -34,6 +34,9 @@ const DBUS_IFACE = `<node>
       <arg name="wm_class" type="s" direction="in"/>
       <arg name="success" type="b" direction="out"/>
     </method>
+    <method name="SetLoftWindows">
+      <arg name="keys" type="as" direction="in"/>
+    </method>
     <method name="RegisterService">
       <arg name="name" type="s" direction="in"/>
       <arg name="display_name" type="s" direction="in"/>
@@ -97,9 +100,26 @@ function _isMinimizedLoftWindow(win, wmClasses) {
     return wmClasses.has(wmClass) && win.minimized;
 }
 
+function _titleMatchesKey(title, key) {
+    return title === key || title.startsWith(key + ' (');
+}
+function _isLoftTitleWindow(meta, titleKeys) {
+    const title = meta.get_title?.() ?? '';
+    for (const key of titleKeys)
+        if (_titleMatchesKey(title, key)) return true;
+    return false;
+}
+function _isMinimizedLoftTitleWindow(win, titleKeys) {
+    return win.minimized && _isLoftTitleWindow(win, titleKeys);
+}
+
 export default class LoftShellHelper extends Extension {
     enable() {
         this._loftWmClasses = new Set();
+        // Display-name title-keys for the single-app model. A window belongs to
+        // Loft iff its title === key or startsWith(key + ' ('). Fed by
+        // SetLoftWindows (window mgmt, any tray backend) + UpdateCombinedService.
+        this._loftTitleKeys = new Set();
         // wm_class → whether the daemon considers the service's window visible.
         // Used to keep a start-hidden window (which maps briefly before being
         // minimized) out of the overview. Default-absent is treated as hidden.
@@ -131,6 +151,7 @@ export default class LoftShellHelper extends Extension {
 
         // Hide minimized Loft windows from alt-tab, overview, and dock.
         const wmClasses = this._loftWmClasses;
+        const titleKeys = this._loftTitleKeys;
         const overviewVisible = this._loftOverviewVisible;
 
         // Alt-tab: drop minimized Loft windows from the switcher, and drop
@@ -144,7 +165,7 @@ export default class LoftShellHelper extends Extension {
             for (const item of [...this._items]) {
                 const before = item.cachedWindows.length;
                 item.cachedWindows = item.cachedWindows.filter(
-                    w => !_isMinimizedLoftWindow(w, wmClasses)
+                    w => !_isMinimizedLoftTitleWindow(w, titleKeys)
                 );
                 if (before > 0 && item.cachedWindows.length === 0)
                     this._switcherList._removeIcon(item.app);
@@ -599,7 +620,7 @@ export default class LoftShellHelper extends Extension {
     }
 
     _callDaemonMethod(dbusName, method, signature, args) {
-        const busName = `chat.loft.${dbusName}`;
+        const busName = 'chat.loft.Loft';
         const objPath = `/chat/loft/${dbusName}`;
         const iface = 'chat.loft.Service';
 
@@ -690,7 +711,7 @@ export default class LoftShellHelper extends Extension {
         let nameAppeared = false;
         this._combinedWatchId = Gio.bus_watch_name(
             Gio.BusType.SESSION,
-            'chat.loft.Tray',
+            'chat.loft.Loft',
             Gio.BusNameWatcherFlags.NONE,
             () => { nameAppeared = true; },
             () => {
@@ -724,6 +745,7 @@ export default class LoftShellHelper extends Extension {
         // daemon's visibility so the overview can exclude hidden windows.
         if (wmClass) {
             this._loftWmClasses?.add(wmClass);
+            if (wmClass) this._loftTitleKeys?.add(wmClass);
             this._loftOverviewVisible?.set(wmClass, visible);
         }
 
@@ -890,14 +912,24 @@ export default class LoftShellHelper extends Extension {
         this._pendingDashTimeouts?.add(id);
     }
 
-    _findWindow(wmClass) {
+    _findWindow(key) {
+        let fallback = null;
         for (const actor of global.get_window_actors()) {
             const win = actor.meta_window;
-            if (win.get_wm_class() === wmClass &&
-                win.get_window_type() === Meta.WindowType.NORMAL)
+            if (win.get_window_type() !== Meta.WindowType.NORMAL)
+                continue;
+            const title = win.get_title?.() ?? '';
+            if (_titleMatchesKey(title, key))
                 return win;
         }
-        return null;
+        // Spike diagnostic: log candidate titles so a keying mismatch is visible
+        // in `journalctl --user -f -o cat /usr/bin/gnome-shell` during Keith's test.
+        if (!fallback) {
+            const titles = global.get_window_actors()
+                .map(a => `${a.meta_window.get_wm_class?.() ?? '?'}::${a.meta_window.get_title?.() ?? '?'}`);
+            console.log(`Loft: _findWindow('${key}') no match; windows=[${titles.join(', ')}]`);
+        }
+        return fallback;
     }
 
     _onMethodCall(method, params, invocation) {
@@ -937,6 +969,13 @@ export default class LoftShellHelper extends Extension {
                     invocation.return_value(GLib.Variant.new('(b)', [false]));
                 }
             }
+            return;
+        }
+
+        if (method === 'SetLoftWindows') {
+            const [keys] = params.deep_unpack();
+            this._loftTitleKeys = new Set(keys);
+            invocation.return_value(null);
             return;
         }
 
