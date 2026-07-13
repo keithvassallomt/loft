@@ -5,12 +5,14 @@ import { parseArgs } from './cli';
 import { getService, ServiceDef } from './registry';
 import { loadConfig, saveConfig, configPath, LoftConfig } from './config';
 import { createServiceWindow, ServiceWindow } from './serviceWindow';
-import { startTray, Tray, TrayServiceSeed } from './tray';
+import { Tray, TrayDeps, TrayServiceSeed } from './tray';
+import { startTrayBackend } from './tray/backend';
 import { startNotifications, Notifications } from './notifications';
 import { createShellHelperClient } from './gnome/shellHelper';
 import { startLoftDbusService, type LoftServiceDeps } from './dbus/loftService';
 import { deployGnomeExtension } from './gnome/deploy';
-import { isGnome } from './trayBackend';
+import { isGnome, resolveTrayBackend } from './trayBackend';
+import { startBackgroundStatus } from './gnome/backgroundStatus';
 
 app.setName('Loft');
 app.setAppUserModelId('chat.loft.Loft');
@@ -21,6 +23,7 @@ app.setPath('userData', join(dataHome, 'loft'));
 let quitting = false;
 let tray: Tray | undefined;
 let notifications: Notifications | undefined;
+let bgStatus: { refresh(): void } | undefined;
 
 // GNOME-only: bypasses focus-stealing prevention (FocusWindow/HideWindow) and
 // hides minimized Loft windows from alt-tab/overview/dock (SetLoftWindows).
@@ -86,6 +89,7 @@ function openService(def: ServiceDef, minimized: boolean): void {
   tray?.setVisible(def.id, sw.window.isVisible());
   notifications?.setVisible(def.id, sw.window.isVisible());
   notifications?.setFocused(def.id, sw.window.isFocused());
+  bgStatus?.refresh();
 }
 
 // Tray menu "Show/Hide" for a service: show if hidden, hide if visible.
@@ -112,6 +116,7 @@ function quitService(id: string): void {
   tray?.setRunning(id, false);
   tray?.setVisible(id, false);
   sw.window.destroy();
+  bgStatus?.refresh();
 }
 
 // Global DND: persist + reflect in the tray (notification gating is Stage 3b).
@@ -156,6 +161,7 @@ if (!app.requestSingleInstanceLock()) {
     const sw = findBySenderId(e.sender.id);
     if (!sw) return;
     currentBadge.set(sw.def.id, payload.count);
+    bgStatus?.refresh();
     // SetBadgesEnabled(false) keeps the true count in currentBadge (GetStatus
     // still reports it) but suppresses the visible tray/title indicator.
     if (config.services[sw.def.id]?.badgesEnabled === false) return;
@@ -203,7 +209,8 @@ if (!app.requestSingleInstanceLock()) {
     // With no --service, Stage 1 opens WhatsApp so there is always a window to see.
     else openService(getService('whatsapp')!, args.minimized);
 
-    // One combined "Loft" SNI tray icon for all services (Stage 3a).
+    // One combined "Loft" tray icon for all services — SNI (Stage 3a) or, on
+    // GNOME with a live helper, a native panel button (Stage 3c).
     try {
       const configured: TrayServiceSeed[] = Object.keys(config.services)
         .map((id) => getService(id))
@@ -215,7 +222,7 @@ if (!app.requestSingleInstanceLock()) {
           running: windows.has(d.id),
           visible: windows.get(d.id)?.window.isVisible() ?? false,
         }));
-      tray = await startTray({
+      const deps: TrayDeps = {
         configuredServices: configured,
         globalDnd: config.globalDnd ?? false,
         onToggleService: (id) => toggleService(id),
@@ -225,7 +232,12 @@ if (!app.requestSingleInstanceLock()) {
         onToggleGlobalDnd: (enabled) => { setGlobalDnd(enabled); notifications?.setGlobalDnd(enabled); },
         onShowHub: () => { for (const sw of windows.values()) { sw.show(); break; } }, // Stage 4: real hub
         onQuit: () => { quitting = true; app.quit(); },
-      });
+      };
+      // gnome-panel requires a live helper; force sni when the helper factory
+      // was skipped (non-GNOME) or threw (Task 3 review finding) so
+      // startTrayBackend never needs to dereference an absent helper.
+      const backend = helper ? resolveTrayBackend(config.trayBackend, process.env) : 'sni';
+      tray = await startTrayBackend(deps, { backend, helper: helper! });
       // Reflect windows already open before the tray came up.
       for (const [id, sw] of windows) {
         const d = getService(id);
@@ -265,6 +277,19 @@ if (!app.requestSingleInstanceLock()) {
       }
     } catch (err) {
       console.error('Failed to start notifications:', err);
+    }
+
+    // GNOME Settings → Apps status line ("N services running" / "X: N unread"
+    // via org.freedesktop.portal.Background). GNOME only — no equivalent on
+    // other DEs.
+    if (gnome) {
+      bgStatus = startBackgroundStatus({
+        collect: () => [...windows.values()].map((sw) => ({
+          displayName: sw.def.displayName,
+          badge: currentBadge.get(sw.def.id) ?? 0,
+        })),
+      });
+      bgStatus.refresh();
     }
 
     // chat.loft.Loft D-Bus service (parity/scripting; also the target of the
