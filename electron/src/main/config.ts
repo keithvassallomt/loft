@@ -17,6 +17,8 @@ export interface ServiceConfig {
   openOnStartup?: boolean;
   /** Per-service Do Not Disturb; persisted + reflected in the tray menu (gating notifications is Stage 3b). */
   dnd?: boolean;
+  /** Per-service badge indicator toggle (tray/title); GetStatus() still reports the true count when false. */
+  badgesEnabled?: boolean;
 }
 
 export interface LoftConfig {

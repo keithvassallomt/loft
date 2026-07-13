@@ -1,4 +1,4 @@
-import { app, ipcMain, session } from 'electron';
+import { app, dialog, ipcMain, session } from 'electron';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
@@ -7,6 +7,10 @@ import { loadConfig, saveConfig, configPath, LoftConfig } from './config';
 import { createServiceWindow, ServiceWindow } from './serviceWindow';
 import { startTray, Tray, TrayServiceSeed } from './tray';
 import { startNotifications, Notifications } from './notifications';
+import { createShellHelperClient } from './gnome/shellHelper';
+import { startLoftDbusService, type LoftServiceDeps } from './dbus/loftService';
+import { deployGnomeExtension } from './gnome/deploy';
+import { isGnome } from './trayBackend';
 
 app.setName('Loft');
 app.setAppUserModelId('chat.loft.Loft');
@@ -18,6 +22,21 @@ let quitting = false;
 let tray: Tray | undefined;
 let notifications: Notifications | undefined;
 
+// GNOME-only: bypasses focus-stealing prevention (FocusWindow/HideWindow) and
+// hides minimized Loft windows from alt-tab/overview/dock (SetLoftWindows).
+// The factory opens a session-bus connection synchronously and can throw if no
+// bus daemon exists at all (not just "helper absent") — never let that crash
+// startup (Task 3 review finding).
+const gnome = isGnome(process.env);
+let helper: ReturnType<typeof createShellHelperClient> | undefined;
+if (gnome) {
+  try {
+    helper = createShellHelperClient();
+  } catch (err) {
+    console.error('Failed to create GNOME Shell helper client:', err);
+  }
+}
+
 // dist/main → dist/assets/icons/<id>.png (copied by copy-assets; same deployed
 // dir the tray's dbusMenu/icon modules read from — those live one directory
 // deeper, under dist/main/tray, hence their extra '..').
@@ -27,10 +46,24 @@ function serviceIconPath(id: string): string {
 
 const config: LoftConfig = loadConfig(configPath());
 const windows = new Map<string, ServiceWindow>();
+// Latest badge count per service, independent of whether the badge indicator
+// is currently enabled — GetStatus() always reports the true count.
+const currentBadge = new Map<string, number>();
+
+// Display-name keys for every currently-open service window (open = present in
+// `windows`, regardless of shown/hidden) — what the GNOME helper hides from
+// alt-tab/overview/dock when minimized (`SetLoftWindows`).
+function windowKeys(): string[] {
+  return [...windows.values()].map((sw) => sw.def.displayName);
+}
+function syncLoftWindows(): void { helper?.setLoftWindows(windowKeys()); }
 
 function openService(def: ServiceDef, minimized: boolean): void {
   const existing = windows.get(def.id);
-  if (existing) { existing.show(); return; }
+  // helper?.focusWindow bypasses GNOME's focus-stealing prevention; fire it in
+  // parallel with the native show — never await (a missing/erroring helper
+  // must never block or crash a window action).
+  if (existing) { existing.show(); helper?.focusWindow(def.displayName); return; }
   // Launching marks the service "configured" so it persists in the tray's
   // available section after Quit (until the Stage-4 hub manages this explicitly).
   if (!config.services[def.id]) config.services[def.id] = {};
@@ -46,6 +79,8 @@ function openService(def: ServiceDef, minimized: boolean): void {
   sw.window.on('hide', () => notifications?.setVisible(def.id, false));
   sw.serviceView.webContents.on('did-finish-load', () => notifications?.registerService(def.id));
   windows.set(def.id, sw);
+  syncLoftWindows();
+  helper?.focusWindow(def.displayName);
   tray?.addService({ id: def.id, displayName: def.displayName, dnd: config.services[def.id]?.dnd ?? false });
   tray?.setRunning(def.id, true);
   tray?.setVisible(def.id, sw.window.isVisible());
@@ -56,7 +91,7 @@ function openService(def: ServiceDef, minimized: boolean): void {
 // Tray menu "Show/Hide" for a service: show if hidden, hide if visible.
 function toggleService(id: string): void {
   const sw = windows.get(id);
-  if (sw && sw.window.isVisible()) { sw.hide(); return; }
+  if (sw && sw.window.isVisible()) { sw.hide(); helper?.hideWindow(sw.def.displayName); return; }
   const def = getService(id);
   if (def) openService(def, false);
 }
@@ -73,6 +108,7 @@ function quitService(id: string): void {
   const sw = windows.get(id);
   if (!sw) return;
   windows.delete(id);
+  syncLoftWindows();
   tray?.setRunning(id, false);
   tray?.setVisible(id, false);
   sw.window.destroy();
@@ -119,6 +155,10 @@ if (!app.requestSingleInstanceLock()) {
     if (typeof payload?.count !== 'number') return;
     const sw = findBySenderId(e.sender.id);
     if (!sw) return;
+    currentBadge.set(sw.def.id, payload.count);
+    // SetBadgesEnabled(false) keeps the true count in currentBadge (GetStatus
+    // still reports it) but suppresses the visible tray/title indicator.
+    if (config.services[sw.def.id]?.badgesEnabled === false) return;
     sw.setBadge(payload.count);
     tray?.setBadge(sw.def.id, payload.count);
   });
@@ -130,6 +170,33 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    // GNOME Shell only loads new extension JS at session start, so (re)deploying
+    // the bundled helper (missing, or an EGO build not newer than ours) requires
+    // telling the user to log out — port of daemon/mod.rs notify_gnome_helper_relogin.
+    if (gnome) {
+      try {
+        const wrote = deployGnomeExtension({
+          dataHome,
+          resourcesDir: join(__dirname, '..', 'assets'),
+          runGnomeExtensionsEnable: () => {
+            try { require('node:child_process').execFileSync('gnome-extensions', ['enable', 'loft-shell-helper@loft.chat']); }
+            catch { /* CLI absent or already enabled — best effort */ }
+          },
+        });
+        if (wrote) {
+          void dialog.showMessageBox({
+            type: 'info',
+            title: 'Log out to finish updating Loft',
+            message: 'Log out to finish updating Loft',
+            detail: 'Loft updated its GNOME integration. Log out and back in for window management (show/hide, panel icons) to work correctly.',
+            buttons: ['Got it'],
+          });
+        }
+      } catch (err) {
+        console.error('GNOME helper deploy failed:', err);
+      }
+    }
+
     const args = parseArgs(process.argv);
     const def = args.service ? getService(args.service) : undefined;
     if (def) openService(def, args.minimized);
@@ -198,6 +265,39 @@ if (!app.requestSingleInstanceLock()) {
       }
     } catch (err) {
       console.error('Failed to start notifications:', err);
+    }
+
+    // chat.loft.Loft D-Bus service (parity/scripting; also the target of the
+    // GNOME-panel tray menu callbacks). A busy bus name (a leftover/second
+    // instance) must not crash startup.
+    try {
+      const loftDeps: LoftServiceDeps = {
+        show: (id) => { const d = getService(id); if (d) openService(d, false); },
+        hide: (id) => {
+          const sw = windows.get(id);
+          if (!sw) return;
+          sw.hide();
+          helper?.hideWindow(sw.def.displayName);
+        },
+        toggle: (id) => toggleService(id),
+        quitService: (id) => quitService(id),
+        getStatus: (id) => {
+          const sw = windows.get(id);
+          const visible = sw?.window.isVisible() ?? false;
+          const badge = currentBadge.get(id) ?? 0;
+          const dnd = config.services[id]?.dnd ?? false;
+          return [visible, badge, dnd];
+        },
+        setDnd: (id, enabled) => { setServiceDnd(id, enabled); tray?.setDnd(id, enabled); notifications?.setServiceDnd(id, enabled); },
+        setBadgesEnabled: (id, enabled) => {
+          config.services[id] = { ...config.services[id], badgesEnabled: enabled };
+          saveConfig(configPath(), config);
+        },
+        quitApp: () => { quitting = true; app.quit(); },
+      };
+      await startLoftDbusService(loftDeps);
+    } catch (err) {
+      console.error('Failed to start chat.loft.Loft D-Bus service:', err);
     }
   });
 
