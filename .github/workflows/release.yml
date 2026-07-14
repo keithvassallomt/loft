@@ -20,6 +20,7 @@ jobs:
           sudo apt-get install -y rpm appstream flatpak flatpak-builder
 
       - name: Validate AppStream metainfo
+        if: github.ref_type == 'tag'
         run: appstreamcli validate --no-net data/chat.loft.Loft.metainfo.xml
 
       - name: Install, test, build (electron)
