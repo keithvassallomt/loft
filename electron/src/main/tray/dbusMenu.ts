@@ -69,22 +69,31 @@ export class DbusMenu extends Interface {
   private revision = 1;
   private root: MenuNode;
   private actions = new Map<number, string>();
+  // Monotonic, never reset across rebuilds. dbusmenu ids MUST NOT be reused for a
+  // different item: KDE's plasmashell importer caches menu widgets by id and merges
+  // new props onto the stale cached item when an id reappears, corrupting the menu
+  // (e.g. a service row rendered with a leftover checkbox after a quit/launch shifts
+  // the running/available split). GNOME's libdbusmenu re-fetches instead, so it was
+  // unaffected. Handing out fresh ids every rebuild keeps the id→item mapping stable.
+  private nextId = 1;
 
   /** Invoked with a stable action id (`global:dnd` | `settings` | `quit` | `svc:<id>:{toggle,dnd,quit,launch}`). */
   onEvent: (actionId: string) => void = () => {};
 
   constructor() {
     super('com.canonical.dbusmenu');
-    const built = buildTree({ globalDnd: false, running: [], available: [] });
+    const built = buildTree({ globalDnd: false, running: [], available: [] }, this.nextId);
     this.root = built.root;
     this.actions = built.actions;
+    this.nextId = built.nextId;
   }
 
   /** Rebuild the menu from a new model, bump the revision, and notify hosts. */
   setModel(model: MenuModel): void {
-    const built = buildTree(model);
+    const built = buildTree(model, this.nextId);
     this.root = built.root;
     this.actions = built.actions;
+    this.nextId = built.nextId;
     this.revision += 1;
     this.LayoutUpdated(this.revision, 0);
   }
@@ -184,9 +193,12 @@ DbusMenu.configureMembers({
 
 // ---- Tree construction ----
 
-function buildTree(model: MenuModel): { root: MenuNode; actions: Map<number, string> } {
+function buildTree(
+  model: MenuModel,
+  startId: number,
+): { root: MenuNode; actions: Map<number, string>; nextId: number } {
   const actions = new Map<number, string>();
-  let nextId = 1;
+  let nextId = startId;
 
   const V = (sig: string, val: unknown): Variant => new Variant(sig, val);
 
@@ -249,7 +261,7 @@ function buildTree(model: MenuModel): { root: MenuNode; actions: Map<number, str
   children.push(item('Quit Loft', 'quit', { 'icon-name': V('s', 'application-exit-symbolic') }));
 
   const root: MenuNode = { id: 0, props: { 'children-display': new Variant('s', 'submenu') }, children };
-  return { root, actions };
+  return { root, actions, nextId };
 }
 
 function serializeNode(node: MenuNode, depth: number, propertyNames: string[]): LayoutNode {
