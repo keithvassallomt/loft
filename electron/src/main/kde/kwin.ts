@@ -1,28 +1,21 @@
-// Stage 4.5 (KDE) — window focus/hide via KWin scripting. STUB, NOT YET WIRED.
+// Stage 4.5 (KDE) — window focus/hide via KWin scripting.
 //
 // The GNOME path drives window focus/hide through the Shell-helper D-Bus client
 // (../gnome/shellHelper.ts: FocusWindow/HideWindow) to bypass focus-stealing
-// prevention. KDE has no such helper; the production Rust Loft uses KWin
-// scripting instead. Port that here when there is a KDE (Plasma) test
-// environment — do NOT ship it blind.
-//
-// Port reference: src/daemon/kwin.rs. Approach, RE-KEYED ONTO WINDOW TITLES like
+// prevention. KDE has no such helper; this ports the production Rust Loft's
+// KWin-scripting approach (src/daemon/kwin.rs), RE-KEYED ONTO WINDOW TITLES like
 // the GNOME rewrite (all Loft windows share one WM_CLASS under the single Electron
-// app identity, so match by title, NOT resourceClass as kwin.rs does):
-//   - Connect to org.kde.kwin.Scripting on the session bus.
-//   - Write a JS snippet to a temp file that iterates workspace.windowList() and
-//     matches by title-prefix: `title === key || title.startsWith(key + ' (')`.
-//   - loadScript(path, pluginName) -> run() on /Scripting/Script<id> -> unloadScript.
-//     focus: w.skipTaskbar = false; w.minimized = false; workspace.activeWindow = w
-//     hide:  w.skipTaskbar = true;  w.minimized = true
-//   - Fire-and-forget + never-throw, mirroring the GNOME ShellHelperClient contract.
+// app identity, so match by title/caption, NOT resourceClass as kwin.rs does).
 //
-// Wiring: in index.ts, at the "helper" selection seam (currently GNOME-only), add a
-// KDE branch — when !gnome && isKde(), build a KwinClient and route the same
-// focusWindow/hideWindow calls through it. Until then, non-GNOME show/hide falls
-// back to Electron's native window.show()/hide()/focus() (hide/unmap works; raising
-// a hidden window may not reliably grab focus under KDE focus-stealing prevention —
-// which is exactly what this KWin path fixes).
+// dbus-next API used here is verified against node_modules/dbus-next@0.10.2:
+// `new dbus.Message({destination,path,interface,member,signature?,body?})`,
+// `bus.call(msg): Promise<Message>` (../gnome/shellHelper.ts).
+import * as dbus from 'dbus-next';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
+const KWIN = 'org.kde.KWin';
 
 /**
  * KWin scripting JS that finds the Loft window whose caption matches `key`
@@ -55,8 +48,37 @@ export interface KwinClient {
   hideWindow(key: string): Promise<void>;
 }
 
-/** STUB (Stage 4.5): no-op KWin client until the port lands and is KDE-verified. */
+/** Real KWin client: focus/hide the Loft window whose caption matches `key`. Never throws. */
 export function createKwinClient(): KwinClient {
-  const notImplemented = (_key: string): Promise<void> => Promise.resolve();
-  return { focusWindow: notImplemented, hideWindow: notImplemented };
+  let bus: ReturnType<typeof dbus.sessionBus> | null = null;
+  const getBus = () => (bus ??= dbus.sessionBus());
+
+  const call = (path: string, iface: string, member: string, signature: string | undefined, body: unknown[]) =>
+    getBus().call(new dbus.Message({
+      destination: KWIN, path, interface: iface, member,
+      ...(signature ? { signature } : {}),
+      ...(body.length ? { body } : {}),
+    }));
+
+  const runScript = async (action: 'show' | 'hide', key: string): Promise<void> => {
+    const plugin = action === 'show' ? 'loft-show' : 'loft-hide';
+    const path = join(tmpdir(), `${plugin}.js`);
+    try {
+      writeFileSync(path, buildKwinScript(action, key), 'utf8');
+      // Clear any stale instance first (ignore errors).
+      await call('/Scripting', 'org.kde.kwin.Scripting', 'unloadScript', 's', [plugin]).catch(() => {});
+      const reply = await call('/Scripting', 'org.kde.kwin.Scripting', 'loadScript', 'ss', [path, plugin]);
+      const id = (reply?.body?.[0] as number) ?? 0;
+      await call(`/Scripting/Script${id}`, 'org.kde.kwin.Script', 'run', undefined, []);
+      await new Promise((r) => setTimeout(r, 120)); // let the script execute before unload
+      await call('/Scripting', 'org.kde.kwin.Scripting', 'unloadScript', 's', [plugin]).catch(() => {});
+    } catch (e) {
+      console.debug(`KWin ${action} failed:`, (e as Error)?.message ?? e);
+    }
+  };
+
+  return {
+    focusWindow: (key) => runScript('show', key),
+    hideWindow: (key) => runScript('hide', key),
+  };
 }
