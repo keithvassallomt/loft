@@ -15,8 +15,8 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
-const DBUS_NAME = 'chat.loft.ShellHelperNext';
-const DBUS_PATH = '/chat/loft/ShellHelperNext';
+const DBUS_NAME = 'chat.loft.ShellHelper';
+const DBUS_PATH = '/chat/loft/ShellHelper';
 
 // Chrome in --app= mode sets WM_CLASS to "chrome-<sanitised_url>-<profile>".
 // Loft window classes (chrome-<host>__<path>-Default) are not hardcoded — the
@@ -474,7 +474,7 @@ export default class LoftShellHelper extends Extension {
                 this._loftOverviewVisible?.set(wmClass, false);
         }
 
-        const indicator = new PanelMenu.Button(0.0, `loft-next-${name}`, false);
+        const indicator = new PanelMenu.Button(0.0, `loft-${name}`, false);
 
         const box = new St.Widget({
             layout_manager: new Clutter.BinLayout(),
@@ -551,7 +551,7 @@ export default class LoftShellHelper extends Extension {
         });
         indicator.menu.addMenuItem(quitItem);
 
-        Main.panel.addToStatusArea(`loft-next-${name}`, indicator);
+        Main.panel.addToStatusArea(`loft-${name}`, indicator);
 
         // If the daemon vanishes, drop our panel icon with it.
         // name_vanished fires immediately when the name doesn't exist yet,
@@ -654,7 +654,7 @@ export default class LoftShellHelper extends Extension {
         }
         this._combinedServices.clear();
 
-        const indicator = new PanelMenu.Button(0.0, 'loft-next-combined', false);
+        const indicator = new PanelMenu.Button(0.0, 'loft-combined', false);
 
         const box = new St.Widget({
             layout_manager: new Clutter.BinLayout(),
@@ -700,7 +700,7 @@ export default class LoftShellHelper extends Extension {
             );
         });
 
-        Main.panel.addToStatusArea('loft-next-combined', indicator);
+        Main.panel.addToStatusArea('loft-combined', indicator);
 
         this._combinedIndicator = indicator;
         this._combinedIcon = icon;
