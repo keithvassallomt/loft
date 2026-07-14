@@ -12,7 +12,8 @@ import { startNotifications, Notifications } from './notifications';
 import { createShellHelperClient } from './gnome/shellHelper';
 import { startLoftDbusService, type LoftServiceDeps } from './dbus/loftService';
 import { deployGnomeExtension } from './gnome/deploy';
-import { isGnome, resolveTrayBackend } from './trayBackend';
+import { isGnome, isKde, resolveTrayBackend } from './trayBackend';
+import { createKwinClient, type KwinClient } from './kde/kwin';
 import { startBackgroundStatus } from './gnome/backgroundStatus';
 import { createHub, type HubDeps } from './hubWindow';
 import { buildHubState } from './hubState';
@@ -61,10 +62,20 @@ if (gnome) {
     console.error('Failed to create GNOME Shell helper client:', err);
   }
 }
-// Stage 4.5 (KDE): the KWin-scripting equivalent of `helper` goes here — when
-// !gnome && isKde(), build a KwinClient (./kde/kwin.ts) and route focusWindow/
-// hideWindow through it. Until then, non-GNOME show/hide uses Electron's native
-// window methods (hide/unmap works; raising may not grab focus under KDE).
+// KDE: KWin scripting bypasses focus-stealing prevention (the KDE analog of the
+// GNOME helper's FocusWindow/HideWindow). Only when not GNOME. Never let a missing
+// bus crash startup.
+const kde = !gnome && isKde(process.env);
+let kwin: KwinClient | undefined;
+if (kde) {
+  try { kwin = createKwinClient(); }
+  catch (err) { console.error('Failed to create KWin client:', err); }
+}
+
+// Route window focus/hide to whichever WM integration is active (GNOME helper xor
+// KWin xor nothing). Only one is ever set; both are optional-chained + never-throw.
+function focusExternal(key: string): void { helper?.focusWindow(key); kwin?.focusWindow(key); }
+function hideExternal(key: string): void { helper?.hideWindow(key); kwin?.hideWindow(key); }
 
 // dist/main → dist/assets/icons/<id>.png (copied by copy-assets; same deployed
 // dir the tray's dbusMenu/icon modules read from — those live one directory
@@ -89,10 +100,10 @@ function syncLoftWindows(): void { helper?.setLoftWindows(windowKeys()); }
 
 function openService(def: ServiceDef, minimized: boolean): void {
   const existing = windows.get(def.id);
-  // helper?.focusWindow bypasses GNOME's focus-stealing prevention; fire it in
-  // parallel with the native show — never await (a missing/erroring helper
+  // focusExternal (GNOME helper or KWin) bypasses focus-stealing prevention; fire
+  // it in parallel with the native show — never await (a missing/erroring backend
   // must never block or crash a window action).
-  if (existing) { existing.show(); helper?.focusWindow(def.displayName); return; }
+  if (existing) { existing.show(); focusExternal(def.displayName); return; }
   // First launch of a service implicitly Adds it (writes its launcher + icon) so a
   // directly-launched service shows up as Installed in the hub.
   if (!config.services[def.id]) {
@@ -112,7 +123,7 @@ function openService(def: ServiceDef, minimized: boolean): void {
   sw.serviceView.webContents.on('did-finish-load', () => notifications?.registerService(def.id));
   windows.set(def.id, sw);
   syncLoftWindows();
-  helper?.focusWindow(def.displayName);
+  focusExternal(def.displayName);
   tray?.addService({ id: def.id, displayName: def.displayName, dnd: config.services[def.id]?.dnd ?? false });
   tray?.setRunning(def.id, true);
   tray?.setVisible(def.id, sw.window.isVisible());
@@ -125,7 +136,7 @@ function openService(def: ServiceDef, minimized: boolean): void {
 // Tray menu "Show/Hide" for a service: show if hidden, hide if visible.
 function toggleService(id: string): void {
   const sw = windows.get(id);
-  if (sw && sw.window.isVisible()) { sw.hide(); helper?.hideWindow(sw.def.displayName); return; }
+  if (sw && sw.window.isVisible()) { sw.hide(); hideExternal(sw.def.displayName); return; }
   const def = getService(id);
   if (def) openService(def, false);
 }
@@ -418,7 +429,7 @@ if (!app.requestSingleInstanceLock()) {
           const sw = windows.get(id);
           if (!sw) return;
           sw.hide();
-          helper?.hideWindow(sw.def.displayName);
+          hideExternal(sw.def.displayName);
         },
         toggle: (id) => toggleService(id),
         quitService: (id) => quitService(id),
