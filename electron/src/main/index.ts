@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, Menu, protocol, session } from 'electron';
+import { app, ipcMain, Menu, protocol, session } from 'electron';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -11,7 +11,7 @@ import { startTrayBackend } from './tray/backend';
 import { startNotifications, Notifications } from './notifications';
 import { createShellHelperClient } from './gnome/shellHelper';
 import { startLoftDbusService, type LoftServiceDeps } from './dbus/loftService';
-import { deployGnomeExtension } from './gnome/deploy';
+import { ensureGnomeHelper, defaultHelperInstallDeps } from './gnome/helperInstall';
 import { isGnome, isKde, resolveTrayBackend } from './trayBackend';
 import { createKwinClient, type KwinClient } from './kde/kwin';
 import { startBackgroundStatus } from './gnome/backgroundStatus';
@@ -235,31 +235,15 @@ if (!app.requestSingleInstanceLock()) {
       return new Response(null, { status: 404 });
     });
 
-    // GNOME Shell only loads new extension JS at session start, so (re)deploying
-    // the bundled helper (missing, or an EGO build not newer than ours) requires
-    // telling the user to log out — port of daemon/mod.rs notify_gnome_helper_relogin.
+    // On GNOME, ensure the Shell helper is present. It's no longer bundled: we
+    // install it from extensions.gnome.org on the user's OK (GNOME's own dialog
+    // does the download+install+enable, loading it in-process — no relogin). If
+    // declined or GNOME Shell is unavailable, Loft falls back to the SNI tray.
     if (gnome) {
-      try {
-        const wrote = deployGnomeExtension({
-          dataHome,
-          resourcesDir: join(__dirname, '..', 'assets'),
-          runGnomeExtensionsEnable: () => {
-            try { require('node:child_process').execFileSync('gnome-extensions', ['enable', 'loft-shell-helper-next@loft.chat']); }
-            catch { /* CLI absent or already enabled — best effort */ }
-          },
-        });
-        if (wrote) {
-          void dialog.showMessageBox({
-            type: 'info',
-            title: 'Log out to finish updating Loft',
-            message: 'Log out to finish updating Loft',
-            detail: 'Loft updated its GNOME integration. Log out and back in for window management (show/hide, panel icons) to work correctly.',
-            buttons: ['Got it'],
-          });
-        }
-      } catch (err) {
-        console.error('GNOME helper deploy failed:', err);
-      }
+      await ensureGnomeHelper(defaultHelperInstallDeps({
+        dataHome,
+        resourcesDir: join(__dirname, '..', 'assets'),
+      }));
     }
 
     // One combined "Loft" tray icon for all services — SNI (Stage 3a) or, on
