@@ -9,9 +9,9 @@
 //
 // dbus-next API used here is verified against node_modules/dbus-next@0.10.2:
 // `new dbus.Message({destination,path,interface,member,signature?,body?})`,
-// `bus.call(msg): Promise<Message>` (../gnome/shellHelper.ts).
+// `bus.call(msg): Promise<Message | null>` (../gnome/shellHelper.ts).
 import * as dbus from 'dbus-next';
-import { writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -74,6 +74,8 @@ export function createKwinClient(): KwinClient {
       await call('/Scripting', 'org.kde.kwin.Scripting', 'unloadScript', 's', [plugin]).catch(() => {});
     } catch (e) {
       console.debug(`KWin ${action} failed:`, (e as Error)?.message ?? e);
+    } finally {
+      try { rmSync(path, { force: true }); } catch { /* ignore */ }
     }
   };
 
