@@ -4,8 +4,7 @@
   // them drove a ripgrep/CPU storm during the Electron rewrite build. Reversible.
   "files.watcherExclude": {
     "**/node_modules/**": true,
-    "**/dist/**": true,
-    "**/target/**": true
+    "**/dist/**": true
   },
   "search.exclude": {
     "**/node_modules": true,
