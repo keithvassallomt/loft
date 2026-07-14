@@ -24,6 +24,32 @@
 // a hidden window may not reliably grab focus under KDE focus-stealing prevention —
 // which is exactly what this KWin path fixes).
 
+/**
+ * KWin scripting JS that finds the Loft window whose caption matches `key`
+ * (exact, or "<key> (N)") and shows or hides it. Plasma 6 primary
+ * (workspace.windowList / activeWindow); Plasma 5 fallback (clientList /
+ * activeClient). `key` is JSON-escaped so titles with quotes/spaces are safe.
+ */
+export function buildKwinScript(action: 'show' | 'hide', key: string): string {
+  const k = JSON.stringify(key); // yields a safely-quoted JS string literal
+  const body =
+    action === 'show'
+      ? `w.skipTaskbar = false; w.minimized = false;
+      if ("activeWindow" in workspace) workspace.activeWindow = w; else workspace.activeClient = w;`
+      : `w.skipTaskbar = true; w.minimized = true;`;
+  return `var list = (typeof workspace.windowList === 'function')
+  ? workspace.windowList()
+  : workspace.clientList();
+for (var i = 0; i < list.length; i++) {
+  var w = list[i];
+  if (w.caption === ${k} || w.caption.indexOf(${k} + " (") === 0) {
+    ${body}
+    break;
+  }
+}
+`;
+}
+
 export interface KwinClient {
   focusWindow(key: string): Promise<void>;
   hideWindow(key: string): Promise<void>;
