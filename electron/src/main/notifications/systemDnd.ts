@@ -81,6 +81,7 @@ function kdeDeps(): SystemDndDeps {
           };
           props.on('PropertiesChanged', handler);
           cleanup = () => { try { props.off?.('PropertiesChanged', handler as never); } catch { /* ignore */ } };
+          if (stopped) cleanup(); // stop() fired during async setup — remove the just-registered listener now
         } catch (e) {
           console.debug('KDE system-DND watch unavailable:', (e as Error)?.message ?? e);
         }
