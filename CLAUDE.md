@@ -6,353 +6,194 @@ Linux desktop integration layer for web apps (WhatsApp, Facebook Messenger, Slac
 
 Messaging apps don't provide good desktop apps on Linux. Existing workarounds:
 
-- **Electron wrappers** (e.g. third-party apps): No voice/video calling due to WebRTC issues with Electron's custom Chromium build.
+- **Third-party Electron wrappers** (e.g. Ferdium): historically thought to lack voice/video calling because of WebRTC issues with Electron's Chromium build. Loft's own proof-of-concept disproved that for WhatsApp, Messenger, and Slack — calls, video, and screen-share all work in vanilla Electron. The actual breakage in wrappers like Ferdium was a missing `window.open` handler for call popups, not a fundamental Electron/WebRTC limitation.
 - **PWAs from Chrome**: Full functionality works, but no tray icon and poor system integration.
+
+Loft is a self-contained Electron app that gets the full functionality of a real browser tab (Electron bundles Chromium directly, no separate browser required) plus the desktop integration a bare PWA can't provide — tray icons, badge counts, native notifications, close-to-tray, and GNOME/KDE-specific window management.
 
 ## Architecture
 
-Loft uses **real Chrome** in `--app=` mode with a companion extension and a Rust daemon for system integration. This gives us a chromeless window with full WebRTC/codec support (Chrome handles it natively) while the daemon provides desktop integration Chrome alone cannot.
+Loft is **one Electron application** that hosts every installed service, not a manager plus a fleet of daemons:
 
-There are two layers:
+- **Single-instance lock** (`app.requestSingleInstanceLock()`) — only one Loft process ever runs; a second launch (e.g. `loft --service slack`) is routed to the running instance via the `second-instance` event and argv, then exits.
+- **One app identity**: `app.setAppUserModelId('chat.loft.Loft')`, and the app exports one D-Bus bus name (`chat.loft.Loft`, see below) instead of the old per-service bus names.
+- **One main process** owns everything non-web: the service registry, window/view lifecycle, tray, notifications, D-Bus, config, autostart, and `.desktop` generation. This replaces what used to be a separate daemon per service.
+- **A hub window** (Svelte 5 + Vite renderer) is the manager UI — install/remove services, per-service and global settings, live running/badge status pushed over IPC (no polling).
+- **A frameless `BrowserWindow` per running service**, each with its own titlebar `WebContentsView` (icon + name + zoom controls + close-to-tray) stacked above the service's own `WebContentsView`, which renders the web app **in-process** — Electron's bundled Chromium, not an external browser. The service view is deliberately kept separate from the titlebar view (rather than merged into one window/view) so that a future unified/tabbed window can re-parent the same view objects.
 
-1. **Loft Manager** — minimal Adwaita GUI for installing/uninstalling services
-2. **Per-service daemon** — one instance per installed service, each with its own tray icon, Chrome window, and `.desktop` entry
-
-```
-loft (manager GUI)
-  → Install WhatsApp  → creates .desktop file, registers service
-  → Install Messenger → creates .desktop file, registers service
-
-loft-whatsapp.desktop (or user clicks tray icon)
-  → loft --service whatsapp
-  → daemon instance launches:
-      google-chrome
-        --user-data-dir=~/.local/share/loft/profiles/whatsapp
-        --remote-debugging-pipe   (extension loaded via CDP, see below)
-        --app=https://web.whatsapp.com/
-  → extension ←→ daemon via native messaging
-  → daemon manages: its own SNI tray icon, badge count, show/hide
-```
+There is no separate daemon process, no launching of a real Chrome binary, and no Chrome extension / native-messaging host — sandboxed preloads take over what the extension used to do (see Components below).
 
 ### Components
 
-1. **Loft Manager** — Adwaita GUI (`loft` with no args)
-   - Lists available services (WhatsApp, Messenger, Slack, Telegram, Element, NextCloud Talk)
-   - Install: creates `.desktop` file, registers autostart, sets up native messaging host
-   - Uninstall: removes `.desktop` file, removes autostart, cleans up
-   - Minimal UI — just a list of services with install/uninstall controls
+1. **Hub window** (`src/main/hubWindow.ts`, `src/renderer/hub/` — Svelte 5 + Vite) — the manager UI, opened by `loft` with no `--service` flag (or a second launch with no service and no `--minimized`)
+   - Installed services: icon, name, live running/badge status, Open button, per-service settings (gear)
+   - Available services: not-yet-added services, shown as tiles to Add
+   - Per-service settings: custom URL (Element/Talk), open-on-startup, badges on/off, DND, remove (with an explicit "also delete login data" option)
+   - Global settings: tray backend, start at login, appearance (follows the system theme)
+   - Add/remove writes/removes that service's `.desktop` launcher and (on remove, if requested) deletes its partition data
 
-2. **Service daemon** (`loft --service <name>`) — one per installed service
-   - Spawns/manages its own Chrome process
-   - Provides its own SNI tray icon with badge count (via `ksni`)
-   - Tray menu controls: show/hide window, do not disturb, quit
-   - Communicates with the extension via Chrome native messaging (length-prefixed JSON over stdin/stdout)
-   - Show/hide via GNOME Shell extension D-Bus (GNOME), KWin scripting (KDE), or Chrome extension `chrome.windows.update` (other DEs)
-   - Sends desktop notifications via `org.freedesktop.Notifications` D-Bus with avatar support and click-to-navigate
-   - Exposes D-Bus interface for its service (show/hide, status, notifications)
+2. **Per-service window** (`src/main/serviceWindow.ts`) — one frameless window per running service
+   - Its own titlebar `WebContentsView` (`src/renderer/titlebar/`): service icon + name (+ live unread count), a drag region, zoom-out/zoom-in ("A" glyph buttons, not `+`/`-`) and a close (✕) button
+   - Close (✕) hides the window to the tray — there is no separate minimize button; close *is* hide
+   - Hidden windows stay alive (not destroyed) so badge scraping and notifications keep working in the background; destroyed only on remove-service or app quit
 
-3. **Chrome extension** (unpacked, shared by all services)
-   - Injected into the web app pages
-   - Detects which service it's running in from the page URL
-   - Extracts badge counts / unread message counts from the DOM
-   - Forwards notification metadata to the daemon via native messaging
-   - Declares a native messaging host so Chrome connects it to the daemon
-   - Messenger: removes Facebook navigation banner, fixes CSS (`--header-height`, `top`, `height`) so content fills viewport
-   - Messenger: scrapes DOM for unread conversations and creates `chrome.notifications` (WhatsApp uses Chrome's native notifications)
-   - MAIN world script (`notification-override.js`) wraps `Notification` constructor to suppress Messenger notifications (handled via DOM scraping instead) and gate WhatsApp/Slack/Telegram notifications on DND state
-   - Custom titlebar with show/hide toggle, close-to-tray button, and zoom controls (+/-)
-   - Window bounds persistence via `chrome.storage.local`
-   - Zoom level persistence via `chrome.storage.local` (range 0.3–3.0, step 0.1)
-   - Offscreen document (`offscreen.html`) to keep the service worker alive
+3. **Sandboxed preloads replace the Chrome extension** (`src/preload/service.ts` + `src/preload/badge/`, `src/preload/notify/`, `src/preload/dechrome.ts`)
+   - Each service `WebContentsView` gets its preload with the service id injected directly as a launch argument (`--loft-service=<id>`), not derived from the page's origin — so there's no manifest, no `host_permissions`, and no generated origin-to-service override map. **Self-hosted Element and NextCloud Talk instances just work** by loading the custom URL with the same preload.
+   - Badge scraping (`src/preload/badge/parsers.ts`): per-service DOM/title parsers (WhatsApp `aria-label`, Slack unread channel rows, Element `document.title` `[N]`, NextCloud Talk sums `.counter-bubble__counter`, Telegram/Messenger unread conversation counts), driven by a `MutationObserver` + polling, sent to main via `service:badge` IPC.
+   - Notification interception (`src/preload/notify/`): the service view is `sandbox:true` + `contextIsolation:false`, so its (sandboxed) preload still shares the page's real main world and can `require('electron')` — it wraps `window.Notification` directly and relays to main via IPC instead of Chrome's native-messaging wire format. (`sandbox:true` is load-bearing, not incidental: a same-origin call popup opened via `window.open()` inherits the opener's renderer process, and a `sandbox:false` service view previously made that popup a non-sandboxed WebRTC renderer that crashed on some GPU stacks.) Messenger and Telegram stay DOM-scrape-only (their native notifications are suppressed, not relayed) to avoid duplicates; WhatsApp/Slack/Element/Talk go through the override path. A separate gate wraps `HTMLMediaElement.play` so the web apps' own in-page notification sounds (not just the OS notification) respect DND/focus.
+   - De-chroming (`src/main/dechromeCss.ts`, injected via `webContents.insertCSS`): removes Messenger's navigation banner and Talk's app header/sidebar chrome so the content fills the window.
 
-4. **GNOME Shell extension** (`loft-shell-helper@loft.chat`)
-   - Deployed to `~/.local/share/gnome-shell/extensions/` during service install
-   - D-Bus interface (`chat.loft.ShellHelper`) with methods: `FocusWindow`, `HideWindow`, `RegisterService`, `UnregisterService`, `UpdateBadge`, `UpdateDnd`, `UpdateVisible`, plus combined-icon methods `RegisterCombined`, `UnregisterCombined`, `UpdateCombinedService`, `RemoveCombinedService`
-   - Service identity is data-driven: each service's window class and display name come from the daemon's `RegisterService`/`UpdateCombinedService` calls (no hardcoded service lists), and the window class is derived from the effective launch URL so self-hosted instances match too
-   - Loft ships this helper; the daemon (re)deploys the bundled copy when it's missing or newer than what's installed (compared via `version-name`, never downgrading a newer EGO build) and prompts the user to log out/in, since GNOME loads new extension JS only at session start
-   - Bypasses GNOME's focus-stealing prevention by calling `meta_window.activate()` from inside the compositor
-   - Hides minimized Loft windows from alt-tab (patches `AppSwitcherPopup`), overview (patches `Workspace`), and dock/dash (patches `Shell.AppSystem.get_running`)
-   - Provides native GNOME panel icons with badge counts, DND state, and show/hide controls as an alternative to SNI tray icons
-   - Daemon calls it in parallel with Chrome extension relay — D-Bus is faster, so window is focused before Chrome extension acts
+4. **Tray** (`src/main/tray/`) — a single combined "Loft" icon (there are no more per-service tray icons); left-click opens a menu listing every configured service (each with Show/Hide, per-service DND, Quit) plus a global DND toggle, Settings (opens the hub), and Quit. Two backends, selected by `trayBackend` in config (`auto` | `gnome-panel` | `sni`; `auto` → GNOME panel on GNOME, SNI elsewhere):
+   - **SNI**: hand-rolled `StatusNotifierItem` over `dbus-next` (no native/C dependencies), with unread/DND overlay pixmaps composited at runtime and spawn-retry backoff for `org.kde.StatusNotifierWatcher` at login.
+   - **GNOME panel**: a native panel button rendered by the GNOME Shell helper (below), driven by the same tray model.
 
-5. **`.desktop` files** — one per installed service (e.g. `loft-whatsapp.desktop`, `loft-messenger.desktop`)
-   - Created/removed by the manager during install/uninstall
-   - Each launches `loft --service <name>`
-   - Icons: embedded SVGs + PNGs, deployed at install time
+5. **Notifications** (`src/main/notifications/`) — a hand-rolled `dbus-next` client for `org.freedesktop.Notifications`, kept on a persistent connection (KDE closes notifications when the sender disconnects). Avatars are resolved in the main process via each service's own partition session (`session.fetch(url)`, so authenticated Element/Talk avatars work), cached on disk for about an hour. Clicking a notification (`ActionInvoked`) focuses the service window and navigates to the conversation.
 
-### Per-Service Tray Icon
+6. **GNOME Shell helper** (`gnome-shell-extension/`, UUID `loft-shell-helper@loft.chat`) — unlike the old Rust build, Loft no longer bundles and deploys this extension itself. On GNOME, Loft checks whether the helper is installed (`org.gnome.Shell.Extensions.GetExtensionInfo`) and, if not, prompts the user and installs it **from extensions.gnome.org** via `InstallRemoteExtension` — GNOME's own dialog downloads, installs, and enables it in-process. D-Bus interface (`chat.loft.ShellHelper` at `/chat/loft/ShellHelper`): `FocusWindow`/`HideWindow` (bypasses focus-stealing prevention via `meta_window.activate()`), `SetLoftWindows` (the set of open windows to hide from alt-tab/overview/dock while minimized), and the combined-panel methods (`RegisterCombined`/`UpdateCombinedService`/`UnregisterCombined`). Because every Loft window now shares one app identity (one WM_CLASS), the helper matches windows **by title** (`caption === key || caption.startsWith(key + ' (')`, key = the service's display name) instead of by per-service WM_CLASS. Helper JS changes still only take effect after a GNOME session restart (logout/login on Wayland) — but that's now Keith's/a contributor's concern when updating the extension, not something every end user hits on every Loft update.
 
-Each running service gets its own independent tray icon:
+7. **KWin scripting** (`src/main/kde/kwin.ts`) — the KDE analog of the GNOME helper: drives `org.kde.kwin.Scripting` to focus/hide/skip-taskbar windows, matched the same way, by window caption.
 
-```
-[WhatsApp icon (3)]  ← click to focus WhatsApp window
-  ├─ Show / Hide
-  ├─ Do Not Disturb
-  └─ Quit
-
-[Messenger icon (1)] ← click to focus Messenger window
-  ├─ Show / Hide
-  ├─ Do Not Disturb
-  └─ Quit
-```
-
-#### Tray backend & combined icon
-
-The tray backend is selected by `tray_backend` in `config.toml` (`auto` |
-`gnome-panel` | `sni`; `auto` → GNOME panel icons on GNOME, SNI elsewhere).
-
-Independently, `combine_tray_icons` (default true on GNOME) collapses the
-per-service icons above into a single Loft icon whose menu lists every running
-service. The combined SNI icon runs in a separate process (`loft --tray`,
-`src/combined_tray/`) that owns the `chat.loft.Tray` D-Bus name; each daemon
-registers with it. On GNOME the combined icon is instead a single panel button
-managed by the shell helper (`RegisterCombined`/`UpdateCombinedService`).
+8. **Do Not Disturb** — a notification is shown only when none of: system DND, per-service DND, or "this service is both focused and visible" apply. System DND is detected live: GNOME via the `org.gnome.desktop.notifications` `show-banners` gsetting (negated), KDE via the `Inhibited` property on `org.freedesktop.Notifications` (used directly, not negated).
 
 ### Window Behavior
 
-- **Close (X button)**: Window hides, daemon + tray icon stay alive. Click tray icon to reopen.
-- **Show/Hide**: Tray menu toggle. On GNOME, the daemon calls the GNOME Shell extension via D-Bus (`FocusWindow`/`HideWindow`) which bypasses focus-stealing prevention. On KDE, the daemon uses KWin scripting via D-Bus to focus/hide/skip-taskbar. The Chrome extension relay fires in parallel as a fallback (works on all DEs).
-- **Quit**: Tray menu "Quit" kills both daemon and Chrome process.
-
-### Chrome Launch Details
-
-- **Separate profile per service**: `~/.local/share/loft/profiles/<service>/` (e.g. `profiles/whatsapp/`, `profiles/messenger/`)
-- Extension loaded at runtime via `--remote-debugging-pipe` + CDP `Extensions.loadUnpacked` (branded Chrome 137+ removed `--load-extension`); the daemon drives the CDP pipe on fds 3/4 (`pre_exec` dup2 in the spawn logic)
-- Unpacked-extension loading enabled via `--enable-unsafe-extension-debugging`
-- `--app=<url>` for chromeless window
-- **Window focus**: On GNOME, the daemon calls the GNOME Shell extension via D-Bus (`chat.loft.ShellHelper.FocusWindow`) which uses `meta_window.activate()` — bypasses focus-stealing prevention. On KDE, the daemon uses KWin scripting via D-Bus (`org.kde.kwin.Scripting`) to find and activate windows by WM class. On other DEs, the Chrome extension handles focus via `chrome.windows.update({focused: true})`.
-
-### Native Messaging Protocol
-
-Communication between the extension and daemon uses Chrome's native messaging format: 4-byte little-endian length prefix followed by a UTF-8 JSON message. Every message has a `type` field.
-
-**Extension → Daemon:**
-
-| Type             | Fields                                           | Description                              |
-|------------------|--------------------------------------------------|------------------------------------------|
-| `ready`          | `{ type, service: string }`                      | Extension identified which service it's on (from page URL) |
-| `badge_update`   | `{ type, count: number }`                        | Unread message count changed             |
-| `notification`   | `{ type, title: string, body: string, icon?: string }` | Notification metadata (informational — Chrome shows the actual notification) |
-| `dom_notification` | `{ type, sender: string, body: string, icon?: string, href?: string }` | DOM-scraped notification (Messenger/Slack) with conversation link |
-| `window_hidden`  | `{ type }`                                       | User closed the window (X button); Chrome still alive in background |
-| `window_shown`   | `{ type }`                                       | Window was restored/shown (e.g. via alt-tab) |
-| `window_focused` | `{ type }`                                       | Window gained input focus (used to suppress notifications while focused) |
-| `window_unfocused` | `{ type }`                                     | Window lost input focus |
-| `hide_request`   | `{ type }`                                       | Content script titlebar button requests hide-to-tray |
-| `open_url`       | `{ type, url: string }`                          | Content script requests opening a URL in the default browser |
-
-**Daemon → Extension:**
-
-| Type             | Fields                                           | Description                              |
-|------------------|--------------------------------------------------|------------------------------------------|
-| `dnd_changed`    | `{ type, enabled: boolean }`                     | Do Not Disturb toggled from tray menu    |
-| `hide_window`    | `{ type }`                                       | Hide/minimize the Chrome window          |
-| `show_window`    | `{ type }`                                       | Show/focus the Chrome window             |
-| `titlebar_config`| `{ type, show: boolean }`                        | Toggle titlebar visibility               |
-| `navigate_to_conversation` | `{ type, url: string }`                | Navigate to a specific conversation (on notification click) |
-| `ping`           | `{ type }`                                       | Health check                             |
+- **Close (✕)**: hides the window; the app and tray stay alive. Click its tray/hub entry to reopen.
+- **Show/Hide/Focus**: on GNOME, routed through the Shell helper's `FocusWindow`/`HideWindow` (bypasses focus-stealing prevention); on KDE, through KWin scripting; on other desktops, Loft falls back to Electron's own `window.show()`/`window.hide()`.
+- **Quit**: a per-service Quit (tray submenu or D-Bus `Quit()` on that service's object) destroys just that service's window. Quitting the whole app (tray "Quit Loft" or the root D-Bus `Quit()`) closes every window and exits the process.
 
 ### D-Bus Interface
 
-Each service daemon registers on the session bus:
+Loft exports **one** D-Bus service (not one bus name per service, as in the old Rust build):
 
-- **Bus name**: `chat.loft.<Service>` (e.g., `chat.loft.WhatsApp`, `chat.loft.Messenger`)
-- **Object path**: `/chat/loft/<Service>` (e.g., `/chat/loft/WhatsApp`)
-- **Interface**: `chat.loft.Service`
+- **Bus name**: `chat.loft.Loft`
+- **Root object** `/chat/loft/Loft`, interface `chat.loft.Loft`: `Quit()` (quit the whole app), `ShowHub()` (open/focus the hub window)
+- **Per-service objects**: `/chat/loft/<DbusName>` (display name with whitespace stripped, e.g. `/chat/loft/WhatsApp`, `/chat/loft/NextCloudTalk`), interface `chat.loft.Service`:
 
-| Method              | Signature       | Description                                    |
-|---------------------|-----------------|------------------------------------------------|
-| `Show()`            | `→ ()`          | Show / focus the Chrome window                 |
-| `Hide()`            | `→ ()`          | Hide the Chrome window                         |
-| `Toggle()`          | `→ ()`          | Toggle show/hide                               |
-| `Quit()`            | `→ ()`          | Shut down daemon and Chrome process            |
-| `GetStatus()`       | `→ (bub)`       | Returns `(visible: bool, badge: u32, dnd: bool)` |
-| `SetDnd(b)`         | `(b) → ()`      | Set Do Not Disturb state, persists to config   |
-| `SetShowTitlebar(b)` | `(b) → ()`     | Toggle titlebar visibility, persists to config |
-| `SetBadgesEnabled(b)` | `(b) → ()`    | Enable/disable badge indicator, persists to config |
+| Method                 | Signature   | Description                                          |
+|------------------------|-------------|-------------------------------------------------------|
+| `Show()`               | `→ ()`      | Show / focus the service window                       |
+| `Hide()`               | `→ ()`      | Hide the service window                                |
+| `Toggle()`             | `→ ()`      | Toggle show/hide                                       |
+| `Quit()`               | `→ ()`      | Close this service's window (not the whole app)        |
+| `GetStatus()`          | `→ (bub)`   | Returns `(visible: bool, badge: u32, dnd: bool)`       |
+| `SetDnd(b)`            | `(b) → ()`  | Set per-service Do Not Disturb, persisted to config    |
+| `SetBadgesEnabled(b)`  | `(b) → ()`  | Enable/disable badge indicator, persisted to config    |
 
-### Chrome Detection
-
-Chrome is located by searching in order:
-
-1. `google-chrome` / `google-chrome-stable` on `$PATH`
-2. `/usr/bin/google-chrome-stable`
-3. `/usr/bin/google-chrome`
-4. `/opt/google/chrome/google-chrome`
-5. Flatpak: `com.google.Chrome` (via `flatpak info`)
-6. AppImage: scan `~/Applications/`, `~/.local/bin/` for `*[Cc]hrome*.AppImage`
-
-If none found, prompt the user to install Google Chrome.
-
-User can override with a custom path in settings (power user option).
-
-**Minimum version**: Chrome 137 or later (the CDP-based unpacked-extension loading via `--remote-debugging-pipe` replaced `--load-extension`, which branded Chrome removed in 137).
-
-Only Google Chrome is officially supported (proprietary codecs required for video calling). Other Chromium-based browsers may work but are not guaranteed.
-
-### Error Handling & Resilience
-
-- **Chrome crash / killed externally**: Daemon detects process exit and attempts to respawn Chrome with the same arguments
-- **Chrome not installed**: After exhausting all detection paths (PATH, well-known binaries, AppImage), show a dialog prompting the user to install Google Chrome
-- **Multiple daemon instances**: Each service daemon enforces a singleton — if a second instance is launched for the same service, it sends a `Show()` D-Bus call to the running instance and exits
-
-### Autostart
-
-- Each service controls its own autostart independently
-- User chooses per-service whether to autostart at login
-- Implemented via XDG autostart `.desktop` files
+(`SetShowTitlebar` from the old interface is gone — the titlebar is a structural part of every service window now, not an optional extra.)
 
 ### Supported Apps
 
 | App                | URL                          |
 |--------------------|------------------------------|
 | WhatsApp           | https://web.whatsapp.com/    |
-| Facebook Messenger | https://facebook.com/messages/   |
+| Facebook Messenger | https://www.facebook.com/messages/   |
 | Slack              | https://app.slack.com/client/    |
 | Telegram           | https://web.telegram.org/a/      |
 | Element (Matrix)   | https://app.element.io/      |
-| NextCloud Talk     | self-hosted only (`custom_url`)  |
+| NextCloud Talk     | self-hosted only (`customUrl`)  |
 
-Element is self-hostable, so its per-service config supports a `custom_url`
-(set in the manager's service detail page) to point at a self-hosted Element
-Web instance instead of `app.element.io`. Because Loft deploys its own
-extension, `deploy_extension()` templates the manifest at deploy time — adding
-the custom origin to `host_permissions` + `content_scripts.matches` and writing
-a generated `loft-overrides.js` (`origin → service` map). The custom origin is
-thus a *granted* host permission at load time (no runtime permission prompt),
-and the content script / service worker recognise it as `element` via the map,
-so badge/notification/titlebar integration works on any domain.
+Element is self-hostable, so its per-service config supports a `customUrl` (set on the hub's per-service settings) to point at a self-hosted Element Web instance instead of `app.element.io`. Because Loft no longer ships a Chrome extension with `host_permissions` to template, this "just works" — the preload is handed the service id directly and loads whatever origin the window is pointed at, no manifest/permission scheme involved.
 
-Element specifics: badge count is read from `document.title` (`Element [N]`,
-where N = rooms with unread notifications — matching Element's own favicon),
-not DOM-scraped (Element's room list uses hashed CSS-module classes and is
-virtualized). Notifications use the standard `Notification` API with no focus
-gating, so they flow through the shared `notification-override.js` + daemon
-D-Bus path like Slack/WhatsApp — no Element-specific notification code.
+Element specifics: badge count is read from `document.title` (`[N]`, where N = rooms with unread notifications — matching Element's own favicon), not DOM-scraped (Element's room list uses hashed CSS-module classes and is virtualized). Notifications use the standard `Notification` API with no focus gating beyond the shared DND rule, so they flow through the same override + D-Bus notification path as Slack/WhatsApp — no Element-specific notification code.
 
-NextCloud Talk is **always self-hosted** — there is no central instance, so
-unlike Element its built-in `url`/`chrome_desktop_id` in the service registry
-are placeholders and `custom_url` is effectively *required*. The manager's
-Connection field is the only way to make it work; once set, the daemon derives
-the window class from that URL and `deploy_extension()` templates the manifest
-with its origin (same `loft-overrides.js` `origin → service` mechanism as a
-self-hosted Element). The content script recognises the origin as `talk`.
+NextCloud Talk is **always self-hosted** — there is no central instance, so its registry entry's `url` is a placeholder and `customUrl` is effectively required (set on the hub's per-service settings). Once set, the window loads that origin directly via the same preload used for every other service.
 
-Talk specifics: badge count is **DOM-scraped** (not title-based) — the
-conversation list renders an unread badge per conversation as
-`<div class="counter-bubble__counter">N</div>`; `content.js` sums the numbers
-across all `.counter-bubble__counter` elements (non-numeric/mention bubbles
-count as 1). Notifications flow through the shared `notification-override.js`
-path like Element/Slack, but the avatar needs extra work: NextCloud's
-Notifications app calls `new Notification()` with the *Talk app icon* (the
-spreed logo), never the sender's avatar. So `talkAvatarIcon()` recovers it from
-the conversation list — each row's `.conversation-icon__avatar[title]` holds the
-display name and wraps an `<img>` whose root-relative `/avatar/<name>/64/dark`
-src needs the session cookie — by matching the row whose `title` appears in the
-notification title. `resolveIcon()` then resolves that relative URL and fetches
-it in-page (Talk detected via the `window.OCA.Talk` global), inlining it as a
-`data:` URL since the daemon can't authenticate — same treatment as Element.
+Talk specifics: badge count is **DOM-scraped** (not title-based) — the conversation list renders an unread badge per conversation as `<div class="counter-bubble__counter">N</div>`; the badge parser sums the numbers across all `.counter-bubble__counter` elements (non-numeric/mention bubbles count as 1). Notifications flow through the shared override path like Element/Slack; avatars are resolved in the main process via that service's authenticated partition session (`session.fetch`), the same mechanism used for Element's avatars — there is no more in-page data-URL workaround, since main can now fetch with cookies directly instead of asking the (Chrome-only) extension to do it.
 
-The Talk window is also de-chromed for an app feel (`content.js`, gated on
-`service === "talk"`): NextCloud's global `#header` is hidden and `--header-height`
-zeroed, and `#content`/`#content-vue` are stretched edge-to-edge (no margin,
-full width/height, no border-radius). Because Talk's header is fixed and its
-content is a separate offset container, the Loft titlebar can't use the normal
-`getAppRoot()` shift — it instead translates `<body>` down (a transform makes
-`<body>` the containing block for the fixed header too) while the titlebar host
-is attached to `<html>` so it stays pinned at the viewport top.
+The Talk window is also de-chromed for an app feel (`src/main/dechromeCss.ts`, gated on `service === 'talk'`, injected via `webContents.insertCSS`): NextCloud's global `#header` is hidden and `--header-height` zeroed, and `#content`/`#content-vue` are stretched edge-to-edge (no margin, full width/height, no border-radius). Because this is a real CSS injection into the page rather than the old JS-driven titlebar-shift hack, there's no need for Talk's old `<body>`-transform workaround — the titlebar is a separate view stacked above the page, not injected into it.
 
 ## Tech Stack
 
-- **Language**: Rust (entire application)
-- **GUI**: libadwaita (latest version) via `libadwaita-rs` bindings — manager UI only
-- **Tray icon**: `ksni` (pure Rust SNI D-Bus protocol implementation — no C library dependencies)
-- **D-Bus**: `zbus`
-- **Extension**: JavaScript (Chrome extension manifest v3)
-- **Desktop entries**: XDG `.desktop` files
+- **Language**: TypeScript (entire application — main process, preloads, and renderer)
+- **App runtime**: Electron 43 (bundles Chromium; no external browser dependency)
+- **Hub UI**: Svelte 5 (runes) + Vite
+- **D-Bus**: `dbus-next` (hand-rolled SNI tray, `org.freedesktop.Notifications` client, `chat.loft.Loft` service, GNOME Shell helper/KWin clients — no native/C dependencies)
+- **Packaging**: `electron-builder` (deb/rpm/AppImage) + a hand-written `flatpak-builder` manifest (Flatpak)
+- **Testing**: Vitest (+ jsdom for DOM-dependent logic), `svelte-check` for the hub renderer
 
 ## Logging
 
-Centralised logging for all components (manager, daemons):
-
-- **Log levels**: `trace`, `debug`, `info`, `warn`, `error` — supported from day 1
-- **Default behaviour**: `info` and above written to both stdout and a log file
-- **Verbose mode**: CLI flag (e.g., `--verbose` / `-v`) to also show `debug`/`trace` on stdout
-- **Log file location**: `~/.local/share/loft/logs/` (e.g., `loft.log`, `whatsapp.log`)
+Loft currently logs to stdout/stderr via plain `console.*` calls in the main process — there is no structured log-level system or persistent log file yet. The CLI accepts `--verbose`/`-v`, but nothing currently reads that flag. When run unpackaged (`npm start`) or from a terminal-launched package, output appears in the launching terminal; packaged/autostart launches have no dedicated log file to check.
 
 ## File Layout
 
 ```
-~/.config/loft/                    # XDG_CONFIG_HOME — settings
-  config.toml                      # global config (chrome path override, etc.)
-  services/
-    whatsapp.toml                  # per-service config (autostart, DND, etc.)
-    messenger.toml
-    slack.toml
-    telegram.toml
+~/.config/loft/
+  config.json                      # single JSON file: global settings + services map keyed by service id
+                                    # (customUrl, dnd, badgesEnabled, openOnStartup, window bounds/zoom per service;
+                                    #  trayBackend and globalDnd at the top level)
 
-~/.local/share/loft/               # XDG_DATA_HOME — data
-  profiles/
-    whatsapp/                      # Chrome user-data-dir for WhatsApp
-    messenger/                     # Chrome user-data-dir for Messenger
-    slack/                         # Chrome user-data-dir for Slack
-    telegram/                      # Chrome user-data-dir for Telegram
+~/.config/autostart/
+  chat.loft.Loft.desktop           # one login-autostart entry (launches `loft --minimized`); per-service
+                                    # autostart is a config flag (openOnStartup), not a separate autostart file
+
+~/.local/share/loft/
+  Partitions/
+    whatsapp/                      # Electron session partition (persist:whatsapp) — cookies, storage, cache
+    messenger/                     # replaces the old Chrome --user-data-dir profile per service
+    slack/
+    telegram/
+    element/
+    talk/
   icons/
-    whatsapp.svg                   # embedded icons, deployed at install time
-    messenger.svg
-    slack.svg
-    telegram.svg
-  extension/                       # unpacked Chrome extension
-  logs/
-    loft.log                       # manager log
-    whatsapp.log                   # per-service daemon log
-    messenger.log
-    slack.log
-    telegram.log
+    whatsapp.png                   # per-service PNGs deployed for .desktop entries / tray / notifications
+    messenger.png
+    ...
+  avatars/                         # cached notification avatar images (~1hr TTL)
+
+~/.local/share/applications/
+  loft-whatsapp.desktop            # per-service launcher (`loft --service=whatsapp`), one per installed service
+  loft-messenger.desktop
+  chat.loft.Loft.desktop           # the hub's own launcher, written at first run (dev/AppImage only — deb/rpm/Flatpak ship their own)
 
 ~/.local/share/gnome-shell/extensions/
-  loft-shell-helper@loft.chat/    # GNOME Shell extension (focus/hide, alt-tab hiding)
+  loft-shell-helper@loft.chat/     # GNOME Shell helper — installed from extensions.gnome.org, not bundled/deployed by Loft
 ```
 
 ## Packaging
 
-Loft is distributed as native Linux packages: **RPM**, **DEB**, and **AppImage**.
+Loft is distributed as native Linux packages: **DEB**, **RPM**, and **AppImage**, built with `electron-builder` (`electron-builder.yml`, app id `chat.loft.Loft`).
 
-Loft is also distributed as a **Flatpak** (`chat.loft.Loft`) — both as a standalone `.flatpak` file and on [FriendlyHub](https://friendlyhub.org). Loft requires launching Chrome on the host (for proprietary codecs / WebRTC), which needs `org.freedesktop.Flatpak` (`flatpak-spawn --host`). This is effectively a sandbox escape, so **Flathub** won't accept it — FriendlyHub is used instead.
+Loft is also distributed as a **Flatpak** (`chat.loft.Loft`) — both as a standalone `.flatpak` file and on [FriendlyHub](https://friendlyhub.org) — built from a hand-written from-source `flatpak-builder` manifest (`chat.loft.Loft.yml`) rather than electron-builder's own Flatpak target (which only wraps a prebuilt single-arch binary). Because Loft no longer launches an external Chrome binary — everything renders in-process inside Electron's own sandboxed views — it no longer needs `flatpak-spawn --host`/`org.freedesktop.Flatpak`, the sandbox escape that kept the old Rust build off Flathub. The manifest is Flathub-clean (tight `finish-args`, no `--filesystem=home`), so Flathub is technically viable now, but Loft isn't submitted there — distribution stays FriendlyHub + GitHub Releases, matching the rest of the project.
 
 ## Testing
 
-- **Unit tests**: Core logic — config parsing, Chrome detection, native message serialization/deserialization, service registry
-- **Integration tests**: D-Bus interface (spawn daemon, call methods, verify responses), native messaging round-trips
-- **Manual testing checklist**: Chrome launch/focus, tray icon behaviour, badge count updates, close-to-tray, DND toggle, install/uninstall flow
+- **Unit tests (Vitest)**: config load/save, service registry, badge parsers (per service), CLI arg parsing, `.desktop`/autostart file generation, D-Bus object-path naming, notification gating/avatar caching, tray menu model, GNOME helper install flow, KWin script generation, system-DND detection.
+- **`svelte-check`**: type-checks the hub renderer (`src/renderer/hub/`).
+- **Manual testing checklist**: calls (voice/video/screen-share) per service, badge count updates, close-to-tray, show/hide/focus on GNOME and KDE, notifications with avatars + click-to-navigate, DND (system + per-service + focus), autostart, add/remove service, Flatpak run.
 
 Run tests with:
 
 ```sh
-cargo test
+npm test
 ```
 
 ## Development Rules
 
-- **Always check latest versions**: When adding or referencing any dependency (crate, library, extension API, etc.), look up the current version online. Do not assume version numbers from training data.
+- **Always check latest versions**: When adding or referencing any dependency (npm package, Electron API, extension API, etc.), look up the current version online. Do not assume version numbers from training data.
 
 ## Development
 
-For local iteration and testing, use a **debug build** — it compiles far faster
-and, crucially, uses much less RAM than a release build. Release turns on full
-LLVM optimization, whose optimizer + final link are memory-hungry enough to OOM
-a laptop. Only build `--release` when producing a package to distribute or
-measuring real runtime performance (e.g. video-call smoothness), and ideally
-with bounded parallelism (`cargo build --release -j2`) on a machine with RAM to
-spare.
+Iterate with the plain build/run commands below — they're fast. Only reach for a full packaging build (`npm run dist`, or a Flatpak build) when producing a package to distribute or verifying packaged-only behavior (e.g. AppImage/Flatpak exec-path resolution); it's much slower than a plain build and not needed for day-to-day changes.
+
+The integrated terminal in some editors (e.g. VS Code) exports `ELECTRON_RUN_AS_NODE=1`, which makes `electron .` behave like plain Node instead of launching the app — strip it with `env -u ELECTRON_RUN_AS_NODE` when launching Electron directly.
 
 ```sh
-# Build + run for local testing (fast, low memory)
-cargo build
-./target/debug/loft
-./target/debug/loft --service whatsapp
+# Build + run for local testing
+npm run build
+env -u ELECTRON_RUN_AS_NODE electron .
+env -u ELECTRON_RUN_AS_NODE electron . --service=whatsapp
+env -u ELECTRON_RUN_AS_NODE electron . --service=whatsapp --minimized
 
-# Release build — only for packaging / perf measurement (heavy; OOM risk)
-cargo build --release
-./target/release/loft
+# Equivalent one-shot npm scripts (build + run)
+npm start
+npm run whatsapp   # also: messenger, slack, telegram, element, talk
+
+# Tests and renderer type-checking
+npm test
+npm run check
+
+# Packaging (heavier; only for distribution or packaged-behavior verification)
+npm run dist                 # electron-builder: deb/rpm/AppImage
+flatpak-builder --user --force-clean --repo=.flatpak-repo build-dir chat.loft.Loft.yml
 ```
