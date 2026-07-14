@@ -1,6 +1,6 @@
 {
   "name": "loft",
-  "version": "0.3.0-dev",
+  "version": "1.0.0",
   "description": "Linux desktop integration for messaging web apps",
   "author": "Keith Vassallo <keith@icemalta.com>",
   "homepage": "https://github.com/keithvassallomt/loft",
