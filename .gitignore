@@ -1,14 +1,14 @@
-/target
 /dev
 /dev_local
 
-# Flatpak build artifacts (created by `just build-flatpak` / `just release`)
-/.flatpak-builder/
-/flatpak-build/
-/flatpak-repo/
-/cargo-sources.json
+# Node / Electron build output
+node_modules/
+dist/
+dist-electron/
+*.log
 
-# Flatpak build artifacts (Electron manifest: flatpak-builder + bundle)
+# Flatpak build artifacts (flatpak-builder cache + bundle)
+/.flatpak-builder/
 /build-dir/
 /.flatpak-repo/
 /flatpak-node/

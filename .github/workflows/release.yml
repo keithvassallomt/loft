@@ -24,7 +24,6 @@ jobs:
         run: appstreamcli validate --no-net data/chat.loft.Loft.metainfo.xml
 
       - name: Install, test, build (electron)
-        working-directory: electron
         run: |
           npm ci
           npm test
@@ -32,7 +31,6 @@ jobs:
           npm run build
 
       - name: Package deb/rpm/AppImage
-        working-directory: electron
         run: npx electron-builder --linux deb rpm AppImage
 
       - name: Set up Flatpak runtimes
@@ -53,7 +51,7 @@ jobs:
           name: ${{ github.ref_type == 'tag' && github.ref_name || 'Preview build' }}
           prerelease: ${{ github.ref_type != 'tag' }}
           files: |
-            electron/dist-electron/*.deb
-            electron/dist-electron/*.rpm
-            electron/dist-electron/*.AppImage
+            dist-electron/*.deb
+            dist-electron/*.rpm
+            dist-electron/*.AppImage
             Loft.flatpak

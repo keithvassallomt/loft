@@ -1,8 +1,7 @@
 {
   // Keep VS Code's file watcher and search out of the large node_modules/dist
-  // trees (electron/ and dev_local/electron_test/). Indexing them drove a
-  // ripgrep/CPU storm during the Electron rewrite build. Reversible; safe for
-  // the Rust app too (it has no node_modules).
+  // trees (the build output — node_modules/, dist/ — and dev_local/). Indexing
+  // them drove a ripgrep/CPU storm during the Electron rewrite build. Reversible.
   "files.watcherExclude": {
     "**/node_modules/**": true,
     "**/dist/**": true,

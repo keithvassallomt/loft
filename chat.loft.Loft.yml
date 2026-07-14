@@ -49,7 +49,7 @@ modules:
     build-commands:
       # Clean, reproducible install straight from the offline cache (every npm
       # tarball is seeded into flatpak-node/npm-cache by generated-sources.json).
-      - cd electron && npm ci --offline
+      - npm ci --offline
       # Electron 43 has NO postinstall: its index.js downloads the prebuilt
       # binary lazily on the first `require('electron')`. Nothing in the build
       # below (tsc/esbuild/vite, all with electron marked external) requires
@@ -58,18 +58,18 @@ modules:
       # seeded @electron/get cache ($XDG_CACHE_HOME/electron, populated by
       # generated-sources.json) with no network and unpacks it into
       # node_modules/electron/dist/ (also writing path.txt).
-      - cd electron && node node_modules/electron/install.js
-      - cd electron && npm run build
+      - node node_modules/electron/install.js
+      - npm run build
       # Assemble the app tree that the launcher runs (package.json "main" ->
       # dist/main/index.js; the Electron binary lives in node_modules/electron/dist).
       - mkdir -p /app/main
-      - cp -r electron/dist electron/package.json electron/node_modules /app/main/
+      - cp -r dist package.json node_modules /app/main/
       # zypak launcher, exposed as the `loft` command.
       - install -Dm755 flatpak/loft-launcher.sh /app/bin/loft
       # Desktop integration metadata.
       - install -Dm644 data/chat.loft.Loft.desktop /app/share/applications/chat.loft.Loft.desktop
       - install -Dm644 data/chat.loft.Loft.metainfo.xml /app/share/metainfo/chat.loft.Loft.metainfo.xml
-      - install -Dm644 electron/build/icon.png /app/share/icons/hicolor/512x512/apps/chat.loft.Loft.png
+      - install -Dm644 build/icon.png /app/share/icons/hicolor/512x512/apps/chat.loft.Loft.png
     sources:
       - type: dir
         path: .
@@ -80,7 +80,7 @@ modules:
           - build-dir
           - .flatpak-repo
           - target
-          - electron/node_modules
-          - electron/dist
-          - electron/dist-electron
+          - node_modules
+          - dist
+          - dist-electron
       - flatpak/generated-sources.json
