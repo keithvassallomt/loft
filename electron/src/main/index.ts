@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, protocol, session } from 'electron';
+import { app, dialog, ipcMain, Menu, protocol, session } from 'electron';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -24,6 +24,10 @@ import type { ServicePatch, GlobalPatch } from '../shared/hubTypes';
 
 app.setName('Loft');
 app.setAppUserModelId('chat.loft.Loft');
+// No app menu — the hub is a plain utility window and the service windows are
+// frameless, so the default Electron menu bar is just empty chrome. Removing it
+// app-wide hides the menu bar on the decorated hub window.
+Menu.setApplicationMenu(null);
 
 const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
 app.setPath('userData', join(dataHome, 'loft'));
@@ -431,6 +435,7 @@ if (!app.requestSingleInstanceLock()) {
           saveConfig(configPath(), config);
         },
         quitApp: () => { quitting = true; app.quit(); },
+        showHub: () => hub?.open(),
       };
       await startLoftDbusService(loftDeps);
     } catch (err) {

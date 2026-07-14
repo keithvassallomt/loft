@@ -24,5 +24,6 @@
   .badge { background: var(--accent); color: #fff; border-radius: 999px; padding: 1px 8px; font-size: 0.8em; font-weight: 700; }
   button { border: 0; border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; }
   .primary { background: var(--accent); color: #fff; }
-  .gear { background: transparent; font-size: 1.1em; }
+  .gear { background: transparent; font-size: 1.6em; line-height: 1; padding: 4px 8px; opacity: 0.75; }
+  .gear:hover { opacity: 1; }
 </style>

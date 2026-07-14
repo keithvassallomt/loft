@@ -15,6 +15,8 @@ export interface LoftServiceDeps {
   setDnd(id: string, enabled: boolean): void;
   setBadgesEnabled(id: string, enabled: boolean): void;
   quitApp(): void;
+  /** Open/focus the hub window (the GNOME-panel "Loft Settings…" item calls this). */
+  showHub(): void;
 }
 
 /** Per-service object exported at /chat/loft/<DbusName>, interface chat.loft.Service. */
@@ -46,10 +48,14 @@ LoftServiceObject.configureMembers({
 class LoftRootObject extends Interface {
   constructor(private deps: LoftServiceDeps) { super(BUS); }
   Quit(): void { this.deps.quitApp(); }
+  ShowHub(): void { this.deps.showHub(); }
 }
 LoftRootObject.configureMembers({
   properties: {},
-  methods: { Quit: { inSignature: '', outSignature: '' } },
+  methods: {
+    Quit: { inSignature: '', outSignature: '' },
+    ShowHub: { inSignature: '', outSignature: '' },
+  },
   signals: {},
 });
 

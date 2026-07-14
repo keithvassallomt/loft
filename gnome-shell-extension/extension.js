@@ -781,16 +781,17 @@ export default class LoftShellHelper extends Extension {
 
         const settingsItem = new PopupMenu.PopupMenuItem('Loft Settings\u2026');
         settingsItem.connect('activate', () => {
-            const appInfo = Gio.DesktopAppInfo.new('chat.loft.Loft.desktop')
-                ?? Gio.DesktopAppInfo.new('chat.loft.Manager.desktop');
-            if (appInfo) {
-                try {
-                    appInfo.launch([], null);
-                } catch (e) {
-                    console.error(`Loft: Failed to launch manager: ${e}`);
-                }
-            } else {
-                console.error('Loft: No .desktop file found for manager');
+            // Tell the RUNNING Loft app (which owns chat.loft.Loft) to open its hub
+            // window, via the root object's ShowHub method. This avoids launching a
+            // .desktop file \u2014 which in a dev checkout resolves to a *different* Loft
+            // install and spawns a second process rather than focusing this one.
+            try {
+                Gio.DBus.session.call(
+                    'chat.loft.Loft', '/chat/loft/Loft', 'chat.loft.Loft', 'ShowHub',
+                    null, null, Gio.DBusCallFlags.NO_AUTO_START, -1, null, null
+                );
+            } catch (e) {
+                console.error(`Loft: Failed to open hub: ${e}`);
             }
         });
         menu.addMenuItem(settingsItem);
