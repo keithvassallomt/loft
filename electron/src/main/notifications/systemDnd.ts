@@ -1,4 +1,6 @@
 import { spawn, execFileSync } from 'node:child_process';
+import * as dbus from 'dbus-next';
+import { isGnome, isKde } from '../trayBackend';
 
 const SCHEMA = 'org.gnome.desktop.notifications';
 const KEY = 'show-banners';
@@ -12,55 +14,98 @@ export function parseShowBanners(text: string): boolean | null {
 }
 
 export interface SystemDndDeps {
-  getInitial(): string | null;
-  spawnMonitor(onLine: (line: string) => void): { kill(): void };
+  /** Best-effort synchronous DND snapshot; null if not yet known (async backends). */
+  current(): boolean | null;
+  /** Fires on the initial value (possibly async) AND every change. Returns a stopper. */
+  watch(onChange: (dnd: boolean) => void): { stop(): void };
 }
 
 export interface SystemDndWatcher { current(): boolean; stop(): void }
 
-// Stage 4.5 (KDE): system-DND detection is GNOME-only today (gsettings show-banners).
-// KDE/Plasma has its own notification-inhibition (Do Not Disturb) mechanism — add a
-// `kdeDeps()` alongside gnomeDeps() and select it on Plasma so OS-level DND gates Loft
-// notifications there too. Per-service DND + the focus-gate already work on KDE; only
-// this system-wide auto-detect is missing. Confirm the exact Plasma D-Bus interface at
-// implementation (spec §13 open item), when there is a KDE test environment.
+/** GNOME: gsettings show-banners → DND is the negation (banners off = DND on). */
 function gnomeDeps(): SystemDndDeps {
+  const read = (): boolean | null => {
+    try {
+      const b = parseShowBanners(execFileSync('gsettings', ['get', SCHEMA, KEY], { encoding: 'utf8' }));
+      return b === null ? null : !b;
+    } catch {
+      return null;
+    }
+  };
   return {
-    getInitial() {
-      try {
-        return execFileSync('gsettings', ['get', SCHEMA, KEY], { encoding: 'utf8' });
-      } catch {
-        return null;
-      }
-    },
-    spawnMonitor(onLine) {
+    current: read,
+    watch(onChange) {
       let child: ReturnType<typeof spawn> | null = null;
       try {
         child = spawn('gsettings', ['monitor', SCHEMA, KEY]);
         child.stdout?.setEncoding('utf8');
         child.stdout?.on('data', (chunk: string) => {
-          for (const line of chunk.split('\n')) if (line.trim()) onLine(line);
+          for (const line of chunk.split('\n')) {
+            const b = parseShowBanners(line);
+            if (b !== null) onChange(!b);
+          }
         });
         child.on('error', () => {});
       } catch { /* gsettings missing */ }
-      return { kill: () => child?.kill() };
+      return { stop: () => child?.kill() };
     },
   };
 }
 
+/** KDE/Plasma: the Inhibited property on org.freedesktop.Notifications. DND = Inhibited directly. */
+function kdeDeps(): SystemDndDeps {
+  let cached: boolean | null = null;
+  return {
+    current: () => cached,
+    watch(onChange) {
+      let stopped = false;
+      let cleanup = () => {};
+      void (async () => {
+        try {
+          const bus = dbus.sessionBus();
+          const obj = await bus.getProxyObject('org.freedesktop.Notifications', '/org/freedesktop/Notifications');
+          const props = obj.getInterface('org.freedesktop.DBus.Properties') as unknown as {
+            Get(iface: string, prop: string): Promise<{ value: unknown }>;
+            on(ev: 'PropertiesChanged', cb: (iface: string, changed: Record<string, { value: unknown }>, invalidated: string[]) => void): void;
+            off?(ev: 'PropertiesChanged', cb: (...a: unknown[]) => void): void;
+          };
+          const emit = (v: boolean) => { cached = v; if (!stopped) onChange(v); };
+          try {
+            const variant = await props.Get('org.freedesktop.Notifications', 'Inhibited');
+            emit(Boolean(variant.value));
+          } catch { /* property unavailable */ }
+          const handler = (iface: string, changed: Record<string, { value: unknown }>) => {
+            if (iface !== 'org.freedesktop.Notifications') return;
+            const c = changed['Inhibited'];
+            if (c) emit(Boolean(c.value));
+          };
+          props.on('PropertiesChanged', handler);
+          cleanup = () => { try { props.off?.('PropertiesChanged', handler as never); } catch { /* ignore */ } };
+        } catch (e) {
+          console.debug('KDE system-DND watch unavailable:', (e as Error)?.message ?? e);
+        }
+      })();
+      return { stop: () => { stopped = true; cleanup(); } };
+    },
+  };
+}
+
+const NOOP_DEPS: SystemDndDeps = { current: () => null, watch: () => ({ stop: () => {} }) };
+
+/** Pick the DND backend for the current desktop (KDE → Plasma, GNOME → gsettings, else none). */
+export function defaultSystemDndDeps(env: NodeJS.ProcessEnv): SystemDndDeps {
+  if (isKde(env)) return kdeDeps();
+  if (isGnome(env)) return gnomeDeps();
+  return NOOP_DEPS;
+}
+
 export function watchSystemDnd(
   onChange: (dnd: boolean) => void,
-  deps: SystemDndDeps = gnomeDeps(),
+  deps: SystemDndDeps = defaultSystemDndDeps(process.env),
 ): SystemDndWatcher {
-  const banners = parseShowBanners(deps.getInitial() ?? '');
-  let dnd = banners === null ? false : !banners; // no reading → assume notifications allowed
-
-  const monitor = deps.spawnMonitor((line) => {
-    const b = parseShowBanners(line);
-    if (b === null) return;
-    const next = !b;
-    if (next !== dnd) { dnd = next; onChange(dnd); }
+  let dnd = deps.current() ?? false;
+  const w = deps.watch((next) => {
+    if (next !== dnd) { dnd = next; onChange(next); }
   });
-
-  return { current: () => dnd, stop: () => monitor.kill() };
+  return { current: () => dnd, stop: () => w.stop() };
 }

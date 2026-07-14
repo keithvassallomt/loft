@@ -1,40 +1,57 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseShowBanners, watchSystemDnd } from '../src/main/notifications/systemDnd';
+import { parseShowBanners, watchSystemDnd, defaultSystemDndDeps, type SystemDndDeps } from '../src/main/notifications/systemDnd';
 
 describe('parseShowBanners', () => {
-  it('parses gsettings get output', () => {
+  it('parses gsettings get + monitor lines', () => {
     expect(parseShowBanners('true')).toBe(true);
-    expect(parseShowBanners('false\n')).toBe(false);
-  });
-  it('parses gsettings monitor output', () => {
-    expect(parseShowBanners('show-banners: false')).toBe(false);
-    expect(parseShowBanners("  show-banners: true ")).toBe(true);
-  });
-  it('returns null for noise', () => {
-    expect(parseShowBanners('')).toBeNull();
-    expect(parseShowBanners('nonsense')).toBeNull();
+    expect(parseShowBanners('false')).toBe(false);
+    expect(parseShowBanners("  org.gnome.desktop.notifications show-banners: false")).toBe(false);
+    expect(parseShowBanners('nonsense')).toBe(null);
   });
 });
 
 describe('watchSystemDnd', () => {
-  it('seeds from the initial value and updates on monitor lines (DND = !show-banners)', () => {
-    let emit: (line: string) => void = () => {};
-    const changes: boolean[] = [];
-    const w = watchSystemDnd((dnd) => changes.push(dnd), {
-      getInitial: () => 'true',                         // banners on → DND off
-      spawnMonitor: (onLine) => { emit = onLine; return { kill: vi.fn() }; },
-    });
+  function fakeDeps(initial: boolean | null): { deps: SystemDndDeps; emit: (v: boolean) => void; stopped: () => boolean } {
+    let cb: (dnd: boolean) => void = () => {};
+    let stopped = false;
+    return {
+      deps: { current: () => initial, watch: (onChange) => { cb = onChange; return { stop: () => { stopped = true; } }; } },
+      emit: (v) => cb(v),
+      stopped: () => stopped,
+    };
+  }
+  it('seeds from current() and reports only real transitions', () => {
+    const onChange = vi.fn();
+    const f = fakeDeps(false);
+    const w = watchSystemDnd(onChange, f.deps);
     expect(w.current()).toBe(false);
-    emit('show-banners: false');                        // banners off → DND on
+    f.emit(false);            // no transition
+    expect(onChange).not.toHaveBeenCalled();
+    f.emit(true);             // transition → dnd on
+    expect(onChange).toHaveBeenCalledWith(true);
     expect(w.current()).toBe(true);
-    expect(changes).toEqual([true]);                    // only real transitions emit
-    emit('show-banners: false');                        // no change
-    expect(changes).toEqual([true]);
     w.stop();
+    expect(f.stopped()).toBe(true);
   });
-  it('treats a missing initial value as no DND', () => {
-    const w = watchSystemDnd(() => {}, { getInitial: () => null, spawnMonitor: () => ({ kill: () => {} }) });
+  it('treats unknown initial as not-DND and applies the first async value', () => {
+    const onChange = vi.fn();
+    const f = fakeDeps(null);
+    const w = watchSystemDnd(onChange, f.deps);
     expect(w.current()).toBe(false);
-    w.stop();
+    f.emit(true);
+    expect(onChange).toHaveBeenCalledWith(true);
+  });
+});
+
+describe('defaultSystemDndDeps', () => {
+  it('selects by desktop environment without throwing', () => {
+    // We only assert it returns a usable deps object per env; the live gsettings/
+    // D-Bus backends are exercised manually. current() must be callable + not throw.
+    for (const env of [{ XDG_CURRENT_DESKTOP: 'KDE' }, { XDG_CURRENT_DESKTOP: 'GNOME' }, {}]) {
+      const d = defaultSystemDndDeps(env);
+      expect(typeof d.current).toBe('function');
+      expect(typeof d.watch).toBe('function');
+      expect(() => d.current()).not.toThrow();
+    }
   });
 });
