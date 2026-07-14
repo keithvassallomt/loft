@@ -55,10 +55,10 @@ function serviceIconData(id: string): number[] | null {
  * Layout:
  *   ☑ Do Not Disturb (all)            (global:dnd)
  *   ──────────
- *   <Service> [•]                     (svc:<id>:toggle → show/hide)
- *   Do Not Disturb ☑                  (svc:<id>:dnd)
- *   Quit                              (svc:<id>:quit → stop the service)
- *   …one group per running service…
+ *   <Service> [•] ▸                   (submenu, one per running service)
+ *       Show / Hide                   (svc:<id>:toggle)
+ *       Do Not Disturb ☑              (svc:<id>:dnd)
+ *       Quit                          (svc:<id>:quit → stop the service)
  *   ──────────                        (only if any available)
  *   <Service>                         (svc:<id>:launch)
  *   ──────────
@@ -236,16 +236,24 @@ function buildTree(
   );
   children.push(separator());
 
-  // Running services: the service row toggles show/hide; DND + Quit sit under it.
+  // Running services: the service name is a SUBMENU whose children are that
+  // service's actions (Show/Hide, Do Not Disturb, Quit). A submenu parent has no
+  // click action of its own (clicking it opens the submenu), so the former
+  // click-the-row-to-show/hide moved into the submenu as an explicit Show/Hide.
   for (const s of model.running) {
-    children.push(item(s.unread ? `${s.label} •` : s.label, `svc:${s.id}:toggle`, svcIcon(s.id)));
-    children.push(
+    const svc = item(s.unread ? `${s.label} •` : s.label, undefined, {
+      ...svcIcon(s.id),
+      'children-display': V('s', 'submenu'),
+    });
+    svc.children.push(
+      item(s.visible ? 'Hide' : 'Show', `svc:${s.id}:toggle`),
       item('Do Not Disturb', `svc:${s.id}:dnd`, {
         ...toggle(s.dnd),
         'icon-name': V('s', 'notifications-disabled-symbolic'),
       }),
+      item('Quit', `svc:${s.id}:quit`, { 'icon-name': V('s', 'window-close-symbolic') }),
     );
-    children.push(item('Quit', `svc:${s.id}:quit`, { 'icon-name': V('s', 'window-close-symbolic') }));
+    children.push(svc);
   }
 
   // Configured-but-not-running services: click launches them.
