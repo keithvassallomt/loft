@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - YYYY-MM-DD
+
+### Changed
+
+- Loft is now a single self-contained application and no longer launches or depends on a separate Google Chrome installation. Voice and video calling, tray icons, badges, notifications, and close-to-tray all work as before, with improved GNOME and KDE Plasma integration.
+- The GNOME Shell helper is now installed from extensions.gnome.org on request (Loft asks first) instead of being bundled, so it updates independently of the app and no longer requires logging out to finish an update.
+
+### Note
+
+- **You'll need to sign in to each service again after upgrading.** Logins were previously stored in Chrome's profile; Loft now keeps its own per-service sessions.
+
 ## [0.2.0] - 2026-06-15
 
 ### Added
