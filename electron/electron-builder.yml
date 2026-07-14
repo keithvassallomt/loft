@@ -1,0 +1,17 @@
+appId: chat.loft.Loft
+productName: Loft
+copyright: Copyright © 2026 Keith Vassallo
+directories:
+  output: dist-electron
+  buildResources: build
+files:
+  - dist/**
+  - package.json
+linux:
+  target:
+    - deb
+    - AppImage
+  category: Network
+  icon: build/icon.png
+  maintainer: Keith Vassallo <keith@icemalta.com>
+  synopsis: Desktop integration for messaging web apps on Linux

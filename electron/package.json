@@ -2,6 +2,8 @@
   "name": "loft",
   "version": "0.3.0-dev",
   "description": "Linux desktop integration for messaging web apps",
+  "author": "Keith Vassallo <keith@icemalta.com>",
+  "homepage": "https://github.com/keithvassallomt/loft",
   "license": "GPL-3.0-or-later",
   "main": "dist/main/index.js",
   "scripts": {
@@ -11,6 +13,7 @@
     "bundle-renderer": "vite build",
     "copy-assets": "mkdir -p dist/renderer/titlebar dist/assets/icons && cp src/renderer/titlebar/index.html src/renderer/titlebar/titlebar.css dist/renderer/titlebar/ && cp assets/loft.png dist/assets/ && cp assets/icons/*.png dist/assets/icons/ && mkdir -p dist/assets/gnome-shell-extension/icons && cp ../gnome-shell-extension/metadata.json ../gnome-shell-extension/extension.js dist/assets/gnome-shell-extension/ && cp ../gnome-shell-extension/icons/show-window-symbolic.svg ../gnome-shell-extension/icons/hide-window-symbolic.svg dist/assets/gnome-shell-extension/icons/ && cp ../assets/icons/loft-symbolic.svg dist/assets/loft-symbolic.svg",
     "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
+    "dist": "npm run build && electron-builder --linux",
     "whatsapp": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=whatsapp",
     "messenger": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=messenger",
     "slack": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=slack",
@@ -28,15 +31,16 @@
     "@types/jsdom": "^21.1.7",
     "@types/node": "^22.20.1",
     "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.28.1",
     "jsdom": "^25.0.1",
+    "svelte": "^5.56.4",
     "svelte-check": "^4.7.2",
     "typescript": "~5.9",
     "vite": "^8.1.4",
     "vitest": "^4.1.10"
   },
   "dependencies": {
-    "dbus-next": "^0.10.2",
-    "svelte": "^5.56.4"
+    "dbus-next": "^0.10.2"
   }
 }
