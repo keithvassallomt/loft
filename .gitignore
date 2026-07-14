@@ -7,3 +7,9 @@
 /flatpak-build/
 /flatpak-repo/
 /cargo-sources.json
+
+# Flatpak build artifacts (Electron manifest: flatpak-builder + bundle)
+/build-dir/
+/.flatpak-repo/
+/flatpak-node/
+*.flatpak

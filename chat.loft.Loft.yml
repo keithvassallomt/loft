@@ -1,43 +1,86 @@
 app-id: chat.loft.Loft
-runtime: org.gnome.Platform
-runtime-version: '50'
-sdk: org.gnome.Sdk
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+base: org.electronjs.Electron2.BaseApp
+base-version: '24.08'
 sdk-extensions:
-  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.node22
 command: loft
 
 finish-args:
+  # Display / GPU / IPC — Electron + Chromium.
   - --share=ipc
   - --socket=fallback-x11
   - --socket=wayland
   - --device=dri
+  # The messaging web apps need the network.
   - --share=network
+  # Tray icons (SNI), KDE window control, and desktop notifications.
   - --talk-name=org.kde.StatusNotifierWatcher
   - --talk-name=org.kde.KWin
   - --talk-name=org.freedesktop.Notifications
-  - --own-name=chat.loft.*
-  - --talk-name=org.freedesktop.Flatpak
+  # GNOME Shell extension helper (install via EGO + drive FocusWindow/HideWindow).
+  - --talk-name=org.gnome.Shell.Extensions
+  # XDG portals (file chooser, open-uri, screencast for screen sharing).
   - --talk-name=org.freedesktop.portal.Desktop
-  - --talk-name=org.gnome.SessionManager
-  - --filesystem=home
+  # Per-service D-Bus names (chat.loft.WhatsApp, chat.loft.Tray, …).
+  - --own-name=chat.loft.*
+  # Autostart .desktop files and per-service launcher .desktop files.
+  - --filesystem=xdg-config/autostart:create
+  - --filesystem=xdg-data/applications:create
 
 build-options:
-  append-path: /usr/lib/sdk/rust-stable/bin
+  append-path: /usr/lib/sdk/node22/bin
   env:
-    CARGO_HOME: /run/build/loft/cargo
-    CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+    npm_config_nodedir: /usr/lib/sdk/node22
 
 modules:
   - name: loft
     buildsystem: simple
+    build-options:
+      env:
+        # flatpak-node-generator lays the offline caches under the build root:
+        #   flatpak-node/npm-cache  -> npm's _cacache (registry tarballs)
+        #   flatpak-node/cache      -> XDG cache (electron zip, node-gyp headers, esbuild)
+        XDG_CACHE_HOME: /run/build/loft/flatpak-node/cache
+        npm_config_cache: /run/build/loft/flatpak-node/npm-cache
+        npm_config_offline: 'true'
     build-commands:
-      - cargo --offline fetch --manifest-path Cargo.toml --verbose
-      - cargo --offline build --release --verbose
-      - install -Dm755 target/release/loft /app/bin/loft
+      # Clean, reproducible install straight from the offline cache (every npm
+      # tarball is seeded into flatpak-node/npm-cache by generated-sources.json).
+      - cd electron && npm ci --offline
+      # Electron 43 has NO postinstall: its index.js downloads the prebuilt
+      # binary lazily on the first `require('electron')`. Nothing in the build
+      # below (tsc/esbuild/vite, all with electron marked external) requires
+      # electron, so npm ci alone never materialises the binary. Run the
+      # installer explicitly: it resolves electron-v43…-linux-<arch>.zip from the
+      # seeded @electron/get cache ($XDG_CACHE_HOME/electron, populated by
+      # generated-sources.json) with no network and unpacks it into
+      # node_modules/electron/dist/ (also writing path.txt).
+      - cd electron && node node_modules/electron/install.js
+      - cd electron && npm run build
+      # Assemble the app tree that the launcher runs (package.json "main" ->
+      # dist/main/index.js; the Electron binary lives in node_modules/electron/dist).
+      - mkdir -p /app/main
+      - cp -r electron/dist electron/package.json electron/node_modules /app/main/
+      # zypak launcher, exposed as the `loft` command.
+      - install -Dm755 flatpak/loft-launcher.sh /app/bin/loft
+      # Desktop integration metadata.
       - install -Dm644 data/chat.loft.Loft.desktop /app/share/applications/chat.loft.Loft.desktop
       - install -Dm644 data/chat.loft.Loft.metainfo.xml /app/share/metainfo/chat.loft.Loft.metainfo.xml
-      - install -Dm644 assets/icons/loft.svg /app/share/icons/hicolor/scalable/apps/chat.loft.Loft.svg
+      - install -Dm644 electron/build/icon.png /app/share/icons/hicolor/512x512/apps/chat.loft.Loft.png
     sources:
       - type: dir
         path: .
-      - cargo-sources.json
+        # Force a clean offline install and keep the copy small: skip VCS,
+        # local build artifacts, and any host-built node_modules/dist.
+        skip:
+          - .git
+          - build-dir
+          - .flatpak-repo
+          - target
+          - electron/node_modules
+          - electron/dist
+          - electron/dist-electron
+      - flatpak/generated-sources.json
