@@ -79,8 +79,8 @@ grep, excluding false positives like `dbus-next`, `nextId`, `nextNode`, `nextBac
   libcrypt.so.1 issue seen in Stage 4.5 — CI on ubuntu-latest is the build path; local is best-effort.)
 - Installed layout (electron-builder default): app under `/opt/Loft/`, `loft` binary + a `/usr/bin/loft`
   wrapper. `process.execPath` inside a packaged run is `/opt/Loft/loft` (stable) — see §7.
-- `package.json` `version`: **0.3.0-dev → 0.3.0** (the first Electron release; Rust was 0.2.0, user-facing
-  continuity).
+- `package.json` `version`: **0.3.0-dev → 1.0.0** (the first Electron release; graduates out of 0.x — the
+  rewrite reaching parity + KDE + real distribution is the 1.0 milestone). Rust was 0.2.0.
 
 ## 5. GNOME helper via EGO everywhere — remove bundle-deploy
 
@@ -196,8 +196,11 @@ Adapt the existing Rust-era `chat.loft.Loft.yml` at repo root into an Electron m
   Slack, Telegram, Element, NextCloud Talk) in its own integrated window with voice/video calling, tray
   icons, badge counts, notifications, and close-to-tray, integrated with GNOME and KDE. No mention of
   Chrome/Electron internals.
-- Add a `<release version="0.3.0" date="YYYY-MM-DD">` entry (date stamped at release) summarising the
-  rewrite in user-facing terms.
+- Add a `<release version="1.0.0" date="YYYY-MM-DD">` entry (date stamped at release) summarising the
+  rewrite in user-facing terms. **Include the one-time migration note**: sessions don't carry over from
+  0.2.x — the Rust version stored logins in Chrome `--user-data-dir` profiles, the Electron version uses
+  its own `Partitions/`, so users **re-login to each service once** after upgrading. Mirror this in
+  `CHANGELOG.md`.
 - **Screenshots** currently point at `data/screenshots/*.png` (Rust-UI). Refresh to the new Svelte hub —
   Keith supplies updated PNGs, or we reuse the existing ones as placeholders (the manager still shows a
   service list). Flag, don't block.
@@ -236,7 +239,8 @@ generalise the existing file):
   - **Fedora GNOME (native rpm), replacing production:** install the rpm over the running Rust Loft; hub
     opens; EGO install-prompt appears if the canonical helper isn't the active one; window show/hide/focus,
     panel icons, badges, DND, notifications, a voice/video call, autostart toggle, per-service launchers all
-    work — and it is an in-place replacement (no duplicate app/extension).
+    work — and it is an in-place replacement (no duplicate app/extension). Confirm the one-time
+    **re-login** per service (fresh `Partitions/`) works cleanly and sessions persist thereafter.
   - **Kubuntu KDE (deb + standalone .flatpak):** SNI tray + badge; KWin focus/hide; DND (per-service +
     Plasma system); notifications with avatars + click-to-navigate; a call; add/remove/gear from the hub;
     second-launch behaviour; autostart. Flatpak: same, plus confirming the tight sandbox works and
