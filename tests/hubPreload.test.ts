@@ -12,7 +12,7 @@ import { buildBridge } from '../src/preload/hub';
 
 function mockIpc() {
   return {
-    invoke: vi.fn().mockResolvedValue({ services: [], globals: { trayBackend: 'auto', startAtLogin: false } }),
+    invoke: vi.fn().mockResolvedValue({ services: [], globals: { trayBackend: 'auto', autostartBlocked: false } }),
     send: vi.fn(),
     on: vi.fn(),
     removeListener: vi.fn(),
@@ -33,14 +33,14 @@ describe('hub preload bridge', () => {
     b.addService('talk', 'https://cloud.example.com/apps/spreed/');
     b.removeService('slack', true);
     b.setServiceSetting('slack', { dnd: true });
-    b.setGlobal({ startAtLogin: true });
+    b.setGlobal({ trayBackend: 'sni' });
     b.recoverService('slack', { clearCaches: true });
     b.quit();
     expect(ipc.send).toHaveBeenCalledWith('hub:openService', 'slack');
     expect(ipc.send).toHaveBeenCalledWith('hub:addService', { id: 'talk', customUrl: 'https://cloud.example.com/apps/spreed/' });
     expect(ipc.send).toHaveBeenCalledWith('hub:removeService', { id: 'slack', deleteData: true });
     expect(ipc.send).toHaveBeenCalledWith('hub:setServiceSetting', { id: 'slack', patch: { dnd: true } });
-    expect(ipc.send).toHaveBeenCalledWith('hub:setGlobal', { startAtLogin: true });
+    expect(ipc.send).toHaveBeenCalledWith('hub:setGlobal', { trayBackend: 'sni' });
     expect(ipc.send).toHaveBeenCalledWith('hub:recoverService', { id: 'slack', opts: { clearCaches: true } });
     expect(ipc.send).toHaveBeenCalledWith('hub:quit');
   });
@@ -52,7 +52,7 @@ describe('hub preload bridge', () => {
     expect(ipc.on).toHaveBeenCalledWith('hub:state', expect.any(Function));
     // simulate a push
     const handler = ipc.on.mock.calls[0][1] as (e: unknown, s: unknown) => void;
-    handler({}, { services: [], globals: { trayBackend: 'auto', startAtLogin: false } });
+    handler({}, { services: [], globals: { trayBackend: 'auto', autostartBlocked: false } });
     expect(cb).toHaveBeenCalledOnce();
     off();
     expect(ipc.removeListener).toHaveBeenCalledWith('hub:state', expect.any(Function));

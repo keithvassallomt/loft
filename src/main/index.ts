@@ -19,7 +19,7 @@ import { startBackgroundStatus } from './gnome/backgroundStatus';
 import { createHub, type HubDeps } from './hubWindow';
 import { buildHubState } from './hubState';
 import { addService, removeService } from './install';
-import { setAutostart, isAutostartEnabled } from './autostart';
+import { syncAutostart, isAutostartEnabled, wantsAutostart } from './autostart';
 import { ensureHubDesktopEntry } from './desktop';
 import { iconsDir } from './paths';
 import type { ServicePatch, GlobalPatch, RecoverOpts } from '../shared/hubTypes';
@@ -169,6 +169,12 @@ function setGlobalDnd(enabled: boolean): void {
   saveConfig(configPath(), config);
   tray?.setGlobalDnd(enabled);
   hub?.notifyChanged();
+}
+
+// Autostart is derived, not a setting: the entry exists iff some service asked to
+// open at login. Called after anything that can change that answer.
+function reconcileAutostart(): void {
+  void syncAutostart(wantsAutostart(config.services), { execPath: process.execPath, iconSourceDir });
 }
 
 function resolveServiceFromArgs(argv: string[]): ServiceDef | undefined {
@@ -350,19 +356,21 @@ if (!app.requestSingleInstanceLock()) {
         visible: (id) => windows.get(id)?.window.isVisible() ?? false,
         badge: (id) => currentBadge.get(id) ?? 0,
         trayBackend: config.trayBackend ?? 'auto',
-        startAtLogin: isAutostartEnabled(),
+        autostartBlocked: wantsAutostart(config.services) && !isAutostartEnabled(),
       }),
       openService: (id) => { const d = getService(id); if (d) openService(d, false); },
       addService: (id, customUrl) => {
         const d = getService(id); if (!d) return;
         addService(d, config, { execPath: process.execPath, iconSourceDir, customUrl });
         saveConfig(configPath(), config);
+        reconcileAutostart();
       },
       removeService: (id, deleteData) => {
         const d = getService(id); if (!d) return;
         quitService(id); // tear down a running window first
         removeService(d, config, deleteData);
         saveConfig(configPath(), config);
+        reconcileAutostart();
       },
       setServiceSetting: (id, patch: ServicePatch) => {
         config.services[id] = { ...config.services[id], ...patch };
@@ -380,10 +388,10 @@ if (!app.requestSingleInstanceLock()) {
           const d = getService(id); const sw = windows.get(id);
           if (d && sw) sw.loadUrl(effectiveUrl(d, patch.customUrl || undefined));
         }
+        if (patch.openOnStartup !== undefined) reconcileAutostart();
       },
       setGlobal: (patch: GlobalPatch) => {
         if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; saveConfig(configPath(), config); }
-        if (patch.startAtLogin !== undefined) setAutostart(patch.startAtLogin, { execPath: process.execPath, iconSourceDir });
       },
       recoverService: (id, opts) => {
         const sw = windows.get(id);
@@ -413,6 +421,10 @@ if (!app.requestSingleInstanceLock()) {
       for (const id of Object.keys(config.services)) {
         if (config.services[id]?.openOnStartup) { const d = getService(id); if (d) openService(d, true); }
       }
+      // Self-heal installs whose entry doesn't match their flags (e.g. upgrades from
+      // the old global-toggle model, or a hand-deleted entry). Gated on out-of-sync so
+      // a granted permission is never re-requested at every login.
+      if (wantsAutostart(config.services) !== isAutostartEnabled()) reconcileAutostart();
       if (!args.minimized) hub!.open();
     }
 

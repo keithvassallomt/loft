@@ -31,7 +31,7 @@ import { createHub, type HubDeps } from '../src/main/hubWindow';
 
 function deps(over: Partial<HubDeps> = {}): HubDeps {
   return {
-    buildState: () => ({ services: [], globals: { trayBackend: 'auto', startAtLogin: false } }),
+    buildState: () => ({ services: [], globals: { trayBackend: 'auto', autostartBlocked: false } }),
     openService: vi.fn(), addService: vi.fn(), removeService: vi.fn(),
     setServiceSetting: vi.fn(), setGlobal: vi.fn(), recoverService: vi.fn(), quitApp: vi.fn(),
     preloadPath: '/p', htmlPath: '/h', iconPath: '/i',
@@ -45,7 +45,7 @@ describe('createHub', () => {
   it('getState handler returns buildState()', async () => {
     createHub(deps());
     const state = await handlers.get('hub:getState')!();
-    expect(state).toEqual({ services: [], globals: { trayBackend: 'auto', startAtLogin: false } });
+    expect(state).toEqual({ services: [], globals: { trayBackend: 'auto', autostartBlocked: false } });
   });
 
   it('openService listener dispatches to the dep', () => {
