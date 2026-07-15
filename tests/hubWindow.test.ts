@@ -33,7 +33,7 @@ function deps(over: Partial<HubDeps> = {}): HubDeps {
   return {
     buildState: () => ({ services: [], globals: { trayBackend: 'auto', startAtLogin: false } }),
     openService: vi.fn(), addService: vi.fn(), removeService: vi.fn(),
-    setServiceSetting: vi.fn(), setGlobal: vi.fn(), quitApp: vi.fn(),
+    setServiceSetting: vi.fn(), setGlobal: vi.fn(), recoverService: vi.fn(), quitApp: vi.fn(),
     preloadPath: '/p', htmlPath: '/h', iconPath: '/i',
     ...over,
   };
@@ -60,6 +60,13 @@ describe('createHub', () => {
     createHub(deps({ addService }));
     listeners.get('hub:addService')!({}, { id: 'talk', customUrl: 'https://x' });
     expect(addService).toHaveBeenCalledWith('talk', 'https://x');
+  });
+
+  it('recoverService dispatches id + opts', () => {
+    const recoverService = vi.fn();
+    createHub(deps({ recoverService }));
+    listeners.get('hub:recoverService')!({}, { id: 'slack', opts: { clearCaches: true } });
+    expect(recoverService).toHaveBeenCalledWith('slack', { clearCaches: true });
   });
 
   it('open() then notifyChanged() pushes hub:state', () => {

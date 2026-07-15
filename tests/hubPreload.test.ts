@@ -34,12 +34,14 @@ describe('hub preload bridge', () => {
     b.removeService('slack', true);
     b.setServiceSetting('slack', { dnd: true });
     b.setGlobal({ startAtLogin: true });
+    b.recoverService('slack', { clearCaches: true });
     b.quit();
     expect(ipc.send).toHaveBeenCalledWith('hub:openService', 'slack');
     expect(ipc.send).toHaveBeenCalledWith('hub:addService', { id: 'talk', customUrl: 'https://cloud.example.com/apps/spreed/' });
     expect(ipc.send).toHaveBeenCalledWith('hub:removeService', { id: 'slack', deleteData: true });
     expect(ipc.send).toHaveBeenCalledWith('hub:setServiceSetting', { id: 'slack', patch: { dnd: true } });
     expect(ipc.send).toHaveBeenCalledWith('hub:setGlobal', { startAtLogin: true });
+    expect(ipc.send).toHaveBeenCalledWith('hub:recoverService', { id: 'slack', opts: { clearCaches: true } });
     expect(ipc.send).toHaveBeenCalledWith('hub:quit');
   });
 
