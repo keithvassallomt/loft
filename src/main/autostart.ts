@@ -1,5 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ServiceConfig } from './config';
 import { autostartDir, iconsDir } from './paths';
 import { desktopExec } from './desktop';
 
@@ -44,4 +45,13 @@ export function setAutostart(
   } else if (existsSync(path)) {
     rmSync(path, { force: true });
   }
+}
+
+/**
+ * The desired autostart state, derived from config — there is no separate
+ * "start at login" setting. Loft autostarts iff at least one service asked to
+ * open at login; the per-service flags are the single source of truth.
+ */
+export function wantsAutostart(services: Record<string, ServiceConfig | undefined>): boolean {
+  return Object.values(services).some((s) => s?.openOnStartup === true);
 }

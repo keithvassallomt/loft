@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { autostartContent, setAutostart, isAutostartEnabled } from '../src/main/autostart';
+import { autostartContent, setAutostart, isAutostartEnabled, wantsAutostart } from '../src/main/autostart';
 
 const tmps: string[] = [];
 function tmp(): string { const d = mkdtempSync(join(tmpdir(), 'loft-as-')); tmps.push(d); return d; }
@@ -39,5 +39,18 @@ describe('autostart', () => {
     writeFileSync(join(src, 'loft.png'), 'PNG');
     setAutostart(true, { env, execPath: '/usr/bin/loft', iconSourceDir: src });
     expect(existsSync(join(dataH, 'loft', 'icons', 'loft.png'))).toBe(true);
+  });
+  it('wantsAutostart is false with no services and no flags', () => {
+    expect(wantsAutostart({})).toBe(false);
+    expect(wantsAutostart({ slack: {} })).toBe(false);
+    expect(wantsAutostart({ slack: { openOnStartup: false } })).toBe(false);
+  });
+  it('wantsAutostart is true when any service opts in', () => {
+    expect(wantsAutostart({ slack: { openOnStartup: true } })).toBe(true);
+    expect(wantsAutostart({ slack: { openOnStartup: false }, whatsapp: { openOnStartup: true } })).toBe(true);
+    expect(wantsAutostart({ a: { openOnStartup: true }, b: { openOnStartup: true } })).toBe(true);
+  });
+  it('wantsAutostart tolerates undefined entries', () => {
+    expect(wantsAutostart({ slack: undefined })).toBe(false);
   });
 });
