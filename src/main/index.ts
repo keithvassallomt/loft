@@ -387,6 +387,9 @@ if (!app.requestSingleInstanceLock()) {
       },
       recoverService: (id, opts) => {
         const sw = windows.get(id);
+        // clearCaches:false with no running window (sw undefined) is a deliberate
+        // no-op: there's nothing to reload and nothing to clear. Unreachable today
+        // (the hub only ever sends true), kept for API completeness.
         if (!opts.clearCaches) { sw?.reload(); return; }
         // Works whether or not the service is running: with no window we still clear,
         // so the next launch loads clean.

@@ -200,8 +200,11 @@ export function createServiceWindow(
     if (!recoveryView) return;
     const view = recoveryView;
     recoveryView = undefined;
-    window.contentView.removeChildView(view);
-    view.webContents.close();
+    // The window (and this view's webContents) may already be gone by the time
+    // this runs — e.g. quit/remove-service landing during clearAndReload's await,
+    // or a late did-navigate firing after quit. Never throw from a window action.
+    if (!window.isDestroyed()) window.contentView.removeChildView(view);
+    if (!view.webContents.isDestroyed()) view.webContents.close();
   };
 
   const watcher = createStuckWatcher({
@@ -213,7 +216,10 @@ export function createServiceWindow(
     clearTimer: (h) => clearTimeout(h as NodeJS.Timeout),
   });
   serviceView.webContents.on('did-navigate', (_e, url) => watcher.navigated(url));
-  window.on('closed', () => watcher.dispose());
+  // Safe only because hideRecovery guards on isDestroyed() above — 'closed' fires
+  // after the window (and this view, since win.destroy() doesn't tear down child
+  // WebContentsView webContents on its own) is already destroyed.
+  window.on('closed', () => { watcher.dispose(); hideRecovery(); });
 
   // Single choke point for real navigations: hides a stale overlay and re-arms
   // stuck detection so no navigation path (initial load, customUrl change, ...)
