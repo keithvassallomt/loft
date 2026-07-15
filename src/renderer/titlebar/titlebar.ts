@@ -1,3 +1,4 @@
+document.getElementById('reload')!.addEventListener('click', () => window.loft.reload());
 document.getElementById('zoom-in')!.addEventListener('click', () => window.loft.zoomIn());
 document.getElementById('zoom-out')!.addEventListener('click', () => window.loft.zoomOut());
 document.getElementById('close')!.addEventListener('click', () => window.loft.close());

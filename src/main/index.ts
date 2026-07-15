@@ -198,6 +198,7 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on('titlebar:zoom-in', (e) => findBySenderId(e.sender.id)?.setZoom(+0.1));
   ipcMain.on('titlebar:zoom-out', (e) => findBySenderId(e.sender.id)?.setZoom(-0.1));
   ipcMain.on('titlebar:close', (e) => findBySenderId(e.sender.id)?.hide());
+  ipcMain.on('titlebar:reload', (e) => findBySenderId(e.sender.id)?.reload());
   ipcMain.on('recovery:reload', (e) => findBySenderId(e.sender.id)?.reload());
   ipcMain.on('recovery:clear-and-reload', (e) => { void findBySenderId(e.sender.id)?.clearAndReload(); });
 

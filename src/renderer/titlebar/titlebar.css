@@ -16,6 +16,7 @@ html, body { height: 40px; overflow: hidden; font-family: system-ui, sans-serif;
 .controls { display: flex; gap: 2px; padding-right: 6px; }
 /* color: inherit — without it the A/✕ glyphs render black on the dark titlebar. */
 .controls button { -webkit-app-region: no-drag; border: none; background: transparent; color: inherit; height: 32px; min-width: 36px; border-radius: 6px; font-size: 14px; cursor: pointer; }
+#reload { font-size: 15px; line-height: 1; }
 .controls button:hover { background: var(--tb-hover); }
 #close:hover { background: #e01b24; color: #fff; }
 .arr { font-size: 9px; vertical-align: super; }

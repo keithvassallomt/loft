@@ -3,6 +3,7 @@ interface Window {
     zoomIn(): void;
     zoomOut(): void;
     close(): void;
+    reload(): void;
     onSetService(cb: (name: string) => void): void;
   };
 }
