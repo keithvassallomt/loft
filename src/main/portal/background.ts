@@ -105,6 +105,13 @@ export async function requestAutostart(enabled: boolean, deps: PortalDeps): Prom
 
 export function defaultPortalDeps(): PortalDeps {
   const bus = dbus.sessionBus();
+  // dbus-next's MessageBus is an EventEmitter that emits 'error' on a broken
+  // connection; with zero listeners Node re-throws it, which would take down
+  // the whole main process over a background D-Bus hiccup. This bus is
+  // memoized for the process lifetime (see sharedPortalDeps() in
+  // autostart.ts), so attach the listener once, here, rather than at every
+  // call site.
+  bus.on('error', (err) => console.debug('portal session bus error:', (err as Error)?.message ?? err));
   const ready = new Promise<void>((resolve) => {
     if ((bus as unknown as { name: string | null }).name !== null) {
       resolve();

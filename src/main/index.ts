@@ -174,6 +174,15 @@ function setGlobalDnd(enabled: boolean): void {
 // Autostart is derived, not a setting: the entry exists iff some service asked to
 // open at login. Called after anything that can change that answer.
 function reconcileAutostart(): void {
+  // Gated on out-of-sync (wants vs. isAutostartEnabled()) so every call site gets
+  // this for free — this debounces the *success* case only: ticking a second
+  // service's "open on startup" when a first one already granted autostart is a
+  // no-op, with no portal round-trip and no re-notify (nothing changed). A
+  // *denial* leaves wants=true/enabled=false permanently out-of-sync, so it is
+  // deliberately retried on every call (including every app launch) until it's
+  // granted — never gate that case away.
+  const wants = wantsAutostart(config.services);
+  if (wants === isAutostartEnabled()) return;
   // Under Flatpak this goes through the XDG Background portal, which is async and
   // can leave a permission dialog on screen for up to 120s; natively it resolves
   // immediately. Re-notify the hub once the sync actually settles — otherwise a
@@ -182,7 +191,7 @@ function reconcileAutostart(): void {
   // and show a spurious "Loft was denied permission to start at login" warning
   // while the portal dialog is still pending. Safe: syncAutostart is documented to
   // never reject.
-  void syncAutostart(wantsAutostart(config.services), { execPath: process.execPath, iconSourceDir })
+  void syncAutostart(wants, { execPath: process.execPath, iconSourceDir })
     .then(() => hub?.notifyChanged());
 }
 
@@ -433,12 +442,10 @@ if (!app.requestSingleInstanceLock()) {
     // --service branch so it runs on *every* launch path, not just the no-service
     // one: a user who only ever launches services via the per-service .desktop
     // launchers Loft itself writes (the common case) would otherwise never
-    // self-heal and never see the warning. Costs one existsSync. Gated on
-    // out-of-sync — this debounces the *success* case only (a granted permission
-    // is never re-requested at every login); a denial (wants autostart but the
-    // entry was never written) stays out-of-sync by design, so the portal is
-    // deliberately retried on every launch until it's granted.
-    if (wantsAutostart(config.services) !== isAutostartEnabled()) reconcileAutostart();
+    // self-heal and never see the warning. reconcileAutostart() itself gates on
+    // out-of-sync (see its comment), so this costs one existsSync on the common
+    // already-in-sync path.
+    reconcileAutostart();
     if (def) {
       openService(def, args.minimized);
     } else {

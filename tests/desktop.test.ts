@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  isFlatpak, desktopExec, serviceLauncherContent, hubDesktopContent,
+  isFlatpak, desktopExec, isDevExec, serviceLauncherContent, hubDesktopContent,
   writeServiceLauncher, removeServiceLauncher, deployServiceIcon, ensureHubDesktopEntry,
 } from '../src/main/desktop';
 import { getService } from '../src/main/registry';
@@ -22,6 +22,21 @@ describe('desktop exec + flatpak', () => {
   it('isFlatpak reads FLATPAK_ID', () => {
     expect(isFlatpak({ FLATPAK_ID: 'x' })).toBe(true);
     expect(isFlatpak({})).toBe(false);
+  });
+});
+
+// I3: the shared predicate behind both ensureHubDesktopEntry's dev-run skip and
+// setAutostart's dev-run skip (autostart.ts) — extracted so both stay in lockstep.
+describe('isDevExec', () => {
+  it('is true for a node_modules/electron path or a bare .../electron path', () => {
+    expect(isDevExec('/home/u/proj/node_modules/electron/dist/electron', {})).toBe(true);
+    expect(isDevExec('/opt/foo/electron', {})).toBe(true);
+  });
+  it('is false for a real installed binary', () => {
+    expect(isDevExec('/usr/bin/loft', {})).toBe(false);
+  });
+  it('is false whenever APPIMAGE is set, even for a dev-looking path', () => {
+    expect(isDevExec('/home/u/proj/node_modules/electron/dist/electron', { APPIMAGE: '/a/Loft.AppImage' })).toBe(false);
   });
 });
 

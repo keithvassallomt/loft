@@ -31,6 +31,45 @@ describe('autostart', () => {
     expect(existsSync(path)).toBe(false);
     expect(isAutostartEnabled(env)).toBe(false);
   });
+  // I3: a dev (`npm start`) run's Exec= would be the bare Electron binary out of
+  // node_modules; writing it would clobber a real (e.g. Flatpak-portal-written)
+  // entry sharing the same filename, silently killing autostart at login.
+  it('setAutostart(true) skips writing under a dev Electron run', () => {
+    const cfg = tmp();
+    const src = tmp();
+    const env = { XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: tmp() } as NodeJS.ProcessEnv;
+    const path = join(cfg, 'autostart', 'chat.loft.Loft.desktop');
+
+    setAutostart(true, { env, execPath: '/repo/node_modules/electron/dist/electron', iconSourceDir: src });
+    expect(existsSync(path)).toBe(false);
+
+    setAutostart(true, { env, execPath: '/opt/foo/electron', iconSourceDir: src });
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('setAutostart(false) still removes a stale entry under a dev Electron run', () => {
+    const cfg = tmp();
+    const src = tmp();
+    const env = { XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: tmp() } as NodeJS.ProcessEnv;
+    const path = join(cfg, 'autostart', 'chat.loft.Loft.desktop');
+
+    // Simulate a real entry already on disk (e.g. written by the portal/a package).
+    setAutostart(true, { env, execPath: '/usr/bin/loft', iconSourceDir: src });
+    expect(existsSync(path)).toBe(true);
+
+    setAutostart(false, { env, execPath: '/repo/node_modules/electron/dist/electron', iconSourceDir: src });
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('setAutostart(true) still writes when APPIMAGE is set, even with a dev-looking execPath', () => {
+    const cfg = tmp();
+    const src = tmp();
+    const env = { XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: tmp(), APPIMAGE: '/a/Loft.AppImage' } as NodeJS.ProcessEnv;
+    const path = join(cfg, 'autostart', 'chat.loft.Loft.desktop');
+    setAutostart(true, { env, execPath: '/repo/node_modules/electron/dist/electron', iconSourceDir: src });
+    expect(existsSync(path)).toBe(true);
+  });
+
   it('deploys loft.png into the icons dir when present in the source', () => {
     const cfg = tmp();
     const src = tmp();
@@ -50,6 +89,36 @@ describe('autostart', () => {
     expect(wantsAutostart({ slack: { openOnStartup: false }, whatsapp: { openOnStartup: true } })).toBe(true);
     expect(wantsAutostart({ a: { openOnStartup: true }, b: { openOnStartup: true } })).toBe(true);
   });
+  // M1: reconcileAutostart() (src/main/index.ts) gates on
+  // `wantsAutostart(services) === isAutostartEnabled()` before doing anything.
+  // reconcileAutostart itself isn't unit-testable (it lives in index.ts, which
+  // has Electron app-lifecycle side effects at import time and no existing test
+  // coverage), so this exercises the exact primitives that gate composes, for
+  // the specific scenario M1 was filed over: unticking the LAST flagged service
+  // on an install where background permission was never granted. Before the fix,
+  // that unconditionally called syncAutostart(false) → RequestBackground(false)
+  // with permission UNSET, which can pop a permission dialog at the moment the
+  // user turned the feature off. After the fix, wants flips true -> false while
+  // isAutostartEnabled() was already false (permission was never granted, so no
+  // entry was ever written) — wants === enabled, so the gate is satisfied and
+  // reconcileAutostart returns without touching the portal at all.
+  it('gate condition: unticking the last service when never-granted is already in sync (no portal call needed)', () => {
+    const cfg = tmp();
+    const env = { XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: tmp() } as NodeJS.ProcessEnv;
+    const servicesBefore = { slack: { openOnStartup: true } };
+    const servicesAfter = { slack: { openOnStartup: false } };
+
+    expect(wantsAutostart(servicesBefore)).toBe(true);
+    expect(isAutostartEnabled(env)).toBe(false); // never granted: no entry on disk
+    // out of sync before the untick -> the gate would have let a call through
+    // (that's the deliberate "denial is retried" behaviour, unrelated to this fix)
+
+    expect(wantsAutostart(servicesAfter)).toBe(false);
+    expect(isAutostartEnabled(env)).toBe(false); // still nothing on disk
+    // both false -> in sync -> gate short-circuits, no RequestBackground call
+    expect(wantsAutostart(servicesAfter)).toBe(isAutostartEnabled(env));
+  });
+
   it('wantsAutostart tolerates undefined entries', () => {
     expect(wantsAutostart({ slack: undefined })).toBe(false);
   });
@@ -76,6 +145,20 @@ describe('autostart', () => {
     });
     expect(portalCalls).toBe(0);
     expect(existsSync(join(cfg, 'autostart', 'chat.loft.Loft.desktop'))).toBe(true);
+  });
+
+  // I3, end-to-end through the function index.ts actually calls: a dev run must
+  // not clobber a real entry that's already on disk (e.g. from a prior packaged
+  // run or the Flatpak portal).
+  it('syncAutostart never overwrites an existing entry with a dev-run Exec=', async () => {
+    const cfg = tmp();
+    const env = { XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: tmp() } as NodeJS.ProcessEnv;
+    const path = join(cfg, 'autostart', 'chat.loft.Loft.desktop');
+    await syncAutostart(true, { env, execPath: '/usr/bin/loft', iconSourceDir: tmp() });
+    const original = readFileSync(path, 'utf8');
+
+    await syncAutostart(true, { env, execPath: '/repo/node_modules/electron/dist/electron', iconSourceDir: tmp() });
+    expect(readFileSync(path, 'utf8')).toBe(original);
   });
 
   it('syncAutostart(false) removes the file natively', async () => {

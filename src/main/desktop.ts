@@ -17,6 +17,18 @@ export function desktopExec(opts: { env?: Env; execPath?: string } = {}): string
   return opts.execPath ?? process.execPath;
 }
 
+/**
+ * True when `exec` is a working copy run straight out of the Electron binary
+ * in dev (`npm start`), not a packaged AppImage. Shared by every writer that
+ * would otherwise bake `.../node_modules/electron/dist/electron` into a
+ * `.desktop` file's `Exec=` line — a bare Electron default-app window at the
+ * next login, and (for the *autostart* entry specifically) silent clobbering
+ * of a real Flatpak-portal-written entry, since both write the same filename.
+ */
+export function isDevExec(exec: string, env: Env = process.env): boolean {
+  return !env.APPIMAGE && (exec.includes('/node_modules/') || exec.endsWith('/electron'));
+}
+
 export function serviceLauncherContent(def: ServiceDef, exec: string, iconPath: string): string {
   return (
     `[Desktop Entry]\n` +
@@ -79,7 +91,7 @@ export function ensureHubDesktopEntry(opts: { env?: Env; execPath?: string; icon
   if (isFlatpak(env)) return;
   const exec = opts.execPath ?? process.execPath;
   // Skip a working copy run straight out of the Electron binary in dev.
-  if (!env.APPIMAGE && (exec.includes('/node_modules/') || exec.endsWith('/electron'))) return;
+  if (isDevExec(exec, env)) return;
   const dir = applicationsDir(env);
   const p = join(dir, 'chat.loft.Loft.desktop');
   if (existsSync(p)) return;

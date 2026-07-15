@@ -1,6 +1,34 @@
 import { describe, it, expect, vi } from 'vitest';
+
+// M2: defaultPortalDeps() memoizes a real dbus-next session bus for the process
+// lifetime; an unhandled 'error' event on an EventEmitter throws and would kill
+// the whole main process. Mock dbus-next with a real EventEmitter so we can prove
+// a listener is attached — vi.hoisted() so the factory below (which vi.mock
+// relocates above these imports) can safely reference it.
+const dbusMock = vi.hoisted(() => {
+  const { EventEmitter } = require('node:events');
+  class FakeBus extends EventEmitter {
+    name: string | null = ':1.99'; // non-null: skip the 'connect' wait in ready()
+  }
+  const instances: InstanceType<typeof FakeBus>[] = [];
+  return {
+    instances,
+    sessionBus: () => {
+      const b = new FakeBus();
+      instances.push(b);
+      return b;
+    },
+  };
+});
+
+vi.mock('dbus-next', () => ({
+  sessionBus: dbusMock.sessionBus,
+  Message: class Message { constructor(opts: Record<string, unknown>) { Object.assign(this, opts); } },
+  Variant: class Variant { constructor(public sig: string, public val: unknown) {} },
+}));
+
 import {
-  requestPath, backgroundOptions, requestAutostart, type PortalDeps,
+  requestPath, backgroundOptions, requestAutostart, defaultPortalDeps, type PortalDeps,
 } from '../src/main/portal/background';
 
 /** Fake portal: records the call, then fires whatever Response we tell it to. */
@@ -143,5 +171,18 @@ describe('requestAutostart', () => {
       call: async () => {},
     };
     await expect(requestAutostart(true, deps)).resolves.toBe(true);
+  });
+});
+
+describe('defaultPortalDeps', () => {
+  // M2: dbus-next's MessageBus is an EventEmitter; emitting 'error' with zero
+  // listeners makes Node re-throw it synchronously, which would crash the whole
+  // Electron main process over a routine async bus hiccup. defaultPortalDeps()
+  // must attach a listener so that can't happen.
+  it('attaches an error listener to the session bus (an unhandled bus error cannot crash the process)', () => {
+    defaultPortalDeps();
+    const bus = dbusMock.instances.at(-1)!;
+    expect(bus.listenerCount('error')).toBeGreaterThan(0);
+    expect(() => bus.emit('error', new Error('boom'))).not.toThrow();
   });
 });

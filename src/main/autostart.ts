@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import type { ServiceConfig } from './config';
 import { autostartDir, iconsDir } from './paths';
-import { desktopExec, isFlatpak } from './desktop';
+import { desktopExec, isDevExec, isFlatpak } from './desktop';
 import { requestAutostart, defaultPortalDeps, type PortalDeps } from './portal/background';
 
 type Env = NodeJS.ProcessEnv;
@@ -37,6 +37,16 @@ export function setAutostart(
   const env = opts.env ?? process.env;
   const path = entryPath(env);
   if (enabled) {
+    // Same guard as ensureHubDesktopEntry: a dev run's Exec= would be
+    // `.../node_modules/electron/dist/electron`, and this write shares its
+    // filename with the Flatpak-portal-written entry — clobbering it would
+    // silently kill the user's real autostart. Only guard the write; removal
+    // (enabled: false, below) still runs so a stale dev entry can be cleared.
+    const exec = opts.execPath ?? process.execPath;
+    if (isDevExec(exec, env)) {
+      console.debug('setAutostart: skipping dev-run write to avoid clobbering a real autostart entry:', exec);
+      return;
+    }
     mkdirSync(autostartDir(env), { recursive: true });
     mkdirSync(iconsDir(env), { recursive: true });
     const iconSrc = join(opts.iconSourceDir, 'loft.png');
