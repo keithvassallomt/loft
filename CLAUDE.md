@@ -124,8 +124,10 @@ Loft currently logs to stdout/stderr via plain `console.*` calls in the main pro
                                     #  trayBackend and globalDnd at the top level)
 
 ~/.config/autostart/
-  chat.loft.Loft.desktop           # one login-autostart entry (launches `loft --minimized`); per-service
-                                    # autostart is a config flag (openOnStartup), not a separate autostart file
+  chat.loft.Loft.desktop           # one login-autostart entry (launches `loft --minimized`). DERIVED, not a
+                                    # setting: it exists iff some service has openOnStartup. Written by the XDG
+                                    # Background portal under Flatpak (so the manifest needs only :ro here) and
+                                    # directly otherwise; read back with existsSync in both cases.
 
 ~/.local/share/loft/
   Partitions/
