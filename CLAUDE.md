@@ -29,7 +29,7 @@ There is no separate daemon process, no launching of a real Chrome binary, and n
    - Installed services: icon, name, live running/badge status, Open button, per-service settings (gear)
    - Available services: not-yet-added services, shown as tiles to Add
    - Per-service settings: custom URL (Element/Talk), open-on-startup, badges on/off, DND, remove (with an explicit "also delete login data" option)
-   - Global settings: tray backend, appearance (follows the system theme). There is deliberately no "start at login" toggle — autostart is derived from the per-service open-on-startup flags (see the File Layout note); this section only warns when autostart is blocked
+   - Global settings: tray backend, appearance (follows the system theme). There is deliberately no "start at login" toggle — autostart is derived from the per-service open-on-startup flags (see the File Layout note). When autostart is blocked, the warning is rendered next to that service's own "Open on startup" checkbox in the per-service settings, **not** here: a warning on a page reached via a menu the user has no reason to open is the same silent failure the derived model exists to remove
    - Add/remove writes/removes that service's `.desktop` launcher and (on remove, if requested) deletes its partition data
 
 2. **Per-service window** (`src/main/serviceWindow.ts`) — one frameless window per running service

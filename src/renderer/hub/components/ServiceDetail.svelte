@@ -44,9 +44,12 @@
        ticking the box above never again claims something that isn't happening. Gated on
        this service's own flag so it only appears to someone it actually affects. -->
   {#if svc.openOnStartup && hubState.globals.autostartBlocked}
+    <!-- "Run in Background" is the real control: GNOME's Apps panel has no autostart
+         row (cc-applications-panel only exposes the portal's `background` permission),
+         and the Background portal bundles the autostart grant into it. -->
     <p class="warn">
       Loft isn't allowed to start at login, so this won't take effect.
-      Allow it in Settings → Apps → Loft → Autostart.
+      Turn on “Run in Background” in Settings → Apps → Loft.
     </p>
   {/if}
   <label class="toggle">
