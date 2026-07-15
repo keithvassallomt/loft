@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRenderer } from 'electron';
-import type { HubState, ServicePatch, GlobalPatch } from '../shared/hubTypes';
+import type { HubState, ServicePatch, GlobalPatch, RecoverOpts } from '../shared/hubTypes';
 
 export interface LoftHub {
   getState(): Promise<HubState>;
@@ -9,6 +9,7 @@ export interface LoftHub {
   removeService(id: string, deleteData: boolean): void;
   setServiceSetting(id: string, patch: ServicePatch): void;
   setGlobal(patch: GlobalPatch): void;
+  recoverService(id: string, opts: RecoverOpts): void;
   quit(): void;
 }
 
@@ -26,6 +27,7 @@ export function buildBridge(ipc: IpcRenderer): LoftHub {
     removeService: (id, deleteData) => ipc.send('hub:removeService', { id, deleteData }),
     setServiceSetting: (id, patch) => ipc.send('hub:setServiceSetting', { id, patch }),
     setGlobal: (patch) => ipc.send('hub:setGlobal', patch),
+    recoverService: (id, opts) => ipc.send('hub:recoverService', { id, opts }),
     quit: () => ipc.send('hub:quit'),
   };
 }

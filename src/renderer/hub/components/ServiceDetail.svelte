@@ -49,6 +49,12 @@
     <span>Do Not Disturb</span>
   </label>
 
+  <div class="trouble">
+    <h3>Troubleshooting</h3>
+    <button onclick={() => window.loftHub.recoverService(id, { clearCaches: true })}>Clear cache &amp; reload</button>
+    <p class="hint">Keeps you signed in. Fixes {svc.displayName} if it’s stuck on a blank screen.</p>
+  </div>
+
   <button class="danger" onclick={() => { deleteData = false; showRemove = true; }}>Remove {svc.displayName}…</button>
 
   {#if showRemove}
@@ -68,4 +74,8 @@
   .danger { margin-top: 24px; border: 0; border-radius: 999px; padding: 8px 18px; background: #c01c28; color: #fff; cursor: pointer; }
   .remove-msg { margin: 0 0 12px; }
   .checkbox { display: flex; align-items: center; gap: 8px; }
+  .trouble { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--divider); }
+  .trouble h3 { font-size: 13px; margin-bottom: 8px; }
+  .trouble button { border: 1px solid var(--divider); background: var(--card); color: var(--fg); border-radius: 999px; padding: 8px 18px; cursor: pointer; }
+  .hint { color: var(--muted, #777); font-size: 12px; margin-top: 8px; }
 </style>

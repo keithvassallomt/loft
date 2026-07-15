@@ -6,6 +6,7 @@ import { parseArgs } from './cli';
 import { getService, SERVICES, ServiceDef, effectiveUrl } from './registry';
 import { loadConfig, saveConfig, configPath, LoftConfig } from './config';
 import { createServiceWindow, ServiceWindow } from './serviceWindow';
+import { clearServiceCaches } from './recovery';
 import { Tray, TrayDeps, TrayServiceSeed } from './tray';
 import { startTrayBackend } from './tray/backend';
 import { startNotifications, Notifications } from './notifications';
@@ -21,7 +22,7 @@ import { addService, removeService } from './install';
 import { setAutostart, isAutostartEnabled } from './autostart';
 import { ensureHubDesktopEntry } from './desktop';
 import { iconsDir } from './paths';
-import type { ServicePatch, GlobalPatch } from '../shared/hubTypes';
+import type { ServicePatch, GlobalPatch, RecoverOpts } from '../shared/hubTypes';
 
 app.setName('Loft');
 app.setAppUserModelId('chat.loft.Loft');
@@ -383,6 +384,14 @@ if (!app.requestSingleInstanceLock()) {
       setGlobal: (patch: GlobalPatch) => {
         if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; saveConfig(configPath(), config); }
         if (patch.startAtLogin !== undefined) setAutostart(patch.startAtLogin, { execPath: process.execPath, iconSourceDir });
+      },
+      recoverService: (id, opts) => {
+        const sw = windows.get(id);
+        if (!opts.clearCaches) { sw?.reload(); return; }
+        // Works whether or not the service is running: with no window we still clear,
+        // so the next launch loads clean.
+        if (sw) { void sw.clearAndReload(); return; }
+        void clearServiceCaches(session.fromPartition(`persist:${id}`));
       },
       quitApp: () => { quitting = true; app.quit(); },
       preloadPath: join(__dirname, '..', 'preload', 'hub.js'),

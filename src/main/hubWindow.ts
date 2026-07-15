@@ -1,5 +1,5 @@
 import { BrowserWindow, ipcMain } from 'electron';
-import type { HubState, ServicePatch, GlobalPatch } from '../shared/hubTypes';
+import type { HubState, ServicePatch, GlobalPatch, RecoverOpts } from '../shared/hubTypes';
 
 export interface HubDeps {
   buildState(): HubState;
@@ -8,6 +8,7 @@ export interface HubDeps {
   removeService(id: string, deleteData: boolean): void;
   setServiceSetting(id: string, patch: ServicePatch): void;
   setGlobal(patch: GlobalPatch): void;
+  recoverService(id: string, opts: RecoverOpts): void;
   quitApp(): void;
   preloadPath: string;
   htmlPath: string;
@@ -18,7 +19,7 @@ export interface Hub { open(): void; notifyChanged(): void; }
 
 const CHANNELS = [
   'hub:openService', 'hub:addService', 'hub:removeService',
-  'hub:setServiceSetting', 'hub:setGlobal', 'hub:quit',
+  'hub:setServiceSetting', 'hub:setGlobal', 'hub:recoverService', 'hub:quit',
 ];
 
 export function createHub(deps: HubDeps): Hub {
@@ -38,6 +39,7 @@ export function createHub(deps: HubDeps): Hub {
   ipcMain.on('hub:removeService', (_e, m: { id: string; deleteData: boolean }) => { deps.removeService(m.id, m.deleteData); notifyChanged(); });
   ipcMain.on('hub:setServiceSetting', (_e, m: { id: string; patch: ServicePatch }) => { deps.setServiceSetting(m.id, m.patch); notifyChanged(); });
   ipcMain.on('hub:setGlobal', (_e, patch: GlobalPatch) => { deps.setGlobal(patch); notifyChanged(); });
+  ipcMain.on('hub:recoverService', (_e, m: { id: string; opts: RecoverOpts }) => deps.recoverService(m.id, m.opts));
   ipcMain.on('hub:quit', () => deps.quitApp());
 
   const open = (): void => {

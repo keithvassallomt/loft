@@ -26,3 +26,4 @@ export interface ServicePatch {
   customUrl?: string;
 }
 export interface GlobalPatch { trayBackend?: TrayBackend; startAtLogin?: boolean; }
+export interface RecoverOpts { clearCaches: boolean }

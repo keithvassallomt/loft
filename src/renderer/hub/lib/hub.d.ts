@@ -1,4 +1,4 @@
-import type { HubState, ServicePatch, GlobalPatch } from '../../../shared/hubTypes';
+import type { HubState, ServicePatch, GlobalPatch, RecoverOpts } from '../../../shared/hubTypes';
 
 declare global {
   const __LOFT_VERSION__: string;
@@ -11,6 +11,7 @@ declare global {
       removeService(id: string, deleteData: boolean): void;
       setServiceSetting(id: string, patch: ServicePatch): void;
       setGlobal(patch: GlobalPatch): void;
+      recoverService(id: string, opts: RecoverOpts): void;
       quit(): void;
     };
   }
