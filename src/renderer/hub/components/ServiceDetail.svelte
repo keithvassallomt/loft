@@ -40,6 +40,15 @@
     <input type="checkbox" checked={svc.openOnStartup} onchange={(e) => set({ openOnStartup: e.currentTarget.checked })} />
     <span>Open on startup</span>
   </label>
+  <!-- Right here, not on the Settings page: the whole point of this feature is that
+       ticking the box above never again claims something that isn't happening. Gated on
+       this service's own flag so it only appears to someone it actually affects. -->
+  {#if svc.openOnStartup && hubState.globals.autostartBlocked}
+    <p class="warn">
+      Loft isn't allowed to start at login, so this won't take effect.
+      Allow it in Settings → Apps → Loft → Autostart.
+    </p>
+  {/if}
   <label class="toggle">
     <input type="checkbox" checked={svc.badgesEnabled} onchange={(e) => set({ badgesEnabled: e.currentTarget.checked })} />
     <span>Show unread badge</span>
@@ -71,6 +80,7 @@
   .field input { padding: 8px; border-radius: 8px; border: 1px solid var(--divider); background: var(--bg); color: var(--fg); }
   .toggle { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
   .toggle span { flex: 1; }
+  .warn { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid #e5a50a; background: #e5a50a1a; font-size: 0.9em; }
   .danger { margin-top: 24px; border: 0; border-radius: 999px; padding: 8px 18px; background: #c01c28; color: #fff; cursor: pointer; }
   .remove-msg { margin: 0 0 12px; }
   .checkbox { display: flex; align-items: center; gap: 8px; }
