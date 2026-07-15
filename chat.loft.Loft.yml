@@ -39,7 +39,9 @@ finish-args:
   # Per-service D-Bus names (chat.loft.WhatsApp, chat.loft.Tray, …).
   - --own-name=chat.loft.*
   # Autostart .desktop files and per-service launcher .desktop files.
-  - --filesystem=xdg-config/autostart:create
+  # :ro — the Background portal now writes the entry; we only read it back to
+  # tell whether autostart is actually in effect (isAutostartEnabled).
+  - --filesystem=xdg-config/autostart:ro
   - --filesystem=xdg-data/applications:create
 
 build-options:
