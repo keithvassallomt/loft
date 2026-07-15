@@ -17,6 +17,8 @@ export interface LoftServiceDeps {
   quitApp(): void;
   /** Open/focus the hub window (the GNOME-panel "Loft Settings…" item calls this). */
   showHub(): void;
+  /** Toggle global DND (the GNOME-panel "Do Not Disturb (all)" switch calls this). */
+  setGlobalDnd(enabled: boolean): void;
 }
 
 /** Per-service object exported at /chat/loft/<DbusName>, interface chat.loft.Service. */
@@ -49,12 +51,14 @@ class LoftRootObject extends Interface {
   constructor(private deps: LoftServiceDeps) { super(BUS); }
   Quit(): void { this.deps.quitApp(); }
   ShowHub(): void { this.deps.showHub(); }
+  SetGlobalDnd(enabled: boolean): void { this.deps.setGlobalDnd(enabled); }
 }
 LoftRootObject.configureMembers({
   properties: {},
   methods: {
     Quit: { inSignature: '', outSignature: '' },
     ShowHub: { inSignature: '', outSignature: '' },
+    SetGlobalDnd: { inSignature: 'b', outSignature: '' },
   },
   signals: {},
 });

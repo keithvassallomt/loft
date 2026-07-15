@@ -45,12 +45,24 @@ export async function startGnomePanelTray(deps: TrayDeps, helper: ShellHelperCli
     return m;
   };
 
+  // Global DND lives outside the per-service snapshot, so it gets its own
+  // diff + push (the extension has no other way to learn the state, and must
+  // know it to render the switch and grey the panel icon).
+  let prevGlobalDnd = model.menuModel().globalDnd;
+
   const pushAll = (): void => {
+    prevGlobalDnd = model.menuModel().globalDnd;
+    void helper.updateGlobalDnd(prevGlobalDnd);
     for (const s of prev.values())
       void helper.updateCombinedService(s.id, s.displayName, s.visible, s.badge, s.dnd, s.displayName);
   };
 
   const refresh = (): void => {
+    const globalDnd = model.menuModel().globalDnd;
+    if (globalDnd !== prevGlobalDnd) {
+      prevGlobalDnd = globalDnd;
+      void helper.updateGlobalDnd(globalDnd);
+    }
     const cur = snapshot();
     const { updates, removals } = diffPanelServices(prev, cur);
     for (const id of removals) void helper.removeCombinedService(id);

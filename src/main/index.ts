@@ -444,6 +444,7 @@ if (!app.requestSingleInstanceLock()) {
         },
         quitApp: () => { quitting = true; app.quit(); },
         showHub: () => hub?.open(),
+        setGlobalDnd: (enabled) => { setGlobalDnd(enabled); notifications?.setGlobalDnd(enabled); },
       };
       await startLoftDbusService(loftDeps);
     } catch (err) {

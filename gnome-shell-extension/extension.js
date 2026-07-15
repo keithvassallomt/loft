@@ -73,6 +73,9 @@ const DBUS_IFACE = `<node>
     <method name="RemoveCombinedService">
       <arg name="name" type="s" direction="in"/>
     </method>
+    <method name="UpdateGlobalDnd">
+      <arg name="enabled" type="b" direction="in"/>
+    </method>
   </interface>
 </node>`;
 
@@ -128,6 +131,9 @@ export default class LoftShellHelper extends Extension {
         this._combinedIndicator = null;
         this._combinedServices = new Map();
         this._combinedWatchId = null;
+        // Global DND, pushed by the app via UpdateGlobalDnd. Mirrors the SNI
+        // menu's "Do Not Disturb (all)": it mutes every service at once.
+        this._combinedGlobalDnd = false;
         this._pendingDashTimeouts = new Set();
 
         // D-Bus interface — window focus/hide + panel icon management.
@@ -643,6 +649,26 @@ export default class LoftShellHelper extends Extension {
         }
     }
 
+    // Root-object calls (whole-app scope: ShowHub, Quit, SetGlobalDnd), as
+    // opposed to _callDaemonMethod's per-service objects. NO_AUTO_START: these
+    // only make sense against the running app that owns the name — never launch
+    // a second one (in a dev checkout the .desktop resolves to a different install).
+    _callLoftRootMethod(method, signature, args) {
+        try {
+            Gio.DBus.session.call(
+                'chat.loft.Loft', '/chat/loft/Loft', 'chat.loft.Loft', method,
+                signature ? new GLib.Variant(signature, args) : null,
+                null,
+                Gio.DBusCallFlags.NO_AUTO_START,
+                -1,
+                null,
+                null
+            );
+        } catch (e) {
+            console.error(`Loft: Failed to call chat.loft.Loft.${method}: ${e}`);
+        }
+    }
+
     _registerCombined(iconName) {
         if (this._combinedIndicator) {
             this._combinedIndicator.destroy();
@@ -721,9 +747,19 @@ export default class LoftShellHelper extends Extension {
         );
 
         this._rebuildCombinedMenu();
+        // The badge widgets above are born hidden, so they must be reconciled
+        // against current state here — the app pushes UpdateCombinedService only
+        // for *running* services, and at startup there usually are none, so this
+        // is the only thing that renders the global-DND dash on a fresh icon.
+        this._updateCombinedBadges();
     }
 
     _unregisterCombined() {
+        // The flag describes an icon that no longer exists. Leaving it set would
+        // make the app's next post-register push look like a no-op change, and
+        // the dash would never render (enable() doesn't re-run on a Loft restart,
+        // only on a shell restart).
+        this._combinedGlobalDnd = false;
         if (this._combinedWatchId) {
             Gio.bus_unwatch_name(this._combinedWatchId);
             this._combinedWatchId = null;
@@ -779,22 +815,20 @@ export default class LoftShellHelper extends Extension {
         const menu = this._combinedIndicator.menu;
         menu.removeAll();
 
-        const settingsItem = new PopupMenu.PopupMenuItem('Loft Settings\u2026');
-        settingsItem.connect('activate', () => {
-            // Tell the RUNNING Loft app (which owns chat.loft.Loft) to open its hub
-            // window, via the root object's ShowHub method. This avoids launching a
-            // .desktop file \u2014 which in a dev checkout resolves to a *different* Loft
-            // install and spawns a second process rather than focusing this one.
-            try {
-                Gio.DBus.session.call(
-                    'chat.loft.Loft', '/chat/loft/Loft', 'chat.loft.Loft', 'ShowHub',
-                    null, null, Gio.DBusCallFlags.NO_AUTO_START, -1, null, null
-                );
-            } catch (e) {
-                console.error(`Loft: Failed to open hub: ${e}`);
-            }
+        // Layout, matching the SNI backend's menu (src/main/tray/dbusMenu.ts)
+        //   Do Not Disturb (all)
+        //   \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        //   <service rows>            (running only \u2014 the app pushes no others,
+        //   \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500                 so there's no launch section as SNI has)
+        //   Loft Settings\u2026
+        //   Quit Loft
+        const globalDndItem = new PopupMenu.PopupSwitchMenuItem(
+            'Do Not Disturb (all)', this._combinedGlobalDnd
+        );
+        globalDndItem.connect('toggled', (_item, state) => {
+            this._callLoftRootMethod('SetGlobalDnd', '(b)', [state]);
         });
-        menu.addMenuItem(settingsItem);
+        menu.addMenuItem(globalDndItem);
         menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         // One compact row per service: name + unread dot + [Show/Hide] [DND] [Quit]
@@ -818,8 +852,9 @@ export default class LoftShellHelper extends Extension {
             });
             row.add_child(label);
 
-            // Unread dot
-            if (svc.badge > 0 && !svc.dnd) {
+            // Unread dot (global DND mutes every service, so it hides every dot —
+            // matching TrayModel.menuModel()'s `unread` for the SNI backend).
+            if (svc.badge > 0 && !svc.dnd && !this._combinedGlobalDnd) {
                 const dot = new St.Label({
                     text: ' \u2022',
                     style: 'color: #e01b24; font-size: 16px;',
@@ -878,6 +913,31 @@ export default class LoftShellHelper extends Extension {
             const noServices = new PopupMenu.PopupMenuItem('No services running', { reactive: false });
             menu.addMenuItem(noServices);
         }
+
+        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        // Tell the RUNNING Loft app (which owns chat.loft.Loft) to open its hub
+        // window, via the root object's ShowHub method.
+        const settingsItem = new PopupMenu.PopupMenuItem('Loft Settings…');
+        settingsItem.connect('activate', () => {
+            this._callLoftRootMethod('ShowHub');
+        });
+        menu.addMenuItem(settingsItem);
+
+        // Whole-app quit (every window + the process), not a per-service quit —
+        // that's the ✕ button on each service row above.
+        const quitItem = new PopupMenu.PopupMenuItem('Quit Loft');
+        quitItem.connect('activate', () => {
+            this._callLoftRootMethod('Quit');
+        });
+        menu.addMenuItem(quitItem);
+    }
+
+    _updateGlobalDnd(enabled) {
+        if (this._combinedGlobalDnd === enabled) return;
+        this._combinedGlobalDnd = enabled;
+        this._rebuildCombinedMenu();
+        this._updateCombinedBadges();
     }
 
     _updateCombinedBadges() {
@@ -892,6 +952,11 @@ export default class LoftShellHelper extends Extension {
             if (!svc.dnd)
                 allDnd = false;
         }
+
+        // Global DND mutes everything, so it shows the dash regardless of how
+        // many services are running (TrayModel.iconOverlay(), same rule).
+        if (this._combinedGlobalDnd)
+            allDnd = true;
 
         this._combinedBadge.visible = anyBadge && !allDnd;
         this._combinedDndBadge.visible = allDnd;
@@ -1041,6 +1106,13 @@ export default class LoftShellHelper extends Extension {
         if (method === 'RemoveCombinedService') {
             const [name] = params.deep_unpack();
             this._removeCombinedService(name);
+            invocation.return_value(null);
+            return;
+        }
+
+        if (method === 'UpdateGlobalDnd') {
+            const [enabled] = params.deep_unpack();
+            this._updateGlobalDnd(enabled);
             invocation.return_value(null);
             return;
         }
