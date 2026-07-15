@@ -13,7 +13,19 @@ finish-args:
   - --share=ipc
   - --socket=fallback-x11
   - --socket=wayland
-  - --device=dri
+  # Audio in/out. REQUIRED: Chromium's audio process renders INSIDE this sandbox now.
+  # Without it ALSA's pulse plugin can't reach the sound server ("Connection refused"),
+  # and libpulse's error path close()s FDs Chromium owns -> "Crashing due to FD ownership
+  # violation". It also silently kills call audio, the mic, and notification sounds.
+  # (Maps to the PulseAudio socket, which pipewire-pulse provides on PipeWire systems.)
+  # The old Rust build never needed this: it ran Chrome on the HOST via flatpak-spawn,
+  # so audio/camera came from outside the sandbox. Removing that escape moved rendering
+  # in here, and these permissions have to be requested explicitly.
+  - --socket=pulseaudio
+  # Devices: GPU (/dev/dri) AND the camera (/dev/video*) for video calls. `all` covers
+  # both — flatpak has no camera-specific device, and it's what Chrome and other
+  # Electron calling apps (e.g. teams_for_linux) use.
+  - --device=all
   # The messaging web apps need the network.
   - --share=network
   # Tray icons (SNI), KDE window control, and desktop notifications.

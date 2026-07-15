@@ -147,8 +147,9 @@ Adapt the existing Rust-era `chat.loft.Loft.yml` at repo root into an Electron m
   --share=ipc
   --socket=fallback-x11
   --socket=wayland
+  --socket=pulseaudio                               # audio out + mic: calls, notification sounds
   --share=network
-  --device=dri
+  --device=all                                      # GPU (/dev/dri) + camera (/dev/video*) for video calls
   --talk-name=org.kde.StatusNotifierWatcher        # SNI tray
   --talk-name=org.kde.KWin                          # KDE focus/hide
   --talk-name=org.freedesktop.Notifications         # notifications
@@ -161,6 +162,16 @@ Adapt the existing Rust-era `chat.loft.Loft.yml` at repo root into an Electron m
   Dropped vs the Rust manifest: `--talk-name=org.freedesktop.Flatpak` and `--filesystem=home` — the two
   Flathub-hostile grants. No `~/.local/share/gnome-shell/extensions` grant is needed (EGO installs the
   helper; the app never writes it).
+  **`--socket=pulseaudio` + `--device=all` are NOT optional, and were missed in the first cut of this
+  spec** (found only by Keith's live Flatpak smoke, 2026-07-15): the Rust build's finish-args — which this
+  list was derived from — needed neither, because it ran Chrome on the HOST via `flatpak-spawn --host`, so
+  audio and the camera came from *outside* the sandbox. Removing that escape moved Chromium's rendering and
+  audio process INSIDE the sandbox, so those permissions must now be requested explicitly. Without the
+  audio socket, ALSA's pulse plugin fails to reach the sound server and libpulse's error path `close()`s
+  FDs Chromium owns → the audio process aborts with *"Crashing due to FD ownership violation"*, and call
+  audio / mic / notification sounds are silently dead. Without `--device=all` there is no `/dev/video*`, so
+  video calls have no camera. Reference: `com.github.IsmaelMartinez.teams_for_linux` (Electron + calls) and
+  `com.google.Chrome` both ship `pulseaudio` + `devices=all`.
 - **Install into the Flatpak:** the reworked `data/chat.loft.Loft.desktop` (launches the hub) and
   `data/chat.loft.Loft.metainfo.xml` (§8) into `/app/share/applications` + `/app/share/metainfo`, and the
   app icon into `/app/share/icons/hicolor/.../apps/chat.loft.Loft.png`. The desktop-id
