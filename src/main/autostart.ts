@@ -83,17 +83,30 @@ function sharedPortalDeps(): PortalDeps {
  *
  * Returns nothing on purpose: what was actually granted is read back from disk
  * with isAutostartEnabled(), so both backends are judged by the same evidence
- * rather than by what each claims it did.
+ * rather than by what each claims it did. That's also why a failure here is
+ * swallowed rather than propagated: unlike the portal path (documented to
+ * never reject), the native branch below does synchronous fs I/O
+ * (mkdirSync/copyFileSync/writeFileSync/rmSync) that throws on EACCES/EROFS/
+ * ENOSPC/etc. Callers invoke this fire-and-forget (`void syncAutostart(...)`,
+ * see hub IPC), and there is no process-wide unhandledRejection handler, so a
+ * rejection here would crash the whole app over a routine settings toggle. A
+ * failed write simply leaves no entry on disk, which isAutostartEnabled()
+ * already reports as "autostart blocked" for the hub to surface — never
+ * throwing is what makes that the uniform, safe contract.
  */
 export async function syncAutostart(
   enabled: boolean,
   opts: { env?: Env; execPath?: string; iconSourceDir: string; portal?: (enabled: boolean) => Promise<boolean> },
 ): Promise<void> {
-  const env = opts.env ?? process.env;
-  if (isFlatpak(env)) {
-    const portal = opts.portal ?? ((e: boolean) => requestAutostart(e, sharedPortalDeps()));
-    await portal(enabled);
-    return;
+  try {
+    const env = opts.env ?? process.env;
+    if (isFlatpak(env)) {
+      const portal = opts.portal ?? ((e: boolean) => requestAutostart(e, sharedPortalDeps()));
+      await portal(enabled);
+      return;
+    }
+    setAutostart(enabled, { env, execPath: opts.execPath, iconSourceDir: opts.iconSourceDir });
+  } catch (e) {
+    console.debug('syncAutostart failed:', (e as Error)?.message ?? e);
   }
-  setAutostart(enabled, { env, execPath: opts.execPath, iconSourceDir: opts.iconSourceDir });
 }

@@ -87,4 +87,23 @@ describe('autostart', () => {
     await syncAutostart(false, opts);
     expect(isAutostartEnabled(env)).toBe(false);
   });
+
+  it('syncAutostart never rejects when the native write fails', async () => {
+    // Point XDG_CONFIG_HOME at a path *under an existing regular file* — the
+    // parent segment can't be a directory, so mkdirSync throws ENOTDIR deep
+    // inside setAutostart. This proves the failure is a genuine fs error, not
+    // a mock, and that syncAutostart still resolves rather than rejecting.
+    const parent = tmp();
+    const blocker = join(parent, 'blocker-file');
+    writeFileSync(blocker, 'not a directory', 'utf8');
+    const cfg = join(blocker, 'config-home');
+    const env = { XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: tmp() } as NodeJS.ProcessEnv;
+    const opts: { env: NodeJS.ProcessEnv; execPath: string; iconSourceDir: string } = {
+      env, execPath: '/usr/bin/loft', iconSourceDir: tmp(),
+    };
+
+    await expect(syncAutostart(true, opts)).resolves.toBeUndefined();
+    expect(isAutostartEnabled(env)).toBe(false);
+    expect(existsSync(join(cfg, 'autostart', 'chat.loft.Loft.desktop'))).toBe(false);
+  });
 });
