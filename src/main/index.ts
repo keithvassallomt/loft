@@ -174,7 +174,16 @@ function setGlobalDnd(enabled: boolean): void {
 // Autostart is derived, not a setting: the entry exists iff some service asked to
 // open at login. Called after anything that can change that answer.
 function reconcileAutostart(): void {
-  void syncAutostart(wantsAutostart(config.services), { execPath: process.execPath, iconSourceDir });
+  // Under Flatpak this goes through the XDG Background portal, which is async and
+  // can leave a permission dialog on screen for up to 120s; natively it resolves
+  // immediately. Re-notify the hub once the sync actually settles — otherwise a
+  // buildState() taken right after this call returns (e.g. the setServiceSetting
+  // IPC handler's own notifyChanged()) can read a not-yet-written autostart entry
+  // and show a spurious "Loft was denied permission to start at login" warning
+  // while the portal dialog is still pending. Safe: syncAutostart is documented to
+  // never reject.
+  void syncAutostart(wantsAutostart(config.services), { execPath: process.execPath, iconSourceDir })
+    .then(() => hub?.notifyChanged());
 }
 
 function resolveServiceFromArgs(argv: string[]): ServiceDef | undefined {
@@ -363,7 +372,13 @@ if (!app.requestSingleInstanceLock()) {
         const d = getService(id); if (!d) return;
         addService(d, config, { execPath: process.execPath, iconSourceDir, customUrl });
         saveConfig(configPath(), config);
-        reconcileAutostart();
+        // Deliberately no reconcileAutostart() here: addService only ever sets
+        // customUrl and never touches openOnStartup, so wantsAutostart() cannot
+        // change as a result of an add — the call would be a guaranteed no-op.
+        // Under Flatpak it would still fire a real RequestBackground portal
+        // request (and can pop an unwanted "let Loft run in the background?"
+        // dialog) on every "Add service" click, including the first service
+        // added to a fresh install. Don't add it back.
       },
       removeService: (id, deleteData) => {
         const d = getService(id); if (!d) return;
@@ -413,6 +428,17 @@ if (!app.requestSingleInstanceLock()) {
 
     const args = parseArgs(process.argv);
     const def = args.service ? getService(args.service) : undefined;
+    // Self-heal installs whose entry doesn't match their flags (e.g. upgrades from
+    // the old global-toggle model, or a hand-deleted entry). Hoisted above the
+    // --service branch so it runs on *every* launch path, not just the no-service
+    // one: a user who only ever launches services via the per-service .desktop
+    // launchers Loft itself writes (the common case) would otherwise never
+    // self-heal and never see the warning. Costs one existsSync. Gated on
+    // out-of-sync — this debounces the *success* case only (a granted permission
+    // is never re-requested at every login); a denial (wants autostart but the
+    // entry was never written) stays out-of-sync by design, so the portal is
+    // deliberately retried on every launch until it's granted.
+    if (wantsAutostart(config.services) !== isAutostartEnabled()) reconcileAutostart();
     if (def) {
       openService(def, args.minimized);
     } else {
@@ -421,10 +447,6 @@ if (!app.requestSingleInstanceLock()) {
       for (const id of Object.keys(config.services)) {
         if (config.services[id]?.openOnStartup) { const d = getService(id); if (d) openService(d, true); }
       }
-      // Self-heal installs whose entry doesn't match their flags (e.g. upgrades from
-      // the old global-toggle model, or a hand-deleted entry). Gated on out-of-sync so
-      // a granted permission is never re-requested at every login.
-      if (wantsAutostart(config.services) !== isAutostartEnabled()) reconcileAutostart();
       if (!args.minimized) hub!.open();
     }
 
