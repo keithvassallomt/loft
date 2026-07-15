@@ -135,6 +135,11 @@ export function createServiceWindow(
   window.contentView.addChildView(titlebar);
   window.contentView.addChildView(serviceView);
 
+  // Declared up here, not beside the recovery block below: relayout() reads it and
+  // runs eagerly (line ~145), so a `let` declared later puts it in the temporal
+  // dead zone and createServiceWindow throws before any window ever opens.
+  let recoveryView: WebContentsView | undefined;
+
   const relayout = () => {
     const [w, h] = window.getContentSize();
     const { titlebar: t, service: s } = computeLayout(w, h);
@@ -179,7 +184,7 @@ export function createServiceWindow(
   // A view can end up permanently blank (e.g. a corrupt service worker aborting
   // every navigation). Detect "nothing ever committed" and offer a way out; the
   // user chooses — we never clear their data unasked.
-  let recoveryView: WebContentsView | undefined;
+  // (`recoveryView` itself is declared above, next to relayout — see the note there.)
 
   const showRecovery = (): void => {
     if (recoveryView) return;
