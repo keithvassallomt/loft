@@ -74,7 +74,7 @@
   </screenshots>
 
   <releases>
-    <release version="1.0.0" date="YYYY-MM-DD">
+    <release version="1.0.0" date="2026-07-15">
       <description>
         <p>
           A ground-up rewrite. Loft is now a single self-contained application —
