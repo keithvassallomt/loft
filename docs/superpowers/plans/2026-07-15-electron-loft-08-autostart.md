@@ -22,7 +22,8 @@
 - Deps-seam style for anything touching D-Bus, so it unit-tests without a bus (pattern: `systemDnd.ts`, `kwin.ts`, `helperInstall.ts`).
 - `org.freedesktop.portal.Background` is **not** GNOME-specific — the new client goes in `src/main/portal/`, NOT `src/main/gnome/`.
 - Do not move or refactor `src/main/gnome/backgroundStatus.ts` (it already uses `SetStatus` on the same interface). Out of scope.
-- Run `npm test` and `npm run build` before every commit. `npm run check` (svelte-check) is required for Task 5 — `vite build` does NOT typecheck.
+- Run `npm test` and `npm run build` before every commit. **One deliberate exception: Task 4** changes a shared type and leaves `npm run build` failing until Task 6 re-wires `index.ts`; Task 4's own steps bound exactly which errors are expected. Tasks 5 and 6 must not be reordered before Task 4. Every other task must be green before committing.
+- `npm run check` (svelte-check) is required for Task 5 — `vite build` does NOT typecheck.
 - Tests live in `tests/` which is **excluded from tsconfig and not typechecked by vitest** — a broken mock type will pass both gates. Type test fakes against the real exported interface deliberately.
 
 ---
