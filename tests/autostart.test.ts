@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { autostartContent, setAutostart, isAutostartEnabled, wantsAutostart } from '../src/main/autostart';
+import { autostartContent, setAutostart, isAutostartEnabled, wantsAutostart, syncAutostart } from '../src/main/autostart';
 
 const tmps: string[] = [];
 function tmp(): string { const d = mkdtempSync(join(tmpdir(), 'loft-as-')); tmps.push(d); return d; }
@@ -52,5 +52,39 @@ describe('autostart', () => {
   });
   it('wantsAutostart tolerates undefined entries', () => {
     expect(wantsAutostart({ slack: undefined })).toBe(false);
+  });
+
+  it('syncAutostart uses the portal under Flatpak and never touches the file', async () => {
+    const cfg = tmp();
+    const env = { XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: tmp(), FLATPAK_ID: 'chat.loft.Loft' } as NodeJS.ProcessEnv;
+    const seen: boolean[] = [];
+    await syncAutostart(true, {
+      env, execPath: '/usr/bin/loft', iconSourceDir: tmp(),
+      portal: async (e) => { seen.push(e); return true; },
+    });
+    expect(seen).toEqual([true]);
+    expect(existsSync(join(cfg, 'autostart', 'chat.loft.Loft.desktop'))).toBe(false);
+  });
+
+  it('syncAutostart writes the file natively and never calls the portal', async () => {
+    const cfg = tmp();
+    const env = { XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: tmp() } as NodeJS.ProcessEnv;
+    let portalCalls = 0;
+    await syncAutostart(true, {
+      env, execPath: '/usr/bin/loft', iconSourceDir: tmp(),
+      portal: async () => { portalCalls++; return true; },
+    });
+    expect(portalCalls).toBe(0);
+    expect(existsSync(join(cfg, 'autostart', 'chat.loft.Loft.desktop'))).toBe(true);
+  });
+
+  it('syncAutostart(false) removes the file natively', async () => {
+    const cfg = tmp();
+    const env = { XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: tmp() } as NodeJS.ProcessEnv;
+    const opts = { env, execPath: '/usr/bin/loft', iconSourceDir: tmp() };
+    await syncAutostart(true, opts);
+    expect(isAutostartEnabled(env)).toBe(true);
+    await syncAutostart(false, opts);
+    expect(isAutostartEnabled(env)).toBe(false);
   });
 });
