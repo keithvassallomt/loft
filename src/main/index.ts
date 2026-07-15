@@ -19,8 +19,8 @@ import { startBackgroundStatus } from './gnome/backgroundStatus';
 import { createHub, type HubDeps } from './hubWindow';
 import { buildHubState } from './hubState';
 import { addService, removeService } from './install';
-import { syncAutostart, isAutostartEnabled, wantsAutostart } from './autostart';
-import { ensureHubDesktopEntry } from './desktop';
+import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
+import { ensureHubDesktopEntry, writeServiceLauncher } from './desktop';
 import { iconsDir } from './paths';
 import type { ServicePatch, GlobalPatch, RecoverOpts } from '../shared/hubTypes';
 
@@ -365,6 +365,26 @@ if (!app.requestSingleInstanceLock()) {
     try {
       ensureHubDesktopEntry({ execPath: process.execPath, iconSourceDir });
     } catch (err) { console.error('ensureHubDesktopEntry failed:', err); }
+
+    // Drop v1's per-service autostart entries. They're not merely stale: today's CLI
+    // still parses their `--service <id>` form, so they launch the service at login
+    // even when "Open on startup" is unticked — inverting the setting the hub shows.
+    try {
+      const removed = removeLegacyAutostart(SERVICES.map((s) => s.id));
+      if (removed.length) console.log(`Removed ${removed.length} legacy autostart entr${removed.length === 1 ? 'y' : 'ies'} (v1)`);
+    } catch (err) { console.error('Legacy autostart cleanup failed:', err); }
+
+    // Re-assert every installed service's launcher + icon. Idempotent and cheap, and it
+    // repairs a deleted or stale entry with no user action — notably v1-era launchers,
+    // which share our filenames but point Icon= at an XDG theme name we no longer
+    // install, leaving a blank icon in the launcher. Skipped under a dev run (see
+    // writeServiceLauncher) so a checkout can't clobber the packaged install's entries.
+    try {
+      for (const id of Object.keys(config.services)) {
+        const d = getService(id);
+        if (d) writeServiceLauncher(d, { execPath: process.execPath, iconSourceDir });
+      }
+    } catch (err) { console.error('Launcher self-heal failed:', err); }
 
     const hubDeps: HubDeps = {
       buildState: () => buildHubState({

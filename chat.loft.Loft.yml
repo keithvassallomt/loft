@@ -39,19 +39,18 @@ finish-args:
   # Per-service D-Bus names (chat.loft.WhatsApp, chat.loft.Tray, …).
   - --own-name=chat.loft.*
   # Autostart .desktop files and per-service launcher .desktop files.
-  # :ro — the Background portal now writes the entry; we only read it back to
-  # tell whether autostart is actually in effect (isAutostartEnabled). Flatpak
-  # bind-mounts the host ~/.config/autostart over $XDG_CONFIG_HOME/autostart, so
-  # a plain existsSync on the app's computed path sees the real entry.
-  #
-  # Accepted trade-off (deliberate — do not "fix" by reverting to :create): :ro
-  # does NOT create the host dir, and Flatpak cannot bind a dir that doesn't exist
-  # at launch. So on a host with no ~/.config/autostart, the first session after
-  # the portal creates it has no mount — isAutostartEnabled() reads false and the
-  # hub shows a spurious "not allowed to start at login" until the next launch,
-  # which self-heals. :create would avoid that but keeps a write grant we no
-  # longer use, which is the whole reason we moved to the portal.
-  - --filesystem=xdg-config/autostart:ro
+  # The Background portal writes OUR autostart entry (chat.loft.Loft.desktop) — this
+  # grant is deliberately NOT used for that, and must not be. Flatpak bind-mounts the
+  # host ~/.config/autostart over $XDG_CONFIG_HOME/autostart, so the app's computed
+  # path sees the real host dir. Three things need it, none of which a portal covers:
+  #   1. read back whether autostart is actually in effect (isAutostartEnabled)
+  #   2. delete our OWN v1-era leftovers (loft-<service>.desktop) — the portal only
+  #      manages its own <app-id>.desktop, and deleting needs a writable PARENT dir,
+  #      so no narrower grant works (verified: :ro gives EROFS on unlink)
+  #   3. :create (not :rw) guarantees the dir exists — Flatpak cannot bind a source
+  #      that is missing at launch, and without the bind isAutostartEnabled() reads
+  #      false all session and the hub shows a spurious "not allowed to start at login"
+  - --filesystem=xdg-config/autostart:create
   - --filesystem=xdg-data/applications:create
 
 build-options:

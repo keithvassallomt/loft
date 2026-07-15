@@ -9,6 +9,35 @@ type Env = NodeJS.ProcessEnv;
 
 const FILE = 'chat.loft.Loft.desktop';
 
+/**
+ * Remove v1's per-service autostart entries (`loft-<id>.desktop`).
+ *
+ * v1 (the Rust build) wrote ONE autostart entry PER SERVICE; v1.0.0 writes a single
+ * `chat.loft.Loft.desktop` derived from the per-service openOnStartup flags. Left in
+ * place, the leftovers actively lie: v1's `Exec=… --service whatsapp --minimized` is
+ * still parsed by today's CLI (cli.ts accepts the space form), so the service launches
+ * at login **even with "Open on startup" unticked** — the exact silent-failure this
+ * model exists to remove, just inverted.
+ *
+ * Idempotent and cheap (one existsSync per known service), so it runs every start
+ * rather than being gated on a first-run flag: that also repairs a restored backup.
+ * Never throws — a cleanup failure must not stop the app from starting.
+ */
+export function removeLegacyAutostart(serviceIds: readonly string[], env: Env = process.env): string[] {
+  const removed: string[] = [];
+  for (const id of serviceIds) {
+    const p = join(autostartDir(env), `loft-${id}.desktop`);
+    try {
+      if (!existsSync(p)) continue;
+      rmSync(p, { force: true });
+      removed.push(p);
+    } catch (e) {
+      console.debug(`Legacy autostart cleanup failed for ${p}:`, (e as Error)?.message ?? e);
+    }
+  }
+  return removed;
+}
+
 export function autostartContent(exec: string, iconPath: string): string {
   return (
     `[Desktop Entry]\n` +

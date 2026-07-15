@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { autostartContent, setAutostart, isAutostartEnabled, wantsAutostart, syncAutostart } from '../src/main/autostart';
+import { autostartContent, setAutostart, isAutostartEnabled, wantsAutostart, syncAutostart, removeLegacyAutostart } from '../src/main/autostart';
 
 const tmps: string[] = [];
 function tmp(): string { const d = mkdtempSync(join(tmpdir(), 'loft-as-')); tmps.push(d); return d; }
@@ -188,5 +188,37 @@ describe('autostart', () => {
     await expect(syncAutostart(true, opts)).resolves.toBeUndefined();
     expect(isAutostartEnabled(env)).toBe(false);
     expect(existsSync(join(cfg, 'autostart', 'chat.loft.Loft.desktop'))).toBe(false);
+  });
+});
+
+describe('removeLegacyAutostart', () => {
+  it('removes v1 per-service entries and leaves everything else alone', () => {
+    const cfg = tmp();
+    const env = { XDG_CONFIG_HOME: cfg } as NodeJS.ProcessEnv;
+    const dir = join(cfg, 'autostart');
+    mkdirSync(dir, { recursive: true });
+    // v1 wrote one of these PER SERVICE; today's CLI still parses their
+    // `--service whatsapp` form, so they'd launch it at login regardless of the flag.
+    writeFileSync(join(dir, 'loft-whatsapp.desktop'), 'x');
+    writeFileSync(join(dir, 'loft-slack.desktop'), 'x');
+    // Must survive: our own derived entry, and an unrelated app's.
+    writeFileSync(join(dir, 'chat.loft.Loft.desktop'), 'ours');
+    writeFileSync(join(dir, 'com.bitwarden.desktop.desktop'), 'theirs');
+
+    const removed = removeLegacyAutostart(['whatsapp', 'slack', 'telegram']);
+    expect(removed).toEqual([]); // default env, not our tmp dir
+
+    const removed2 = removeLegacyAutostart(['whatsapp', 'slack', 'telegram'], env);
+    expect(removed2).toHaveLength(2);
+    expect(existsSync(join(dir, 'loft-whatsapp.desktop'))).toBe(false);
+    expect(existsSync(join(dir, 'loft-slack.desktop'))).toBe(false);
+    expect(existsSync(join(dir, 'chat.loft.Loft.desktop'))).toBe(true);
+    expect(existsSync(join(dir, 'com.bitwarden.desktop.desktop'))).toBe(true);
+  });
+
+  it('is idempotent and never throws on a missing dir', () => {
+    const env = { XDG_CONFIG_HOME: join(tmp(), 'nope') } as NodeJS.ProcessEnv;
+    expect(() => removeLegacyAutostart(['whatsapp'], env)).not.toThrow();
+    expect(removeLegacyAutostart(['whatsapp'], env)).toEqual([]);
   });
 });

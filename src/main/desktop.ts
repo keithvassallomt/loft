@@ -69,10 +69,27 @@ function launcherPath(def: ServiceDef, env?: Env): string {
   return join(applicationsDir(env), `loft-${def.id}.desktop`);
 }
 
+/**
+ * Write (or repair) a service's launcher + icon. Idempotent — callers re-run it to
+ * self-heal a stale or deleted entry, including v1-era ones whose `Icon=` was an XDG
+ * theme name rather than a real path.
+ *
+ * Skipped under a dev run: `desktopExec()` would resolve to the checkout's own
+ * `node_modules/.../electron`, producing a launcher that can't work (no app dir, so it
+ * opens Electron's default app) at the SAME filename the packaged install uses —
+ * silently clobbering the real one. `ensureHubDesktopEntry` has always guarded this;
+ * doing it here covers every caller at once.
+ */
 export function writeServiceLauncher(
   def: ServiceDef,
   opts: { env?: Env; execPath?: string; iconSourceDir: string },
 ): void {
+  const env = opts.env ?? process.env;
+  const exec0 = opts.execPath ?? process.execPath;
+  if (isDevExec(exec0, env)) {
+    console.debug(`Dev run (${exec0}) — not writing ${def.id}'s launcher`);
+    return;
+  }
   const icon = deployServiceIcon(def, { env: opts.env, iconSourceDir: opts.iconSourceDir });
   const dir = applicationsDir(opts.env);
   mkdirSync(dir, { recursive: true });

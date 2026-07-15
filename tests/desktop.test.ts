@@ -116,3 +116,57 @@ describe('ensureHubDesktopEntry', () => {
     expect(existsSync(join(data, 'loft', 'icons', 'loft.png'))).toBe(true);
   });
 });
+
+describe('writeServiceLauncher self-heal', () => {
+  const iconSrc = (): string => { const d = tmp(); writeFileSync(join(d, 'whatsapp.png'), 'png'); return d; };
+
+  it('repairs a stale v1-era launcher in place (same filename, bad Icon=)', () => {
+    const data = tmp();
+    const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
+    const apps = join(data, 'applications');
+    mkdirSync(apps, { recursive: true });
+    // What v1 left behind: our exact filename, but Icon= is an XDG theme name we no
+    // longer install — the blank-icon-in-the-launcher symptom.
+    const p = join(apps, 'loft-whatsapp.desktop');
+    writeFileSync(p, '[Desktop Entry]\nExec=/old/loft --service whatsapp\nIcon=loft-whatsapp\n');
+
+    writeServiceLauncher(wa, { env, execPath: '/usr/bin/loft', iconSourceDir: iconSrc() });
+
+    const c = readFileSync(p, 'utf8');
+    expect(c).toContain('Exec=/usr/bin/loft --service=whatsapp');
+    expect(c).toContain(`Icon=${join(data, 'loft', 'icons', 'whatsapp.png')}`);
+    expect(c).not.toContain('Icon=loft-whatsapp\n');
+  });
+
+  it('recreates a deleted launcher', () => {
+    const data = tmp();
+    const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
+    const p = join(data, 'applications', 'loft-whatsapp.desktop');
+    expect(existsSync(p)).toBe(false);
+    writeServiceLauncher(wa, { env, execPath: '/usr/bin/loft', iconSourceDir: iconSrc() });
+    expect(existsSync(p)).toBe(true);
+  });
+
+  // Without this, `npm start` rewrites every launcher to point at the checkout's
+  // electron — at the SAME filename the packaged install uses, silently clobbering it.
+  it('refuses to write from a dev checkout', () => {
+    const data = tmp();
+    const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
+    const p = join(data, 'applications', 'loft-whatsapp.desktop');
+    writeServiceLauncher(wa, {
+      env, execPath: '/home/x/loft/node_modules/electron/dist/electron', iconSourceDir: iconSrc(),
+    });
+    expect(existsSync(p)).toBe(false);
+  });
+
+  it('still writes from an AppImage (APPIMAGE set) even though execPath looks dev-ish', () => {
+    const data = tmp();
+    const env = { XDG_DATA_HOME: data, APPIMAGE: '/a/Loft.AppImage' } as NodeJS.ProcessEnv;
+    const p = join(data, 'applications', 'loft-whatsapp.desktop');
+    writeServiceLauncher(wa, {
+      env, execPath: '/tmp/.mount_x/electron', iconSourceDir: iconSrc(),
+    });
+    expect(existsSync(p)).toBe(true);
+    expect(readFileSync(p, 'utf8')).toContain('Exec=/a/Loft.AppImage --service=whatsapp');
+  });
+});
