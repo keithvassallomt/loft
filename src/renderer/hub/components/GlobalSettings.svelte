@@ -15,16 +15,17 @@
   </select>
 </label>
 
-<label class="toggle">
-  <input type="checkbox" checked={g.startAtLogin} onchange={(e) => window.loftHub.setGlobal({ startAtLogin: e.currentTarget.checked })} />
-  <span>Start Loft at login</span>
-</label>
+{#if g.autostartBlocked}
+  <p class="warn">
+    Loft was denied permission to start at login, so services set to open on startup won't open.
+    Allow it in Settings → Apps → Loft.
+  </p>
+{/if}
 
 <style>
   h2 { margin: 8px 0 16px; }
   .field { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; }
   .field em { opacity: 0.6; font-style: normal; font-size: 0.85em; }
   .field select { padding: 8px; border-radius: 8px; border: 1px solid var(--divider); background: var(--bg); color: var(--fg); }
-  .toggle { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
-  .toggle span { flex: 1; }
+  .warn { margin: 12px 0; padding: 10px 12px; border-radius: 8px; border: 1px solid #e5a50a; background: #e5a50a1a; font-size: 0.9em; }
 </style>
