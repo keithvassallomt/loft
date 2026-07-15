@@ -4,17 +4,32 @@ import {
 } from '../src/main/portal/background';
 
 /** Fake portal: records the call, then fires whatever Response we tell it to. */
-function fake(opts: { response?: number; granted?: boolean; throws?: boolean } = {}) {
+function fake(
+  opts: {
+    response?: number;
+    granted?: boolean;
+    throws?: boolean;
+    onResponseThrows?: boolean;
+    neverResponds?: boolean;
+  } = {},
+) {
   const calls: Array<{ token: string; options: Record<string, unknown> }> = [];
   let cb: ((r: number, res: Record<string, unknown>) => void) | undefined;
   let subscribed: string | undefined;
   let stopped = false;
   const deps: PortalDeps = {
+    ready: () => Promise.resolve(),
     uniqueName: () => ':1.42',
-    onResponse: (path, f) => { subscribed = path; cb = f; return { stop: () => { stopped = true; } }; },
+    onResponse: (path, f) => {
+      if (opts.onResponseThrows) throw new Error('subscription failed');
+      subscribed = path;
+      cb = f;
+      return { stop: () => { stopped = true; } };
+    },
     call: async (token, options) => {
       calls.push({ token, options });
       if (opts.throws) throw new Error('portal unavailable');
+      if (opts.neverResponds) return; // the real portal can just... never reply.
       // The real portal replies on the Request path, asynchronously.
       queueMicrotask(() => cb?.(opts.response ?? 0, { autostart: opts.granted ?? true }));
     },
@@ -77,5 +92,56 @@ describe('requestAutostart', () => {
     await requestAutostart(true, f.deps);
     await requestAutostart(true, f.deps);
     expect(f.calls[0].token).not.toBe(f.calls[1].token);
+  });
+
+  // Critical 2 / Important 4: onResponse throwing must not become an
+  // unhandled rejection, and must not let RequestBackground fire without
+  // anything listening for the answer.
+  it('never rejects and never calls deps.call when onResponse throws', async () => {
+    const f = fake({ onResponseThrows: true });
+    await expect(requestAutostart(true, f.deps)).resolves.toBe(false);
+    expect(f.calls).toHaveLength(0);
+  });
+
+  // Important 3: a Response that never arrives must not hang forever or
+  // leak the subscription — it resolves false once the leak-guard timeout
+  // fires, and sub.stop() must have run.
+  it('resolves false and stops the subscription when the Response never arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fake({ neverResponds: true });
+      const pending = requestAutostart(true, f.deps);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(pending).resolves.toBe(false);
+      expect(f.stopped).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Critical 1: uniqueName() is only safe to read after ready() resolves —
+  // dbus-next's bus.name is null until the async Hello() round-trip
+  // completes. This fake throws if read too early.
+  it('awaits deps.ready() before reading deps.uniqueName()', async () => {
+    let readyResolved = false;
+    const deps: PortalDeps = {
+      ready: () =>
+        new Promise((resolve) => {
+          queueMicrotask(() => {
+            readyResolved = true;
+            resolve();
+          });
+        }),
+      uniqueName: () => {
+        if (!readyResolved) throw new Error('uniqueName() read before ready() resolved');
+        return ':1.42';
+      },
+      onResponse: (_path, cb) => {
+        queueMicrotask(() => cb(0, { autostart: true }));
+        return { stop: () => {} };
+      },
+      call: async () => {},
+    };
+    await expect(requestAutostart(true, deps)).resolves.toBe(true);
   });
 });
