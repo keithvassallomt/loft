@@ -28,6 +28,8 @@ export interface ServiceWindow {
   pushHidden(hidden: boolean): void;
   /** Ask the page to navigate to a conversation (Messenger notification click). */
   navigate(url: string): void;
+  /** Navigate the service view, hiding any stale recovery overlay and re-arming stuck detection. */
+  loadUrl(url: string): void;
   /** Reload the service view and re-arm stuck detection. */
   reload(): void;
   /** Clear the service's caches (never cookies), then reload. */
@@ -213,6 +215,15 @@ export function createServiceWindow(
   serviceView.webContents.on('did-navigate', (_e, url) => watcher.navigated(url));
   window.on('closed', () => watcher.dispose());
 
+  // Single choke point for real navigations: hides a stale overlay and re-arms
+  // stuck detection so no navigation path (initial load, customUrl change, ...)
+  // can silently bypass the watcher.
+  const loadUrl = (url: string): void => {
+    hideRecovery();
+    void serviceView.webContents.loadURL(url);
+    watcher.armed();
+  };
+
   // Ctrl+R / F5 — there is no app menu (Menu.setApplicationMenu(null)), so the
   // usual reload accelerator does not exist.
   serviceView.webContents.on('before-input-event', (_e, input) => {
@@ -221,8 +232,7 @@ export function createServiceWindow(
     if (isReload) api.reload();
   });
 
-  void serviceView.webContents.loadURL(effectiveUrl(def, cfg.services[def.id]?.customUrl));
-  watcher.armed();
+  loadUrl(effectiveUrl(def, cfg.services[def.id]?.customUrl));
 
   const api: ServiceWindow = {
     def,
@@ -246,6 +256,7 @@ export function createServiceWindow(
     pushDnd: (enabled: boolean) => safeSend(serviceView, 'service:dnd', enabled),
     pushHidden: (hidden: boolean) => safeSend(serviceView, 'service:visibility', hidden),
     navigate: (url: string) => safeSend(serviceView, 'service:navigate', url),
+    loadUrl,
     reload: () => {
       hideRecovery();
       serviceView.webContents.reload();

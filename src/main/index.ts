@@ -376,7 +376,7 @@ if (!app.requestSingleInstanceLock()) {
         }
         if (patch.customUrl !== undefined) {
           const d = getService(id); const sw = windows.get(id);
-          if (d && sw) sw.serviceView.webContents.loadURL(effectiveUrl(d, patch.customUrl || undefined));
+          if (d && sw) sw.loadUrl(effectiveUrl(d, patch.customUrl || undefined));
         }
       },
       setGlobal: (patch: GlobalPatch) => {
