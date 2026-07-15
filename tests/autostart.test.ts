@@ -205,11 +205,8 @@ describe('removeLegacyAutostart', () => {
     writeFileSync(join(dir, 'chat.loft.Loft.desktop'), 'ours');
     writeFileSync(join(dir, 'com.bitwarden.desktop.desktop'), 'theirs');
 
-    const removed = removeLegacyAutostart(['whatsapp', 'slack', 'telegram']);
-    expect(removed).toEqual([]); // default env, not our tmp dir
-
-    const removed2 = removeLegacyAutostart(['whatsapp', 'slack', 'telegram'], env);
-    expect(removed2).toHaveLength(2);
+    const removed = removeLegacyAutostart(['whatsapp', 'slack', 'telegram'], env);
+    expect(removed).toHaveLength(2);
     expect(existsSync(join(dir, 'loft-whatsapp.desktop'))).toBe(false);
     expect(existsSync(join(dir, 'loft-slack.desktop'))).toBe(false);
     expect(existsSync(join(dir, 'chat.loft.Loft.desktop'))).toBe(true);

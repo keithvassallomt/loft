@@ -38,6 +38,14 @@ describe('isDevExec', () => {
   it('is false whenever APPIMAGE is set, even for a dev-looking path', () => {
     expect(isDevExec('/home/u/proj/node_modules/electron/dist/electron', { APPIMAGE: '/a/Loft.AppImage' })).toBe(false);
   });
+  // The Flatpak's own execPath is /app/main/node_modules/electron/dist/electron: it
+  // CONTAINS '/node_modules/' and ENDS WITH '/electron', so every heuristic above
+  // false-positives on the packaged app. desktopExec() resolves Flatpak separately.
+  it('is false inside the Flatpak despite the dev-looking execPath', () => {
+    const fp = '/app/main/node_modules/electron/dist/electron';
+    expect(isDevExec(fp, { FLATPAK_ID: 'chat.loft.Loft' })).toBe(false);
+    expect(isDevExec(fp, {})).toBe(true); // same path, no sandbox = genuinely dev
+  });
 });
 
 describe('desktop content', () => {
@@ -145,6 +153,22 @@ describe('writeServiceLauncher self-heal', () => {
     expect(existsSync(p)).toBe(false);
     writeServiceLauncher(wa, { env, execPath: '/usr/bin/loft', iconSourceDir: iconSrc() });
     expect(existsSync(p)).toBe(true);
+  });
+
+  // Regression lock: the Flatpak's own execPath is
+  // /app/main/node_modules/electron/dist/electron — it CONTAINS '/node_modules/' and
+  // ENDS WITH '/electron', so the dev heuristic false-positives on the packaged app.
+  // Unguarded, that silently disabled launcher writing on the primary shipping target.
+  it('still writes inside the Flatpak, whose execPath looks exactly like a dev run', () => {
+    const data = tmp();
+    const env = { XDG_DATA_HOME: data, FLATPAK_ID: 'chat.loft.Loft' } as NodeJS.ProcessEnv;
+    const p = join(data, 'applications', 'loft-whatsapp.desktop');
+    writeServiceLauncher(wa, {
+      env, execPath: '/app/main/node_modules/electron/dist/electron', iconSourceDir: iconSrc(),
+    });
+    expect(existsSync(p)).toBe(true);
+    expect(readFileSync(p, 'utf8')).toContain('Exec=flatpak run chat.loft.Loft --service=whatsapp');
+    expect(existsSync(join(data, 'loft', 'icons', 'whatsapp.png'))).toBe(true);
   });
 
   // Without this, `npm start` rewrites every launcher to point at the checkout's

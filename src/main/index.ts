@@ -379,12 +379,14 @@ if (!app.requestSingleInstanceLock()) {
     // which share our filenames but point Icon= at an XDG theme name we no longer
     // install, leaving a blank icon in the launcher. Skipped under a dev run (see
     // writeServiceLauncher) so a checkout can't clobber the packaged install's entries.
-    try {
-      for (const id of Object.keys(config.services)) {
+    // Per-service try: one unwritable entry must not skip the rest (removeLegacyAutostart
+    // isolates per-file for the same reason).
+    for (const id of Object.keys(config.services)) {
+      try {
         const d = getService(id);
         if (d) writeServiceLauncher(d, { execPath: process.execPath, iconSourceDir });
-      }
-    } catch (err) { console.error('Launcher self-heal failed:', err); }
+      } catch (err) { console.error(`Launcher self-heal failed for ${id}:`, err); }
+    }
 
     const hubDeps: HubDeps = {
       buildState: () => buildHubState({

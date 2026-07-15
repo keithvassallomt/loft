@@ -26,6 +26,11 @@ export function desktopExec(opts: { env?: Env; execPath?: string } = {}): string
  * of a real Flatpak-portal-written entry, since both write the same filename.
  */
 export function isDevExec(exec: string, env: Env = process.env): boolean {
+  // There is no such thing as a dev run inside the Flatpak, and its execPath is
+  // /app/main/node_modules/electron/dist/electron — which contains '/node_modules/'
+  // AND ends with '/electron', so every heuristic below false-positives on the
+  // packaged app. desktopExec() already resolves Flatpak to `flatpak run …`.
+  if (isFlatpak(env)) return false;
   return !env.APPIMAGE && (exec.includes('/node_modules/') || exec.endsWith('/electron'));
 }
 
