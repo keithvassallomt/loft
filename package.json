@@ -11,7 +11,7 @@
     "bundle-preload": "esbuild src/preload/service.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/service.js",
     "bundle-hub-preload": "esbuild src/preload/hub.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/hub.js",
     "bundle-renderer": "vite build",
-    "copy-assets": "mkdir -p dist/renderer/titlebar dist/assets/icons && cp src/renderer/titlebar/index.html src/renderer/titlebar/titlebar.css dist/renderer/titlebar/ && cp assets/loft.png dist/assets/ && cp assets/icons/*.png dist/assets/icons/ && cp assets/icons/loft-symbolic.svg dist/assets/loft-symbolic.svg",
+    "copy-assets": "mkdir -p dist/renderer/titlebar dist/renderer/recovery dist/assets/icons && cp src/renderer/titlebar/index.html src/renderer/titlebar/titlebar.css dist/renderer/titlebar/ && cp src/renderer/recovery/index.html src/renderer/recovery/recovery.css dist/renderer/recovery/ && cp assets/loft.png dist/assets/ && cp assets/icons/*.png dist/assets/icons/ && cp assets/icons/loft-symbolic.svg dist/assets/loft-symbolic.svg",
     "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
     "dist": "npm run build && electron-builder --linux",
     "whatsapp": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=whatsapp",
