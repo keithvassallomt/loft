@@ -9,7 +9,8 @@ export interface HubStateDeps {
   visible(id: string): boolean;
   badge(id: string): number;
   trayBackend: TrayBackend;
-  startAtLogin: boolean;
+  /** True when services asked to open at login but no autostart entry exists (e.g. the portal denied). */
+  autostartBlocked: boolean;
 }
 
 export function buildHubState(deps: HubStateDeps): HubState {
@@ -29,5 +30,5 @@ export function buildHubState(deps: HubStateDeps): HubState {
       customUrl: c?.customUrl ?? '',
     };
   });
-  return { services, globals: { trayBackend: deps.trayBackend, startAtLogin: deps.startAtLogin } };
+  return { services, globals: { trayBackend: deps.trayBackend, autostartBlocked: deps.autostartBlocked } };
 }

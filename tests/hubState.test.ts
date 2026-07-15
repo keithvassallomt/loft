@@ -9,7 +9,7 @@ const base = {
   visible: () => false,
   badge: () => 0,
   trayBackend: 'auto' as const,
-  startAtLogin: false,
+  autostartBlocked: false,
 };
 
 describe('buildHubState', () => {
@@ -34,17 +34,27 @@ describe('buildHubState', () => {
       services: { telegram: { dnd: true, openOnStartup: true, customUrl: 'https://t' } },
     };
     const s = buildHubState({
-      ...base, config, trayBackend: 'sni', startAtLogin: true,
+      ...base, config, trayBackend: 'sni', autostartBlocked: true,
       running: (id) => id === 'telegram', visible: (id) => id === 'telegram',
     });
     const tg = s.services.find((x) => x.id === 'telegram')!;
     expect(tg).toMatchObject({ running: true, visible: true, dnd: true, openOnStartup: true, customUrl: 'https://t' });
-    expect(s.globals).toEqual({ trayBackend: 'sni', startAtLogin: true });
+    expect(s.globals).toEqual({ trayBackend: 'sni', autostartBlocked: true });
   });
 
   it('defaults badgesEnabled to true when unset', () => {
     const config: LoftConfig = { services: { slack: {} } };
     const s = buildHubState({ ...base, config });
     expect(s.services.find((x) => x.id === 'slack')!.badgesEnabled).toBe(true);
+  });
+
+  it('surfaces autostartBlocked in globals', () => {
+    const deps = {
+      services: [], config: { services: {} } as never,
+      running: () => false, visible: () => false, badge: () => 0,
+      trayBackend: 'auto' as const,
+    };
+    expect(buildHubState({ ...deps, autostartBlocked: true }).globals.autostartBlocked).toBe(true);
+    expect(buildHubState({ ...deps, autostartBlocked: false }).globals.autostartBlocked).toBe(false);
   });
 });
