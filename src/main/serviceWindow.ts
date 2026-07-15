@@ -7,6 +7,7 @@ import { computeLayout } from './layout';
 import { configureSession } from './session';
 import { dechromeCssFor } from './dechromeCss';
 import { formatWindowTitle } from './serviceTitle';
+import { createStuckWatcher, clearServiceCaches } from './recovery';
 
 export interface ServiceWindow {
   def: ServiceDef;
@@ -27,6 +28,12 @@ export interface ServiceWindow {
   pushHidden(hidden: boolean): void;
   /** Ask the page to navigate to a conversation (Messenger notification click). */
   navigate(url: string): void;
+  /** Reload the service view and re-arm stuck detection. */
+  reload(): void;
+  /** Clear the service's caches (never cookies), then reload. */
+  clearAndReload(): Promise<void>;
+  /** True if the given webContents id belongs to this window (titlebar, service, or recovery overlay). */
+  ownsWebContents(id: number): boolean;
 }
 
 export function createServiceWindow(
@@ -131,6 +138,7 @@ export function createServiceWindow(
     const { titlebar: t, service: s } = computeLayout(w, h);
     titlebar.setBounds(t);
     serviceView.setBounds(s);
+    recoveryView?.setBounds(s);
   };
   relayout();
   window.on('resize', relayout);
@@ -165,7 +173,56 @@ export function createServiceWindow(
   window.on('move', persist);
   window.on('hide', persist);
 
-  serviceView.webContents.loadURL(effectiveUrl(def, cfg.services[def.id]?.customUrl));
+  // --- Recovery overlay -------------------------------------------------------
+  // A view can end up permanently blank (e.g. a corrupt service worker aborting
+  // every navigation). Detect "nothing ever committed" and offer a way out; the
+  // user chooses — we never clear their data unasked.
+  let recoveryView: WebContentsView | undefined;
+
+  const showRecovery = (): void => {
+    if (recoveryView) return;
+    const view = new WebContentsView({
+      webPreferences: { preload: join(__dirname, '../preload/recovery.js') },
+    });
+    recoveryView = view;
+    view.webContents.on('did-finish-load', () =>
+      safeSend(view, 'recovery:set-service', def.displayName),
+    );
+    void view.webContents.loadFile(join(__dirname, '../renderer/recovery/index.html'));
+    window.contentView.addChildView(view); // above the service view
+    const [w, h] = window.getContentSize();
+    view.setBounds(computeLayout(w, h).service);
+  };
+
+  const hideRecovery = (): void => {
+    if (!recoveryView) return;
+    const view = recoveryView;
+    recoveryView = undefined;
+    window.contentView.removeChildView(view);
+    view.webContents.close();
+  };
+
+  const watcher = createStuckWatcher({
+    timeoutMs: 15_000,
+    getUrl: () => serviceView.webContents.getURL(),
+    onStuck: showRecovery,
+    onRecovered: hideRecovery,
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (h) => clearTimeout(h as NodeJS.Timeout),
+  });
+  serviceView.webContents.on('did-navigate', (_e, url) => watcher.navigated(url));
+  window.on('closed', () => watcher.dispose());
+
+  // Ctrl+R / F5 — there is no app menu (Menu.setApplicationMenu(null)), so the
+  // usual reload accelerator does not exist.
+  serviceView.webContents.on('before-input-event', (_e, input) => {
+    if (input.type !== 'keyDown') return;
+    const isReload = input.key === 'F5' || (input.control && input.key.toLowerCase() === 'r');
+    if (isReload) api.reload();
+  });
+
+  void serviceView.webContents.loadURL(effectiveUrl(def, cfg.services[def.id]?.customUrl));
+  watcher.armed();
 
   const api: ServiceWindow = {
     def,
@@ -189,6 +246,19 @@ export function createServiceWindow(
     pushDnd: (enabled: boolean) => safeSend(serviceView, 'service:dnd', enabled),
     pushHidden: (hidden: boolean) => safeSend(serviceView, 'service:visibility', hidden),
     navigate: (url: string) => safeSend(serviceView, 'service:navigate', url),
+    reload: () => {
+      hideRecovery();
+      serviceView.webContents.reload();
+      watcher.armed();
+    },
+    clearAndReload: async () => {
+      await clearServiceCaches(ses);
+      api.reload();
+    },
+    ownsWebContents: (id: number) =>
+      titlebar.webContents.id === id ||
+      serviceView.webContents.id === id ||
+      recoveryView?.webContents.id === id,
   };
 
   if (!opts.minimized) api.show();

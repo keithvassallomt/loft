@@ -179,9 +179,7 @@ function resolveServiceFromArgs(argv: string[]): ServiceDef | undefined {
 // webContents id back to its ServiceWindow (match titlebar or service view).
 function findBySenderId(senderId: number): ServiceWindow | undefined {
   for (const sw of windows.values()) {
-    if (sw.titlebarView.webContents.id === senderId || sw.serviceView.webContents.id === senderId) {
-      return sw;
-    }
+    if (sw.ownsWebContents(senderId)) return sw;
   }
   return undefined;
 }
@@ -200,6 +198,8 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on('titlebar:zoom-in', (e) => findBySenderId(e.sender.id)?.setZoom(+0.1));
   ipcMain.on('titlebar:zoom-out', (e) => findBySenderId(e.sender.id)?.setZoom(-0.1));
   ipcMain.on('titlebar:close', (e) => findBySenderId(e.sender.id)?.hide());
+  ipcMain.on('recovery:reload', (e) => findBySenderId(e.sender.id)?.reload());
+  ipcMain.on('recovery:clear-and-reload', (e) => { void findBySenderId(e.sender.id)?.clearAndReload(); });
 
   ipcMain.on('service:badge', (e, payload?: { count?: number }) => {
     if (typeof payload?.count !== 'number') return;
