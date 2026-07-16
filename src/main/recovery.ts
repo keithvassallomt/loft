@@ -73,3 +73,33 @@ export async function clearServiceCaches(ses: Session): Promise<void> {
   await ses.clearStorageData({ storages: ['serviceworkers', 'cachestorage'] });
   await ses.clearCache();
 }
+
+export interface InitialLoadDeps {
+  /** Clear the service's SW + caches (clearServiceCaches). May reject. */
+  clearCaches(): Promise<void>;
+  /** Navigate the service view to its start URL and arm stuck detection. */
+  load(): void;
+  /** Report a clear failure (logged; the load proceeds regardless). */
+  onError(err: unknown): void;
+}
+
+/**
+ * Kick off a service window's very first navigation.
+ *
+ * Most services just load. A `clearFirst` service (Slack) has its persisted service
+ * worker + caches cleared BEFORE the first load: Slack's cached SW reliably wedges
+ * the /client navigation on cold start — it never commits, so the view sits on
+ * about:blank (see createStuckWatcher) and Chromium won't re-run the SW's install to
+ * self-heal. A from-scratch registration each launch is the only reliable cure, and
+ * clearServiceCaches leaves cookies untouched so the session stays signed in.
+ *
+ * The load ALWAYS happens — even if the clear rejects — so a failed clear can never
+ * strand the window blank. Non-clearing services load synchronously (unchanged).
+ */
+export function startInitialLoad(clearFirst: boolean, deps: InitialLoadDeps): Promise<void> {
+  if (!clearFirst) {
+    deps.load();
+    return Promise.resolve();
+  }
+  return deps.clearCaches().catch(deps.onError).then(() => deps.load());
+}

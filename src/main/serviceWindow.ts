@@ -7,7 +7,7 @@ import { computeLayout } from './layout';
 import { configureSession } from './session';
 import { dechromeCssFor } from './dechromeCss';
 import { formatWindowTitle } from './serviceTitle';
-import { createStuckWatcher, clearServiceCaches } from './recovery';
+import { createStuckWatcher, clearServiceCaches, startInitialLoad } from './recovery';
 
 export interface ServiceWindow {
   def: ServiceDef;
@@ -243,7 +243,14 @@ export function createServiceWindow(
     if (isReload) api.reload();
   });
 
-  loadUrl(effectiveUrl(def, cfg.services[def.id]?.customUrl));
+  // Kick off the first navigation. Slack (clearCachesOnStart) has its wedge-prone
+  // persisted service worker cleared first so a fresh, working SW registers each
+  // launch — see startInitialLoad. A clear failure still loads (never left blank).
+  void startInitialLoad(def.clearCachesOnStart ?? false, {
+    clearCaches: () => clearServiceCaches(ses),
+    load: () => loadUrl(effectiveUrl(def, cfg.services[def.id]?.customUrl)),
+    onError: (err) => console.error(`clearCachesOnStart(${def.id}) failed:`, err),
+  });
 
   const api: ServiceWindow = {
     def,

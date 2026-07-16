@@ -19,6 +19,14 @@ describe('service registry', () => {
     expect(getService('whatsapp')?.selfHosted).toBe(false);
   });
 
+  it('flags only Slack to clear its wedge-prone service worker before the first load', () => {
+    expect(getService('slack')?.clearCachesOnStart).toBe(true);
+    // No other service pays the cold-start re-fetch cost.
+    for (const id of ['whatsapp', 'messenger', 'telegram', 'element', 'talk']) {
+      expect(getService(id)?.clearCachesOnStart ?? false).toBe(false);
+    }
+  });
+
   it('effectiveUrl prefers a customUrl only for self-hosted services', () => {
     const el = getService('element')!;
     expect(effectiveUrl(el, 'https://chat.example.org/')).toBe('https://chat.example.org/');

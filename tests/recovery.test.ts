@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Session } from 'electron';
-import { isStuckUrl, createStuckWatcher, clearServiceCaches } from '../src/main/recovery';
+import { isStuckUrl, createStuckWatcher, clearServiceCaches, startInitialLoad } from '../src/main/recovery';
 
 describe('isStuckUrl', () => {
   it('treats a view that never committed as stuck', () => {
@@ -83,6 +83,68 @@ describe('createStuckWatcher', () => {
     expect(h.calls.cleared).toBeGreaterThan(0);
     h.fire();
     expect(h.calls.stuck).toBe(0);
+  });
+});
+
+describe('startInitialLoad', () => {
+  it('loads immediately and never clears when clearFirst is false', async () => {
+    const calls: string[] = [];
+    await startInitialLoad(false, {
+      clearCaches: async () => { calls.push('clear'); },
+      load: () => calls.push('load'),
+      onError: () => calls.push('error'),
+    });
+    expect(calls).toEqual(['load']);
+  });
+
+  it('loads synchronously (not on a later tick) when clearFirst is false', () => {
+    const calls: string[] = [];
+    // No await: the load must have happened by the time this line runs — a
+    // non-clearing service must keep today's synchronous first navigation.
+    void startInitialLoad(false, {
+      clearCaches: async () => { calls.push('clear'); },
+      load: () => calls.push('load'),
+      onError: () => calls.push('error'),
+    });
+    expect(calls).toEqual(['load']);
+  });
+
+  it('clears BEFORE loading when clearFirst is true', async () => {
+    const calls: string[] = [];
+    await startInitialLoad(true, {
+      clearCaches: async () => { calls.push('clear'); },
+      load: () => calls.push('load'),
+      onError: () => calls.push('error'),
+    });
+    expect(calls).toEqual(['clear', 'load']);
+  });
+
+  it('does not load until the clear resolves', async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const done = startInitialLoad(true, {
+      clearCaches: () => gate,
+      load: () => calls.push('load'),
+      onError: () => calls.push('error'),
+    });
+    expect(calls).toEqual([]); // clear still pending → no load yet
+    release();
+    await done;
+    expect(calls).toEqual(['load']);
+  });
+
+  it('still loads (and reports) when the clear rejects — never strands the window blank', async () => {
+    const calls: string[] = [];
+    const boom = new Error('clear failed');
+    let seen: unknown;
+    await startInitialLoad(true, {
+      clearCaches: async () => { throw boom; },
+      load: () => calls.push('load'),
+      onError: (e) => { seen = e; calls.push('error'); },
+    });
+    expect(calls).toEqual(['error', 'load']);
+    expect(seen).toBe(boom);
   });
 });
 
