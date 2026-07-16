@@ -20,6 +20,7 @@ import { createHub, type HubDeps } from './hubWindow';
 import { buildHubState } from './hubState';
 import { addService, removeService } from './install';
 import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
+import { createSignalShutdown } from './shutdown';
 import { ensureHubDesktopEntry, writeServiceLauncher } from './desktop';
 import { iconsDir } from './paths';
 import type { ServicePatch, GlobalPatch, RecoverOpts } from '../shared/hubTypes';
@@ -519,7 +520,29 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('before-quit', () => {
     quitting = true; // fires before window 'close' events, so close-to-tray yields to a real quit
-    for (const sw of windows.values()) sw.persist();
-    saveConfig(configPath(), config);
+    persistAll();
   });
+
+  // Session-end (logout/shutdown): systemd SIGTERMs our scope ~1s BEFORE it tears down
+  // the session bus (measured on GNOME: loft scope Stopping at T, dbus-broker Stopping at
+  // T+~940ms). Chromium calls LOG(FATAL) (dbus/bus.cc) the instant its D-Bus connection
+  // disconnects while the process is alive — so if we're still shutting down when the bus
+  // dies, the process aborts (SIGTRAP) and the user gets an "Electron crashed" notice at
+  // the next login. Electron's default graceful teardown (~600ms, longer with several
+  // services + our own dbus-next connections open) can lose that race.
+  //
+  // Fix: persist synchronously and app.exit(0) IMMEDIATELY — collapsing shutdown to a few
+  // ms, well inside the pre-bus-death window. app.quit() is the graceful path that loses
+  // the race; app.exit(0) is deliberate. Reproduced the abort directly by killing a private
+  // bus under a running Electron; verified the exact FATAL:dbus/bus.cc:1245 message, and
+  // that this drops SIGTERM exit from ~600ms to ~116ms. (createSignalShutdown is unit-tested.)
+  const fastExit = createSignalShutdown({ persist: persistAll, exit: () => app.exit(0) });
+  for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.on(sig, fastExit);
+}
+
+/** Persist every open window's bounds/zoom and flush config. Shared by the in-app quit
+ *  path (before-quit) and the session-end signal handler. */
+function persistAll(): void {
+  for (const sw of windows.values()) sw.persist();
+  saveConfig(configPath(), config);
 }
