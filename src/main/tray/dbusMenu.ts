@@ -53,7 +53,7 @@ function serviceIconData(id: string): number[] | null {
  * and dispatch to `onEvent(actionId)`.
  *
  * Layout:
- *   ☑ Do Not Disturb (all)            (global:dnd)
+ *   ☑ Do Not Disturb                  (global:dnd)
  *   ──────────
  *   <Service> [•] ▸                   (submenu, one per running service)
  *       Show / Hide                   (svc:<id>:toggle)
@@ -229,7 +229,7 @@ function buildTree(
 
   // Global DND toggle.
   children.push(
-    item('Do Not Disturb (all)', 'global:dnd', {
+    item('Do Not Disturb', 'global:dnd', {
       ...toggle(model.globalDnd),
       'icon-name': V('s', 'notifications-disabled-symbolic'),
     }),

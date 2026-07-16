@@ -142,7 +142,7 @@ export default class LoftShellHelper extends Extension {
         this._combinedAvailable = new Map();
         this._combinedWatchId = null;
         // Global DND, pushed by the app via UpdateGlobalDnd. Mirrors the SNI
-        // menu's "Do Not Disturb (all)": it mutes every service at once.
+        // menu's "Do Not Disturb": it mutes every service at once.
         this._combinedGlobalDnd = false;
         this._pendingDashTimeouts = new Set();
 
@@ -849,14 +849,14 @@ export default class LoftShellHelper extends Extension {
         menu.removeAll();
 
         // Layout, matching the SNI backend's menu (src/main/tray/dbusMenu.ts)
-        //   Do Not Disturb (all)
+        //   Do Not Disturb
         //   \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         //   <service rows>            (running only \u2014 the app pushes no others,
         //   \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500                 so there's no launch section as SNI has)
         //   Loft Settings\u2026
         //   Quit Loft
         const globalDndItem = new PopupMenu.PopupSwitchMenuItem(
-            'Do Not Disturb (all)', this._combinedGlobalDnd
+            'Do Not Disturb', this._combinedGlobalDnd
         );
         globalDndItem.connect('toggled', (_item, state) => {
             this._callLoftRootMethod('SetGlobalDnd', '(b)', [state]);

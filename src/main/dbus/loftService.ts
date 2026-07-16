@@ -17,7 +17,7 @@ export interface LoftServiceDeps {
   quitApp(): void;
   /** Open/focus the hub window (the GNOME-panel "Loft Settings…" item calls this). */
   showHub(): void;
-  /** Toggle global DND (the GNOME-panel "Do Not Disturb (all)" switch calls this). */
+  /** Toggle global DND (the GNOME-panel "Do Not Disturb" switch calls this). */
   setGlobalDnd(enabled: boolean): void;
 }
 
