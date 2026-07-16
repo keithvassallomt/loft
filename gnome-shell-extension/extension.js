@@ -73,6 +73,13 @@ const DBUS_IFACE = `<node>
     <method name="RemoveCombinedService">
       <arg name="name" type="s" direction="in"/>
     </method>
+    <method name="UpdateAvailableService">
+      <arg name="name" type="s" direction="in"/>
+      <arg name="display_name" type="s" direction="in"/>
+    </method>
+    <method name="RemoveAvailableService">
+      <arg name="name" type="s" direction="in"/>
+    </method>
     <method name="UpdateGlobalDnd">
       <arg name="enabled" type="b" direction="in"/>
     </method>
@@ -130,6 +137,9 @@ export default class LoftShellHelper extends Extension {
         this._panelIcons = new Map();
         this._combinedIndicator = null;
         this._combinedServices = new Map();
+        // Configured-but-not-running services (name -> displayName), pushed via
+        // UpdateAvailableService. Rendered as launch rows below the running ones.
+        this._combinedAvailable = new Map();
         this._combinedWatchId = null;
         // Global DND, pushed by the app via UpdateGlobalDnd. Mirrors the SNI
         // menu's "Do Not Disturb (all)": it mutes every service at once.
@@ -433,6 +443,7 @@ export default class LoftShellHelper extends Extension {
 
         this._unregisterCombined();
         this._combinedServices = null;
+        this._combinedAvailable = null;
 
         for (const name of [...this._panelIcons.keys()])
             this._unregisterService(name);
@@ -679,6 +690,7 @@ export default class LoftShellHelper extends Extension {
             this._combinedWatchId = null;
         }
         this._combinedServices.clear();
+        this._combinedAvailable.clear();
 
         const indicator = new PanelMenu.Button(0.0, 'loft-combined', false);
 
@@ -773,6 +785,7 @@ export default class LoftShellHelper extends Extension {
         this._combinedIndicator?.destroy();
         this._combinedIndicator = null;
         this._combinedServices?.clear();
+        this._combinedAvailable?.clear();
     }
 
     _updateCombinedService(name, displayName, visible, badge, dnd, wmClass) {
@@ -796,6 +809,8 @@ export default class LoftShellHelper extends Extension {
             return;
         }
         this._combinedServices.set(name, { displayName, visible, badge, dnd, wmClass });
+        // A service is running now — it can't also be in the available section.
+        this._combinedAvailable.delete(name);
         this._rebuildCombinedMenu();
         this._updateCombinedBadges();
     }
@@ -805,6 +820,24 @@ export default class LoftShellHelper extends Extension {
         if (svc?.wmClass)
             this._loftOverviewVisible?.delete(svc.wmClass);
         this._combinedServices.delete(name);
+        this._rebuildCombinedMenu();
+        this._updateCombinedBadges();
+    }
+
+    _updateAvailableService(name, displayName) {
+        // A service can't be both running and available; running wins its own push,
+        // so drop any stale running entry when it's declared available. If that
+        // actually removed a running row, the menu MUST rebuild even when the
+        // available display name is unchanged — hence wasRunning gates the no-op.
+        const wasRunning = this._combinedServices.delete(name);
+        if (!wasRunning && this._combinedAvailable.get(name) === displayName) return;
+        this._combinedAvailable.set(name, displayName);
+        this._rebuildCombinedMenu();
+        this._updateCombinedBadges();
+    }
+
+    _removeAvailableService(name) {
+        if (!this._combinedAvailable.delete(name)) return;
         this._rebuildCombinedMenu();
         this._updateCombinedBadges();
     }
@@ -909,9 +942,26 @@ export default class LoftShellHelper extends Extension {
             menu.addMenuItem(item);
         }
 
-        if (this._combinedServices.size === 0) {
-            const noServices = new PopupMenu.PopupMenuItem('No services running', { reactive: false });
-            menu.addMenuItem(noServices);
+        // Available (configured-but-not-running) services: a plain launch row each —
+        // no DND/Quit — that calls the service's Show() to start it. Parity with the
+        // SNI menu's available section (src/main/tray/dbusMenu.ts).
+        if (this._combinedAvailable.size > 0) {
+            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            for (const [, displayName] of this._combinedAvailable) {
+                // dbus_name == display name with whitespace stripped (see dbus/names.ts).
+                const dbusName = displayName.replace(/\s+/g, '');
+                const launchItem = new PopupMenu.PopupMenuItem(displayName);
+                launchItem.connect('activate', () => {
+                    this._callDaemonMethod(dbusName, 'Show');
+                    menu.close();
+                });
+                menu.addMenuItem(launchItem);
+            }
+        }
+
+        if (this._combinedServices.size === 0 && this._combinedAvailable.size === 0) {
+            const none = new PopupMenu.PopupMenuItem('No services configured', { reactive: false });
+            menu.addMenuItem(none);
         }
 
         menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -1106,6 +1156,20 @@ export default class LoftShellHelper extends Extension {
         if (method === 'RemoveCombinedService') {
             const [name] = params.deep_unpack();
             this._removeCombinedService(name);
+            invocation.return_value(null);
+            return;
+        }
+
+        if (method === 'UpdateAvailableService') {
+            const [name, displayName] = params.deep_unpack();
+            this._updateAvailableService(name, displayName);
+            invocation.return_value(null);
+            return;
+        }
+
+        if (method === 'RemoveAvailableService') {
+            const [name] = params.deep_unpack();
+            this._removeAvailableService(name);
             invocation.return_value(null);
             return;
         }

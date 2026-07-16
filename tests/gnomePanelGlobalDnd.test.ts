@@ -16,6 +16,8 @@ function fakeHelper() {
     unregisterCombined: async () => {},
     updateCombinedService: async () => { calls.push('updateCombinedService'); },
     removeCombinedService: async () => { calls.push('removeCombinedService'); },
+    updateAvailableService: async () => { calls.push('updateAvailableService'); },
+    removeAvailableService: async () => { calls.push('removeAvailableService'); },
     updateGlobalDnd: async (enabled) => { calls.push('updateGlobalDnd'); globalDnd.push(enabled); },
     onHelperAppeared: (cb) => { appeared = cb; },
   };

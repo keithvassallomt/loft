@@ -17,6 +17,9 @@ export interface ShellHelperClient {
     name: string, displayName: string, visible: boolean, badge: number, dnd: boolean, key: string,
   ): Promise<void>;
   removeCombinedService(name: string): Promise<void>;
+  /** A configured-but-not-running service: rendered as a launch row (no DND/Quit). */
+  updateAvailableService(name: string, displayName: string): Promise<void>;
+  removeAvailableService(name: string): Promise<void>;
   updateGlobalDnd(enabled: boolean): Promise<void>;
   onHelperAppeared(cb: () => void): void;
 }
@@ -64,6 +67,9 @@ export function createShellHelperClient(): ShellHelperClient {
     updateCombinedService: (name, displayName, visible, badge, dnd, key) =>
       call('UpdateCombinedService', 'ssbubs', [name, displayName, visible, badge, dnd, key]),
     removeCombinedService: (name) => call('RemoveCombinedService', 's', [name]),
+    updateAvailableService: (name, displayName) =>
+      call('UpdateAvailableService', 'ss', [name, displayName]),
+    removeAvailableService: (name) => call('RemoveAvailableService', 's', [name]),
     updateGlobalDnd: (enabled) => call('UpdateGlobalDnd', 'b', [enabled]),
     onHelperAppeared: (cb) => { appearedCbs.push(cb); },
   };
