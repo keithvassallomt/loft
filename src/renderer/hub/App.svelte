@@ -45,13 +45,15 @@
 </main>
 
 <style>
-  header { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--divider); }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--divider); flex: 0 0 auto; }
   .title { font-weight: 700; }
   .menu { position: relative; }
   .hamburger { border: 0; background: transparent; font-size: 1.3em; cursor: pointer; }
   .dropdown { position: absolute; right: 0; top: 100%; background: var(--card); border: 1px solid var(--divider); border-radius: 8px; display: flex; flex-direction: column; min-width: 140px; z-index: 10; }
   .dropdown button { border: 0; background: transparent; text-align: left; padding: 8px 12px; cursor: pointer; }
   .dropdown button:hover { background: var(--divider); }
-  main { padding: 0 16px 16px; }
+  /* Takes the space under the fixed header and scrolls internally only when the
+     content genuinely exceeds it (min-height:0 lets a flex child actually scroll). */
+  main { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 16px; }
   .back { border: 0; background: transparent; cursor: pointer; padding: 12px 0; font: inherit; opacity: 0.7; }
 </style>

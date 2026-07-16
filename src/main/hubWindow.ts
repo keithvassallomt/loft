@@ -46,7 +46,11 @@ export function createHub(deps: HubDeps): Hub {
     if (win && !win.isDestroyed()) { win.show(); win.focus(); return; }
     win = new BrowserWindow({
       width: 520,
-      height: 640,
+      // Tall enough that a typical "a few installed + a few available" hub fits
+      // without a scrollbar (a few installed rows + two rows of ~141px available
+      // tiles ran ~7px past the old 640, so the whole page scrolled by a hair).
+      // Larger configs still scroll — but inside main now (App.svelte), app-style.
+      height: 700,
       title: 'Loft',
       icon: deps.iconPath,
       webPreferences: {

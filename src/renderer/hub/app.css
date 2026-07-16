@@ -7,4 +7,24 @@
   :root { --bg: #1e1e20; --card: #2a2a2d; --divider: #3a3a3f; --accent: #62a0ea; --fg: #ededed; }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--fg); }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  /* An app window, not a scrolling web page: the chrome stays put and only the
+     content region (main) scrolls, and only when it must. overflow:hidden also
+     clips a sub-pixel content overshoot instead of surfacing a whole-page bar. */
+  overflow: hidden;
+  /* Chrome text (names, labels, headings) isn't drag-selectable like a web page. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+/* ...but real fields stay selectable + editable. */
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+/* The flex column that fills the window: <header> is fixed, <main> takes the rest
+   and scrolls internally (see App.svelte). */
+#app { display: flex; flex-direction: column; height: 100%; }
