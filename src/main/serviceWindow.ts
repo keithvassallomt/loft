@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContentsView, session } from 'electron';
+import { BrowserWindow, WebContentsView, session, shell } from 'electron';
 import { join } from 'node:path';
 import type { ServiceDef } from './registry';
 import { effectiveUrl } from './registry';
@@ -8,6 +8,7 @@ import { configureSession } from './session';
 import { dechromeCssFor } from './dechromeCss';
 import { formatWindowTitle } from './serviceTitle';
 import { createStuckWatcher, clearServiceCaches, startInitialLoad } from './recovery';
+import { classifyNavigation, classifyWindowOpen, isExternallyOpenable } from './links';
 
 export interface ServiceWindow {
   def: ServiceDef;
@@ -106,24 +107,59 @@ export function createServiceWindow(
     });
   }
 
-  // Calls may open in a window.open popup (Messenger). A child window inherits the
-  // OPENER's webPreferences — so without overriding, the popup would inherit the
-  // service view's main-world/un-sandboxed prefs (contextIsolation:false,
-  // sandbox:false) + our preload + --loft-service, and its renderer SIGSEGVs
-  // (exitCode 139) doing WebRTC. Force a plain, sandboxed, isolated child (matching
-  // the POC's default popup) with no Loft preload/arg — it needs no integration.
-  serviceView.webContents.setWindowOpenHandler(() => ({
-    action: 'allow',
-    overrideBrowserWindowOptions: {
-      webPreferences: {
-        partition,
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        additionalArguments: [],
+  // Hand a URL to the user's default browser (never a scheme we shouldn't, e.g.
+  // javascript:/file:). Used by both link-handling paths below.
+  const openInBrowser = (url: string): void => {
+    if (!isExternallyOpenable(url)) return;
+    void shell.openExternal(url).catch((err) => console.error('openExternal failed:', url, err));
+  };
+
+  // window.open / target=_blank. A user-clicked external link opens in the browser
+  // (classifyWindowOpen); calls and windowed (featured) SSO/auth popups stay in-app.
+  // Same-origin ALWAYS stays in-app, which is what guarantees a Messenger call popup
+  // (opened same-origin) is never flung to the browser regardless of its disposition.
+  //
+  // For the in-app case: a child window inherits the OPENER's webPreferences, so
+  // without overriding, the popup would inherit the service view's main-world/
+  // un-sandboxed prefs (contextIsolation:false, sandbox:false) + our preload +
+  // --loft-service, and its renderer SIGSEGVs (exitCode 139) doing WebRTC. Force a
+  // plain, sandboxed, isolated child (matching the POC's default popup) with no Loft
+  // preload/arg — it needs no integration.
+  serviceView.webContents.setWindowOpenHandler((details) => {
+    if (classifyWindowOpen(serviceView.webContents.getURL(), details.url, details.disposition) === 'external') {
+      openInBrowser(details.url);
+      return { action: 'deny' };
+    }
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        webPreferences: {
+          partition,
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          additionalArguments: [],
+        },
       },
-    },
-  }));
+    };
+  });
+
+  // Top-level navigation of the service view itself. The view must never leave its
+  // web app: a cross-origin nav — or, for Messenger (which shares facebook.com with
+  // all of Facebook), a nav out of the messaging app to a post/profile/photo — opens
+  // in the browser and is prevented in-place, so the user never "loses" the service.
+  // isInPlace (same-document fragment nav) is left alone; the initial loadURL and
+  // same-origin app/auth navigations are not top-level document changes we hijack.
+  serviceView.webContents.on('will-navigate', (e, url, isInPlace) => {
+    if (isInPlace) return;
+    if (classifyNavigation(def.id, serviceView.webContents.getURL(), url) !== 'external') return;
+    // Only intercept schemes we can actually hand off. For anything else (ftp:, a
+    // custom app scheme) let Chromium's own external-protocol handling take it rather
+    // than dead-ending the click with a bare preventDefault.
+    if (!isExternallyOpenable(url)) return;
+    e.preventDefault();
+    openInBrowser(url);
+  });
 
   // The call popup must present as real Chrome per-webContents (not just via the
   // session default) — mirrors the POC (dev_local/electron_test/main.js), which
