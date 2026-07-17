@@ -272,6 +272,11 @@ export function createServiceView(def: ServiceDef, cfg: LoftConfig): ServiceView
       rect = r;
       w.contentView.addChildView(serviceView);
       serviceView.setBounds(r);
+      // addChildView doesn't carry a prior setVisible(false) across, so re-assert our own
+      // state — a background tab detached into its own window must not arrive drawn over
+      // whatever that window is already showing. Both of today's callers happen to be safe
+      // (they setVisible immediately after), which is exactly why this is worth pinning.
+      serviceView.setVisible(visible);
       // Carry a live overlay across the move — a service can be stuck *while* it is
       // re-parented, and re-adding it here keeps it above the service view.
       if (recoveryView) {
