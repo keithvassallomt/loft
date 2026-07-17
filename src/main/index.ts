@@ -148,7 +148,7 @@ function openService(def: ServiceDef, minimized: boolean): void {
 
 // Tray menu "Show/Hide" for a service: show if hidden, hide if visible.
 function toggleService(id: string): void {
-  const sw = windows.get(id);
+  const sw = hostOf(id);
   if (sw && sw.isVisible()) { sw.hide(); hideExternal(sw.def.displayName); return; }
   const def = getService(id);
   if (def) openService(def, false);
