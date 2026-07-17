@@ -163,6 +163,19 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
 
   const refreshAll = (): void => { refreshRail(); refreshTitlebar(); refreshWindowTitle(); };
 
+  // Cold-start race (mirrors serviceWindow's titlebar did-finish-load binding): the
+  // showManager() call at the bottom of this function runs refreshAll() in the same
+  // synchronous tick as the loadFile calls above, so that first push fires before
+  // either renderer's preload has registered its IPC listener — safeSend's send is a
+  // no-op against a not-yet-subscribed renderer, and nothing else ever re-pushes (no
+  // rail:ready handshake, no static HTML fallback). Re-push once each view's own load
+  // actually finishes; this also covers a renderer that reloads for any reason, since
+  // did-finish-load fires again and picks up current state. The manager view needs no
+  // such binding — its state travels over the hub:* channels (hub:getState/hub:state),
+  // owned by hubWindow.ts, not this file.
+  rail.webContents.on('did-finish-load', refreshAll);
+  titlebar.webContents.on('did-finish-load', refreshAll);
+
   // --- selection --------------------------------------------------------------
   const select = (id: string | undefined): void => {
     // A detached service isn't a tab here; the caller raises its window instead.

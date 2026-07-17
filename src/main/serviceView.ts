@@ -190,6 +190,13 @@ export function createServiceView(def: ServiceDef, cfg: LoftConfig): ServiceView
   let host: BrowserWindow | undefined;
   let rect: Rect = { x: 0, y: 0, width: 0, height: 0 };
   let recoveryView: WebContentsView | undefined;
+  // Mirrors the last setVisible() call. Only serviceWindow existed until now, and it
+  // hosts exactly one view, so a recovery overlay could just default to visible. Now
+  // that loftWindow stacks N service views in one content rect with at most one drawn
+  // (setVisible(false) on attach, and in select() for every non-active tab), an overlay
+  // created (or re-added on mount) while this view is the hidden one must stay hidden
+  // too, or a background tab's stuck-load overlay paints over the active tab's content.
+  let visible = true;
 
   // --- Recovery overlay -------------------------------------------------------
   // A view can end up permanently blank (e.g. a corrupt service worker aborting
@@ -206,6 +213,7 @@ export function createServiceView(def: ServiceDef, cfg: LoftConfig): ServiceView
     void view.webContents.loadFile(join(__dirname, '../renderer/recovery/index.html'));
     host.contentView.addChildView(view); // above the service view
     view.setBounds(rect);
+    view.setVisible(visible); // don't paint over a window whose active tab is elsewhere
   };
 
   const hideRecovery = (): void => {
@@ -269,6 +277,7 @@ export function createServiceView(def: ServiceDef, cfg: LoftConfig): ServiceView
       if (recoveryView) {
         w.contentView.addChildView(recoveryView);
         recoveryView.setBounds(r);
+        recoveryView.setVisible(visible); // re-adding defaults to visible; match our own state
       }
     },
     unmount: () => {
@@ -283,9 +292,10 @@ export function createServiceView(def: ServiceDef, cfg: LoftConfig): ServiceView
       serviceView.setBounds(r);
       recoveryView?.setBounds(r);
     },
-    setVisible: (visible) => {
-      serviceView.setVisible(visible);
-      recoveryView?.setVisible(visible);
+    setVisible: (v) => {
+      visible = v;
+      serviceView.setVisible(v);
+      recoveryView?.setVisible(v);
     },
     setZoom: (delta) => {
       currentZoom = clampZoom(currentZoom + delta);
