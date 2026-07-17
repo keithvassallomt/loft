@@ -178,7 +178,7 @@ export function createServiceWindow(
 
   const relayout = () => {
     const [w, h] = window.getContentSize();
-    const { titlebar: t, service: s } = computeLayout(w, h);
+    const { titlebar: t, content: s } = computeLayout(w, h);
     titlebar.setBounds(t);
     serviceView.setBounds(s);
     recoveryView?.setBounds(s);
@@ -234,7 +234,7 @@ export function createServiceWindow(
     void view.webContents.loadFile(join(__dirname, '../renderer/recovery/index.html'));
     window.contentView.addChildView(view); // above the service view
     const [w, h] = window.getContentSize();
-    view.setBounds(computeLayout(w, h).service);
+    view.setBounds(computeLayout(w, h).content);
   };
 
   const hideRecovery = (): void => {
