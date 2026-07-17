@@ -1598,62 +1598,13 @@ Spec §5a: tray, D-Bus and notifications must never learn *where* a service live
 - Create: `src/main/serviceHost.ts`
 - Modify: `src/main/serviceWindow.ts` (make `ServiceWindow extends ServiceHost`)
 - Modify: `src/main/index.ts` (add `hostOf`, route the four host-only call sites through it)
-- Test: `tests/serviceHost.test.ts`
+- Test: **none — `tsc` is the gate.** `export interface ServiceWindow extends ServiceHost`, plus the existing `const api: ServiceWindow = {…}` literal, already makes the compiler prove `ServiceWindow` satisfies the interface. A runtime test could only exercise a fake declared in the test file itself, which proves nothing about production code. The one invariant a test *could* add — "ServiceHost is satisfiable without a window" — is proven for real in 09b, when `loftWindow` becomes the second implementer. (Keith's call, pre-flight: drop the test.)
 
 **Interfaces:**
 - Consumes: `ServiceWindow` from Task 7.
 - Produces: `ServiceHost` — `{ show(): void; hide(): void; setZoom(delta: number): void; setBadge(count: number): void; pushDnd(enabled: boolean): void; pushHidden(hidden: boolean): void; navigate(url: string): void; loadUrl(url: string): void; reload(): void; clearAndReload(): Promise<void>; ownsWebContents(id: number): boolean }`. Plan 09b's Loft window implements this per attached service.
 
-- [ ] **Step 1: Write the failing test**
-
-Create `tests/serviceHost.test.ts`:
-
-```ts
-import { describe, it, expect } from 'vitest';
-import type { ServiceHost } from '../src/main/serviceHost';
-
-// A ServiceHost must be satisfiable by something that knows nothing about windows.
-// This is the contract 09b's Loft window implements per attached service; if a
-// window-only member (a BrowserWindow, a titlebar) leaks into ServiceHost, this
-// file stops compiling — which is the point.
-const fake = (calls: string[]): ServiceHost => ({
-  show: () => calls.push('show'),
-  hide: () => calls.push('hide'),
-  setZoom: (d) => calls.push(`setZoom:${d}`),
-  setBadge: (c) => calls.push(`setBadge:${c}`),
-  pushDnd: (e) => calls.push(`pushDnd:${e}`),
-  pushHidden: (h) => calls.push(`pushHidden:${h}`),
-  navigate: (u) => calls.push(`navigate:${u}`),
-  loadUrl: (u) => calls.push(`loadUrl:${u}`),
-  reload: () => calls.push('reload'),
-  clearAndReload: async () => { calls.push('clearAndReload'); },
-  ownsWebContents: (id) => id === 42,
-});
-
-describe('ServiceHost', () => {
-  it('is implementable without any window reference', () => {
-    const calls: string[] = [];
-    const host = fake(calls);
-    host.show();
-    host.setBadge(3);
-    host.navigate('/t/123');
-    expect(calls).toEqual(['show', 'setBadge:3', 'navigate:/t/123']);
-  });
-
-  it('routes ownsWebContents by id', () => {
-    const host = fake([]);
-    expect(host.ownsWebContents(42)).toBe(true);
-    expect(host.ownsWebContents(1)).toBe(false);
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npx vitest run tests/serviceHost.test.ts`
-Expected: FAIL — `Cannot find module '../src/main/serviceHost'`.
-
-- [ ] **Step 3: Write the implementation**
+- [ ] **Step 1: Write the implementation**
 
 Create `src/main/serviceHost.ts`:
 
@@ -1669,7 +1620,8 @@ Create `src/main/serviceHost.ts`:
  *
  * Deliberately excludes anything window-shaped (BrowserWindow, titlebar, bounds):
  * the moment one leaks in, the Loft window can't satisfy this and the abstraction
- * is dead. tests/serviceHost.test.ts fails to compile if that happens.
+ * is dead. There is no test for that — 09b's loftWindow is the enforcement, by
+ * being the second implementer. Keep this interface window-free by hand until then.
  */
 export interface ServiceHost {
   /** Show and focus this service — raising its window, and selecting it if it shares one. */
@@ -1697,7 +1649,7 @@ export interface ServiceHost {
 }
 ```
 
-- [ ] **Step 4: Make `ServiceWindow` extend it**
+- [ ] **Step 2: Make `ServiceWindow` extend it**
 
 In `src/main/serviceWindow.ts`, add to the imports:
 
@@ -1754,7 +1706,7 @@ export interface ServiceWindow extends ServiceHost {
 
 The `api` object literal below is unchanged — it already implements every member.
 
-- [ ] **Step 5: Route the host-only call sites in `index.ts` through `hostOf`**
+- [ ] **Step 3: Route the host-only call sites in `index.ts` through `hostOf`**
 
 Add to the imports in `src/main/index.ts`:
 
@@ -1809,12 +1761,12 @@ Change the last call only:
 
 `focusService` also stays as-is: it calls `openService`, because it must be able to **create** a host, which `hostOf` deliberately cannot do.
 
-- [ ] **Step 6: Run tests and build**
+- [ ] **Step 4: Run tests and build**
 
 Run: `npm test && npm run build`
 Expected: all tests PASS; `tsc` reports no errors. If `tsc` complains that `ServiceWindow` does not satisfy `ServiceHost`, that is the interface doing its job — fix the member, don't widen `ServiceHost`.
 
-- [ ] **Step 7: Smoke-test**
+- [ ] **Step 5: Smoke-test**
 
 Run: `npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=slack`
 
@@ -1825,10 +1777,10 @@ Confirm the paths that now route through `hostOf`:
 3. Hide the window and send yourself a Slack message: a desktop notification appears.
 4. Click that notification: the Slack window focuses.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/main/serviceHost.ts src/main/serviceWindow.ts src/main/index.ts tests/serviceHost.test.ts
+git add src/main/serviceHost.ts src/main/serviceWindow.ts src/main/index.ts
 git commit -m "refactor: add ServiceHost, the where-agnostic service contract
 
 Spec 09 §5a. Tray, D-Bus and notifications must never learn whether a
