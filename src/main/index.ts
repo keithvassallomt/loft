@@ -108,7 +108,11 @@ function windowKeys(): string[] {
 function syncLoftWindows(): void { helper?.setLoftWindows(windowKeys()); }
 
 function openService(def: ServiceDef, minimized: boolean): void {
-  const existing = windows.get(def.id);
+  // The reuse check goes through hostOf, not the windows map: once a service can
+  // live in a shared host, "is it already open?" must consult every host, and
+  // reimplementing hostOf is then the only change needed here. The create path
+  // below still needs the map directly — hostOf deliberately cannot create.
+  const existing = hostOf(def.id);
   // focusExternal (GNOME helper or KWin) bypasses focus-stealing prevention; fire
   // it in parallel with the native show — never await (a missing/erroring backend
   // must never block or crash a window action).
