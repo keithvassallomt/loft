@@ -294,7 +294,8 @@ if (!app.requestSingleInstanceLock()) {
           id: d.id,
           displayName: d.displayName,
           dnd: config.services[d.id]?.dnd ?? false,
-          running: windows.has(d.id),
+          // Route through hostOf() so reimplementing for a shared host requires only one change
+          running: hostOf(d.id) !== undefined,
           visible: windows.get(d.id)?.window.isVisible() ?? false,
         }));
       const deps: TrayDeps = {
@@ -415,7 +416,7 @@ if (!app.requestSingleInstanceLock()) {
       buildState: () => buildHubState({
         services: SERVICES,
         config,
-        running: (id) => windows.has(id),
+        running: (id) => hostOf(id) !== undefined,
         visible: (id) => windows.get(id)?.window.isVisible() ?? false,
         badge: (id) => currentBadge.get(id) ?? 0,
         trayBackend: config.trayBackend ?? 'auto',
