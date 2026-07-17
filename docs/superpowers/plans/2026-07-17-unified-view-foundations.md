@@ -157,16 +157,20 @@ Append to §10 of `docs/superpowers/specs/2026-07-17-electron-loft-09-unified-vi
 - **Verdict:** <GO — 09b proceeds as specced / NO-GO — see below>.
 ```
 
-**If either probe fails, STOP.** Do not start Task 2. Report to Keith with the log; the spec needs revising, because `detach` and the whole `ServiceView`-moves-between-hosts model rest on this.
+**If either probe fails, STOP before Task 7** and report to Keith with the log: the spec needs revising, because `detach` and the whole `ServiceView`-moves-between-hosts model rest on this.
+
+**The gate sits before Task 7, not Task 2** (Keith's call, pre-flight). Tasks 2–6 — the rail region, `clampZoom`, the config fields, the v2 migration, `addService` — touch nothing that re-parenting could invalidate, and stay correct under either verdict. Task 7 is the first task whose design depends on the answer, so it is the first that must wait. Running 2–6 while the spike's interactive probes are in a human's hands is free parallelism, not a shortcut.
 
 - [ ] **Step 5: Commit**
 
-```bash
-git add dev_local/spike_reparent docs/superpowers/specs/2026-07-17-electron-loft-09-unified-view-design.md
-git commit -m "spike: prove WebContentsView re-parenting preserves page + calls
+`dev_local/` is gitignored (`.gitignore:2`), so the spike code itself is never committed — which is right, it's throwaway. **The spec entry is the only durable record of what it found**, so it is the whole deliverable:
 
-Gate for spec 09 §10. Records the result in the spec so the finding
-outlives the branch."
+```bash
+git add docs/superpowers/specs/2026-07-17-electron-loft-09-unified-view-design.md
+git commit -m "docs(spec): record spike results for unified view
+
+Gate for spec 09 §10. The spike itself lives in gitignored dev_local/,
+so this entry is the only lasting record of what it proved."
 ```
 
 ---
