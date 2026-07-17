@@ -442,16 +442,16 @@ if (!app.requestSingleInstanceLock()) {
         saveConfig(configPath(), config);
         if (patch.dnd !== undefined) { tray?.setDnd(id, patch.dnd); notifications?.setServiceDnd(id, patch.dnd); hostOf(id)?.pushDnd(patch.dnd); }
         if (patch.badgesEnabled !== undefined) {
-          const sw = windows.get(id);
+          const host = hostOf(id);
           const count = currentBadge.get(id) ?? 0;
           // Re-push the current badge so enabling shows it immediately; disabling clears the indicator.
-          sw?.setBadge(patch.badgesEnabled ? count : 0);
+          host?.setBadge(patch.badgesEnabled ? count : 0);
           tray?.setBadge(id, patch.badgesEnabled ? count : 0);
           bgStatus?.refresh();
         }
         if (patch.customUrl !== undefined) {
-          const d = getService(id); const sw = windows.get(id);
-          if (d && sw) sw.loadUrl(effectiveUrl(d, patch.customUrl || undefined));
+          const d = getService(id); const host = hostOf(id);
+          if (d && host) host.loadUrl(effectiveUrl(d, patch.customUrl || undefined));
         }
         if (patch.openOnStartup !== undefined) reconcileAutostart();
       },
@@ -459,14 +459,14 @@ if (!app.requestSingleInstanceLock()) {
         if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; saveConfig(configPath(), config); }
       },
       recoverService: (id, opts) => {
-        const sw = windows.get(id);
-        // clearCaches:false with no running window (sw undefined) is a deliberate
+        const host = hostOf(id);
+        // clearCaches:false with no running host (host undefined) is a deliberate
         // no-op: there's nothing to reload and nothing to clear. Unreachable today
         // (the hub only ever sends true), kept for API completeness.
-        if (!opts.clearCaches) { sw?.reload(); return; }
-        // Works whether or not the service is running: with no window we still clear,
+        if (!opts.clearCaches) { host?.reload(); return; }
+        // Works whether or not the service is running: with no host we still clear,
         // so the next launch loads clean.
-        if (sw) { void sw.clearAndReload(); return; }
+        if (host) { void host.clearAndReload(); return; }
         void clearServiceCaches(session.fromPartition(`persist:${id}`));
       },
       quitApp: () => { quitting = true; app.quit(); },
