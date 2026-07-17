@@ -1,5 +1,6 @@
 import { app, ipcMain, Menu, protocol, session } from 'electron';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
@@ -21,8 +22,9 @@ import { buildHubState } from './hubState';
 import { addService, removeService } from './install';
 import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
 import { createSignalShutdown } from './shutdown';
-import { ensureHubDesktopEntry, writeServiceLauncher } from './desktop';
+import { ensureHubDesktopEntry, writeServiceLauncher, serviceLauncherPath } from './desktop';
 import { iconsDir } from './paths';
+import { migrateConfig } from './migrate';
 import type { ServicePatch, GlobalPatch, RecoverOpts } from '../shared/hubTypes';
 
 app.setName('Loft');
@@ -366,6 +368,17 @@ if (!app.requestSingleInstanceLock()) {
     try {
       ensureHubDesktopEntry({ execPath: process.execPath, iconSourceDir });
     } catch (err) { console.error('ensureHubDesktopEntry failed:', err); }
+
+    // Config migration (spec 09 §8). Must run before the launcher self-heal below:
+    // that loop is what would otherwise act on an unmigrated config. Save only when
+    // something actually changed, so a migrated install doesn't rewrite on every start.
+    try {
+      const { changed } = migrateConfig(config, (id) => existsSync(serviceLauncherPath(id)));
+      if (changed) {
+        saveConfig(configPath(), config);
+        console.log('Migrated config to v2 (per-service launchers are now opt-in)');
+      }
+    } catch (err) { console.error('Config migration failed:', err); }
 
     // Drop v1's per-service autostart entries. They're not merely stale: today's CLI
     // still parses their `--service <id>` form, so they launch the service at login

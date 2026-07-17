@@ -70,8 +70,14 @@ export function deployServiceIcon(def: ServiceDef, opts: { env?: Env; iconSource
   return dst;
 }
 
+/** Where a service's launcher lives. Keyed by id: config keys are ids, and may
+ *  outlive their registry entry. */
+export function serviceLauncherPath(id: string, env?: Env): string {
+  return join(applicationsDir(env), `loft-${id}.desktop`);
+}
+
 function launcherPath(def: ServiceDef, env?: Env): string {
-  return join(applicationsDir(env), `loft-${def.id}.desktop`);
+  return serviceLauncherPath(def.id, env);
 }
 
 /**
