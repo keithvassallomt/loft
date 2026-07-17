@@ -142,7 +142,9 @@ describe('config', () => {
     const cfg = loadConfig(p);
     expect(cfg.services.slack).toEqual({ dnd: true });
     expect(Object.getPrototypeOf(cfg.services)).toBe(Object.prototype);
-    expect(Object.prototype.hasOwnProperty.call(cfg.services, 'dnd')).toBe(false);
+    // `in`, not hasOwnProperty: the bug leaks `dnd` as an INHERITED property, which
+    // hasOwnProperty reports false for either way — so asserting on it can never fail.
+    expect('dnd' in cfg.services).toBe(false);
   });
 });
 
