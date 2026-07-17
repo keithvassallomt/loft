@@ -341,6 +341,27 @@ with detached rows; title aggregation (`Loft` / `Loft (7)`, attached-only, badge
 **Manual:** drag-out on GNOME Wayland; alt-tab shows one Loft plus each detached window; a background tab's
 notification actually fires; per-service DND from both tray backends; suspend/resume re-registration; Flatpak run.
 
+### 10a. Spike results (2026-07-17) — **GO**
+
+Run by Keith on GNOME/Wayland against `web.whatsapp.com` in a throwaway `persist:spike` partition
+(`dev_local/spike_reparent/`, gitignored — this entry is the durable record).
+
+- **Re-parenting preserves the page: YES.** After `removeChildView` from window A and `addChildView` to
+  window B, the view still had the same selected chat, the same scroll position, and the same unsent draft
+  in the composer. Live DOM and application state came across, not merely a surviving `webContents`.
+- **Call in a re-parented view: YES.** Voice and video both connected from window B, after the move. No
+  SIGSEGV.
+- **Verdict: GO.** §5a's `ServiceView` moves between hosts as designed; `detach` does not need to become
+  "reload in a new window", so 09b and 09c proceed as specced.
+
+**A trap for whoever writes the next spike.** v1 of this one mirrored `serviceWindow.ts`'s `webPreferences`
+but not `session.ts`'s `configureSession`, so it loaded WhatsApp with Electron's default UA and got served
+*"WhatsApp works with Google Chrome 100+"* — failing for a reason that had nothing to do with the questions
+it existed to answer. A probe of a service view needs the **Chrome UA** (or the page refuses to load at all)
+and the **permission handler granting `media`** (or the call probe dies on a denied mic). Neither is optional
+trimming. The preserved-draft check also turned out to be the strongest signal available — stronger than the
+injected `window.__spike` marker, since a draft proves the live DOM survived, not just a JS global.
+
 ## 11. Staging
 
 This is a big spec — deliberately one spec, because a half-built unified window ships nothing, but the plan must
