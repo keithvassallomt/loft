@@ -9,6 +9,7 @@ import { dechromeCssFor } from './dechromeCss';
 import { formatWindowTitle } from './serviceTitle';
 import { createStuckWatcher, clearServiceCaches, startInitialLoad } from './recovery';
 import { classifyNavigation, classifyWindowOpen, isExternallyOpenable } from './links';
+import { clampZoom } from './zoom';
 
 export interface ServiceWindow {
   def: ServiceDef;
@@ -296,8 +297,7 @@ export function createServiceWindow(
     show: () => { window.show(); window.focus(); },
     hide: () => window.hide(),
     setZoom: (delta: number) => {
-      // Round to 0.1 steps to avoid float drift; clamp to the 0.3–3.0 range.
-      currentZoom = Math.min(3, Math.max(0.3, Math.round((currentZoom + delta) * 10) / 10));
+      currentZoom = clampZoom(currentZoom + delta);
       serviceView.webContents.setZoomFactor(currentZoom);
       persist();
     },
