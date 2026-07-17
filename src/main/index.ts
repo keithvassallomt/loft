@@ -464,8 +464,17 @@ if (!app.requestSingleInstanceLock()) {
     // Same two branches as the CLI below — a second launch must never build a duplicate
     // window for a service that is already living somewhere.
     if (def) { showService(def); return; }
-    loft?.showManager();
+    // Raise the Loft window WITHOUT touching its selection — unlike the CLI's no-service
+    // branch further down, this is "bring it back", not "start fresh". showManager() is
+    // only correct there (a brand-new window has nothing selected, so the manager IS the
+    // right first face); here it would silently throw away whatever tab was selected
+    // before the window got hidden to the tray — and hiding-then-relaunching is the
+    // normal way back (the GNOME helper deliberately hides hidden Loft windows from the
+    // dock). Only fall back to the manager when nothing IS selected (e.g. every service
+    // is asleep), so raising still shows something sensible.
+    if (!loft?.activeId()) loft?.showManager();
     loft?.open();
+    focusExternal(LOFT_WINDOW_KEY); // bypass focus-stealing prevention (spec §6a), same as showService.
   });
 
   ipcMain.on('titlebar:zoom-in', (e) => titlebarTarget(e.sender.id)?.setZoom(+0.1));
