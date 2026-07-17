@@ -382,6 +382,22 @@ the injected `window.__spike` marker, since a draft proves the live DOM survived
 Also: **GNOME already binds `Ctrl+Alt+R`** (screen recording), so the spike's `globalShortcut.register` returned
 false and its 90-second timer fallback is what actually ran. Pick a different accelerator, and keep a fallback.
 
+### 10b. ServiceView.mount/unmount spike (09b Task 3, 2026-07-17) — **GO**
+
+§10a proved the **raw** `removeChildView`/`addChildView` calls survive a re-parent. This proves
+`ServiceView`'s own `mount()`/`unmount()` — which had never executed, and do more than the raw calls
+(re-add a live recovery overlay, re-apply the rect). Run by Keith via `dev_local/spike_mount/`
+(gitignored; this entry is the durable record).
+
+- **`ServiceView.mount()`/`unmount()` round-trip preserves the page: YES.**
+- **Call after a wrapper round-trip: YES** — voice and video both connected from the destination window.
+- **Verdict: GO.** 09b Task 6's `loftWindow` mounts `ServiceView`s for real; the rail's tab-switching
+  model stands as specced.
+
+*Recorded from Keith's report of the manual run; no console log was captured, unlike §10a's. The
+observable result is the stronger half either way — a surviving chat, scroll position and draft prove
+the live DOM came across, which is what the injected marker was only ever a proxy for.*
+
 ## 11. Staging
 
 This is a big spec — deliberately one spec, because a half-built unified window ships nothing, but the plan must
