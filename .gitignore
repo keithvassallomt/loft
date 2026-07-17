@@ -13,3 +13,6 @@ dist-electron/
 /.flatpak-repo/
 /flatpak-node/
 *.flatpak
+
+# Brainstorming visual companion (superpowers)
+.superpowers/
