@@ -57,23 +57,72 @@
 //   1. Does a live WebContentsView survive re-parenting between BrowserWindows
 //      with its page intact (no reload)?
 //   2. Does a WebRTC call still work in that view AFTER it has been re-parented?
-// Mirrors the real service view's webPreferences from src/main/serviceWindow.ts:86-99.
-const { app, BrowserWindow, WebContentsView } = require('electron');
+//
+// Mirrors the real service view's setup from src/main/serviceWindow.ts AND
+// src/main/session.ts. Both mirrors are load-bearing — v1 of this spike omitted
+// the session half and failed for reasons that had nothing to do with the questions:
+//   - no Chrome UA          -> WhatsApp serves "WhatsApp works with Google Chrome 100+"
+//   - no permission handler -> the call probe gets denied mic/camera
+//
+// Re-parent is on a hotkey, not a timer: logging in shouldn't race a countdown.
+const { app, BrowserWindow, WebContentsView, session, globalShortcut } = require('electron');
+
+// Mirrors src/main/ua.ts (CHROME_VERSION). Inlined — this spike is plain JS and
+// cannot import the TS source. If WhatsApp starts rejecting the UA, check whether
+// ua.ts still matches the Chromium major that Electron bundles.
+const CHROME_UA =
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/150.0.7871.100 Safari/537.36';
+
+// Mirrors ALLOWED_PERMISSIONS in src/main/session.ts. 'media' is what a call needs.
+const ALLOWED = new Set([
+  'media',
+  'mediaKeySystem',
+  'notifications',
+  'fullscreen',
+  'pointerLock',
+  'clipboard-sanitized-write',
+  'display-capture',
+  'speaker-selection',
+  'background-sync',
+]);
 
 const SIZE = { width: 1100, height: 800 };
+const PARTITION = 'persist:spike';
+const HOTKEY = 'CommandOrControl+Alt+R';
 
 app.whenReady().then(async () => {
+  // Deliberately NOT persist:whatsapp. Chromium locks a profile directory, so
+  // sharing the real partition would collide with a running Loft — and a throwaway
+  // spike has no business touching the session Keith actually uses.
+  const ses = session.fromPartition(PARTITION);
+  ses.setUserAgent(CHROME_UA);
+  ses.setPermissionRequestHandler((_wc, permission, cb) => cb(ALLOWED.has(permission)));
+  ses.setPermissionCheckHandler((_wc, permission) => ALLOWED.has(permission));
+  ses.setDisplayMediaRequestHandler(
+    (_request, callback) => {
+      const { desktopCapturer } = require('electron');
+      desktopCapturer
+        .getSources({ types: ['screen', 'window'] })
+        .then((sources) => callback(sources[0] ? { video: sources[0] } : {}))
+        .catch(() => callback({}));
+    },
+    { useSystemPicker: true },
+  );
+
   const a = new BrowserWindow({ ...SIZE, title: 'Spike Host A' });
   const b = new BrowserWindow({ ...SIZE, title: 'Spike Host B', show: false });
 
   const view = new WebContentsView({
     webPreferences: {
-      partition: 'persist:spike',
+      partition: PARTITION,
       backgroundThrottling: false,
       sandbox: true,
       contextIsolation: false,
     },
   });
+  // Per-webContents as well as per-session — mirrors serviceWindow.ts:100.
+  view.webContents.setUserAgent(CHROME_UA);
 
   // If a re-parent silently reloads, these fire again after the move. That is the tell.
   view.webContents.on('did-start-loading', () => console.log('[spike] did-start-loading'));
@@ -85,7 +134,7 @@ app.whenReady().then(async () => {
     action: 'allow',
     overrideBrowserWindowOptions: {
       webPreferences: {
-        partition: 'persist:spike',
+        partition: PARTITION,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -93,6 +142,8 @@ app.whenReady().then(async () => {
       },
     },
   }));
+  // The call popup must present as real Chrome per-webContents — serviceWindow.ts:167-169.
+  view.webContents.on('did-create-window', (child) => child.webContents.setUserAgent(CHROME_UA));
 
   a.contentView.addChildView(view);
   view.setBounds({ x: 0, y: 0, ...SIZE });
@@ -100,9 +151,13 @@ app.whenReady().then(async () => {
 
   const idBefore = view.webContents.id;
   console.log('[spike] webContents id in A:', idBefore);
-  console.log('[spike] Log in, open a chat, scroll, type a draft. Re-parent fires in 60s.');
+  console.log(`[spike] Log in, open a chat, scroll, type a draft. Then press ${HOTKEY} to re-parent.`);
 
-  setTimeout(async () => {
+  let done = false;
+  const reparent = async () => {
+    if (done) return;
+    done = true;
+
     // A JS global surviving the move is decisive proof no reload happened.
     await view.webContents.executeJavaScript('window.__spike = "set-before-reparent"');
 
@@ -114,12 +169,27 @@ app.whenReady().then(async () => {
     b.focus();
 
     const idAfter = view.webContents.id;
-    const marker = await view.webContents.executeJavaScript('window.__spike');
-    console.log('[spike] id same? ', idBefore === idAfter, `(${idBefore} -> ${idAfter})`);
-    console.log('[spike] window.__spike survived?', marker === 'set-before-reparent', `(${marker})`);
-    console.log('[spike] url:', view.webContents.getURL());
+    let marker;
+    try {
+      marker = await view.webContents.executeJavaScript('window.__spike');
+    } catch (err) {
+      marker = `<threw: ${err.message}>`;
+    }
+    console.log('[spike] ---------------- RESULT ----------------');
+    console.log('[spike] id same?          ', idBefore === idAfter, `(${idBefore} -> ${idAfter})`);
+    console.log('[spike] __spike survived? ', marker === 'set-before-reparent', `(${marker})`);
+    console.log('[spike] url:              ', view.webContents.getURL());
+    console.log('[spike] ----------------------------------------');
     console.log('[spike] NOW: place a voice call, then a video call, from window B.');
-  }, 60_000);
+  };
+
+  if (!globalShortcut.register(HOTKEY, reparent)) {
+    console.error(`[spike] Could not register ${HOTKEY} — the desktop may have taken it.`);
+    console.error('[spike] Falling back to a 90s timer.');
+    setTimeout(reparent, 90_000);
+  }
+
+  app.on('will-quit', () => globalShortcut.unregisterAll());
 });
 ```
 
@@ -127,17 +197,21 @@ app.whenReady().then(async () => {
 
 Run: `env -u ELECTRON_RUN_AS_NODE npx electron dev_local/spike_reparent`
 
-Log into WhatsApp in window A, open a chat, scroll up, and type a draft message. Wait for the 60s timer.
+Log into WhatsApp in window A, open a chat, scroll up, and type a draft message. Then press **Ctrl+Alt+R** to trigger the re-parent.
 
 Expected on success:
 
 ```
-[spike] id same?  true (1 -> 1)
-[spike] window.__spike survived? true (set-before-reparent)
-[spike] url: https://web.whatsapp.com/
+[spike] ---------------- RESULT ----------------
+[spike] id same?           true (1 -> 1)
+[spike] __spike survived?  true (set-before-reparent)
+[spike] url:               https://web.whatsapp.com/
+[spike] ----------------------------------------
 ```
 
 with **no** `did-start-loading` or `did-navigate` line printed after the `re-parenting A -> B` line. Confirm visually in window B that the chat is still open, still scrolled where you left it, and the draft is still in the box.
+
+**If WhatsApp serves "WhatsApp works with Google Chrome 100+", the spike is broken, not the assumption.** That is a missing Chrome UA, and v1 of this spike hit exactly that: it mirrored `serviceWindow.ts`'s `webPreferences` but not `session.ts`'s `configureSession`, so the view announced itself as Electron. The session mirror in Step 1 is not optional trimming — `setUserAgent` is what gets the page to load at all, and the permission handler granting `media` is what stops Step 3 failing on a denied mic.
 
 - [ ] **Step 3: Run the call probe**
 
