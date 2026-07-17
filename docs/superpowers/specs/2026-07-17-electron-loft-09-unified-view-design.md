@@ -349,8 +349,25 @@ Run by Keith on GNOME/Wayland against `web.whatsapp.com` in a throwaway `persist
 - **Re-parenting preserves the page: YES.** After `removeChildView` from window A and `addChildView` to
   window B, the view still had the same selected chat, the same scroll position, and the same unsent draft
   in the composer. Live DOM and application state came across, not merely a surviving `webContents`.
+
+  ```
+  [spike] did-start-loading            <- last one; fires BEFORE the move
+  [spike] re-parenting A -> B ...
+  [spike] ---------------- RESULT ----------------
+  [spike] id same?           true (3 -> 3)
+  [spike] __spike survived?  true (set-before-reparent)
+  [spike] url:               https://web.whatsapp.com/
+  ```
+
+  **No `did-start-loading` or `did-navigate` fired after the move** — that is the decisive automated signal.
+  The re-parent triggers no navigation of any kind.
 - **Call in a re-parented view: YES.** Voice and video both connected from window B, after the move. No
-  SIGSEGV.
+  SIGSEGV, no exit code 139.
+
+  Benign noise to expect, **not** a finding: `DcSctpTransport…OnError(error=WRONG_SEQUENCE, message=Can't
+  reset streams as the socket is not connected)` and `OnAborted(…User-Initiated Abort, reason=Close called)`
+  are WhatsApp's data channels tearing down after a call ends. They appear on both sides of the re-parent
+  and correlate with hanging up, not with the move.
 - **Verdict: GO.** §5a's `ServiceView` moves between hosts as designed; `detach` does not need to become
   "reload in a new window", so 09b and 09c proceed as specced.
 
@@ -359,8 +376,11 @@ but not `session.ts`'s `configureSession`, so it loaded WhatsApp with Electron's
 *"WhatsApp works with Google Chrome 100+"* — failing for a reason that had nothing to do with the questions
 it existed to answer. A probe of a service view needs the **Chrome UA** (or the page refuses to load at all)
 and the **permission handler granting `media`** (or the call probe dies on a denied mic). Neither is optional
-trimming. The preserved-draft check also turned out to be the strongest signal available — stronger than the
-injected `window.__spike` marker, since a draft proves the live DOM survived, not just a JS global.
+trimming. The preserved-draft check also turned out to be the strongest human-visible signal — stronger than
+the injected `window.__spike` marker, since a draft proves the live DOM survived, not just a JS global.
+
+Also: **GNOME already binds `Ctrl+Alt+R`** (screen recording), so the spike's `globalShortcut.register` returned
+false and its 90-second timer fallback is what actually ran. Pick a different accelerator, and keep a fallback.
 
 ## 11. Staging
 
