@@ -19,7 +19,6 @@ import { ensureGnomeHelper, defaultHelperInstallDeps } from './gnome/helperInsta
 import { isGnome, isKde, resolveTrayBackend } from './trayBackend';
 import { createKwinClient, type KwinClient } from './kde/kwin';
 import { startBackgroundStatus } from './gnome/backgroundStatus';
-import { createHub, type HubDeps } from './hubWindow';
 import { buildHubState } from './hubState';
 import { addService, removeService } from './install';
 import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
@@ -27,13 +26,13 @@ import { createSignalShutdown } from './shutdown';
 import { ensureHubDesktopEntry, writeServiceLauncher, serviceLauncherPath } from './desktop';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
-import type { ServicePatch, GlobalPatch, RecoverOpts } from '../shared/hubTypes';
+import type { HubState, ServicePatch, GlobalPatch, RecoverOpts } from '../shared/hubTypes';
 
 app.setName('Loft');
 app.setAppUserModelId('chat.loft.Loft');
-// No app menu — the hub is a plain utility window and the service windows are
-// frameless, so the default Electron menu bar is just empty chrome. Removing it
-// app-wide hides the menu bar on the decorated hub window.
+// No app menu — every Loft window is frameless now (the manager is a view inside the Loft
+// window, not its own decorated window), so the default Electron menu bar is just empty
+// chrome with nowhere to render.
 Menu.setApplicationMenu(null);
 
 const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
@@ -50,7 +49,6 @@ let quitting = false;
 let tray: Tray | undefined;
 let notifications: Notifications | undefined;
 let bgStatus: { refresh(): void } | undefined;
-let hub: ReturnType<typeof createHub> | undefined;
 // Bundled PNGs live in dist/assets/icons (copy-assets); one dir up from dist/main.
 const iconSourceDir = join(__dirname, '..', 'assets', 'icons');
 
@@ -146,6 +144,29 @@ function windowKeys(): string[] {
 }
 function syncLoftWindows(): void { helper?.setLoftWindows(windowKeys()); }
 
+/** Everything the manager renderer draws. Read fresh on every call — it is derived from
+ *  config plus wherever the services actually live, and nothing caches it. */
+function hubState(): HubState {
+  return buildHubState({
+    services: SERVICES,
+    config,
+    running: (id) => hostOf(id) !== undefined,
+    visible: (id) => hostOf(id)?.isVisible() ?? false,
+    badge: (id) => currentBadge.get(id) ?? 0,
+    trayBackend: config.trayBackend ?? 'auto',
+    autostartBlocked: wantsAutostart(config.services) && !isAutostartEnabled(),
+  });
+}
+
+/**
+ * Push fresh state to the manager view. The old standalone hub window pushed only while it
+ * existed, which made every one of these a no-op on the launch paths that never opened it;
+ * the manager is a view inside the Loft window now, created on app-ready and alive for the
+ * process, so these land — including while a service tab is on top of it. That is the point:
+ * a hidden-but-subscribed manager stays current, so showManager() has nothing to re-fetch.
+ */
+function notifyHub(): void { loft?.sendManager('hub:state', hubState()); }
+
 /** Create (or reuse) a service's OWN window. Reached only through placeService — go via
  *  that (or showService), so nothing can duplicate an attached service into a window. */
 function openService(def: ServiceDef, minimized: boolean): ServiceHost {
@@ -184,7 +205,7 @@ function openService(def: ServiceDef, minimized: boolean): ServiceHost {
   notifications?.setActive(def.id, true);
   bgStatus?.refresh();
   loft?.refreshRail(); // the rail lists it as living in its own window now
-  hub?.notifyChanged();
+  notifyHub();
   return sw;
 }
 
@@ -203,7 +224,7 @@ function attachService(def: ServiceDef): ServiceHost {
   notifications?.setFocused(def.id, l.window.isFocused());
   notifications?.setActive(def.id, l.activeId() === def.id);
   bgStatus?.refresh();
-  hub?.notifyChanged();
+  notifyHub();
   return host;
 }
 
@@ -260,7 +281,7 @@ function setServiceDnd(id: string, enabled: boolean): void {
   config.services[id] = { ...config.services[id], dnd: enabled };
   saveConfig(configPath(), config);
   loft?.refreshRail();
-  hub?.notifyChanged();
+  notifyHub();
 }
 
 /** Apply + persist a per-service settings patch, then re-push everything it changes.
@@ -288,7 +309,7 @@ function setServiceSetting(id: string, patch: ServicePatch): void {
   }
   if (patch.openOnStartup !== undefined) reconcileAutostart();
   loft?.refreshRail();
-  hub?.notifyChanged();
+  notifyHub();
 }
 
 /** Stop a service: unload its view (attached) or destroy its window (detached). It stays
@@ -315,7 +336,7 @@ function quitService(id: string): void {
   tray?.setBadge(id, 0);
   bgStatus?.refresh();
   loft?.refreshRail();
-  hub?.notifyChanged();
+  notifyHub();
 }
 
 /**
@@ -351,7 +372,7 @@ function setDetached(id: string, v: boolean): void {
     if (wasVisible) showService(def); // it was on screen — keep it there
   }
   loft?.refreshRail();
-  hub?.notifyChanged();
+  notifyHub();
 }
 
 /** The per-service menu (rail right-click). Spec §7: every per-service action lives here.
@@ -397,7 +418,7 @@ function setGlobalDnd(enabled: boolean): void {
   config.globalDnd = enabled;
   saveConfig(configPath(), config);
   tray?.setGlobalDnd(enabled);
-  hub?.notifyChanged();
+  notifyHub();
 }
 
 // Autostart is derived, not a setting: the entry exists iff some service asked to
@@ -416,12 +437,12 @@ function reconcileAutostart(): void {
   // can leave a permission dialog on screen for up to 120s; natively it resolves
   // immediately. Re-notify the hub once the sync actually settles — otherwise a
   // buildState() taken right after this call returns (e.g. the setServiceSetting
-  // IPC handler's own notifyChanged()) can read a not-yet-written autostart entry
+  // IPC handler's own notifyHub()) can read a not-yet-written autostart entry
   // and show a spurious "Loft was denied permission to start at login" warning
   // while the portal dialog is still pending. Safe: syncAutostart is documented to
   // never reject.
   void syncAutostart(wants, { execPath: process.execPath, iconSourceDir })
-    .then(() => hub?.notifyChanged());
+    .then(() => notifyHub());
 }
 
 function resolveServiceFromArgs(argv: string[]): ServiceDef | undefined {
@@ -497,6 +518,71 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on('rail:select', (_e, id: string) => { const d = getService(id); if (d) showService(d); });
   ipcMain.on('rail:menu', (_e, id: string) => loft?.popServiceMenu(id));
 
+  // --- hub:* — the manager view (src/renderer/hub) ----------------------------------
+  // Owned here, not by the window hosting the manager: these drive main's own state
+  // (config, hosts, autostart, the app's lifetime), which is why they outlived the
+  // standalone hub window they used to ship with. Registered at module scope with the rest
+  // of the IPC on purpose — the manager view loads during whenReady and invokes
+  // hub:getState the moment it does, so the handler has to be there already. Channel names
+  // and payload shapes are the renderer's contract (src/preload/hub.ts) — don't reshape
+  // them here.
+  ipcMain.handle('hub:getState', () => hubState());
+
+  // Select the tab rather than open a window: the manager is a tab in the same window as
+  // the services now, so its "Open" means exactly what a rail click means. Routed through
+  // rail:select so the two cannot drift into two answers for one question.
+  ipcMain.on('hub:openService', (_e, id: string) => { ipcMain.emit('rail:select', null, id); });
+
+  ipcMain.on('hub:addService', (_e, m: { id: string; customUrl?: string }) => {
+    const d = getService(m.id); if (!d) return;
+    addService(d, config, { execPath: process.execPath, iconSourceDir, customUrl: m.customUrl });
+    saveConfig(configPath(), config);
+    loft?.refreshRail(); // the rail lists every INSTALLED service
+
+    // Deliberately no reconcileAutostart() here: addService only ever sets
+    // customUrl and never touches openOnStartup, so wantsAutostart() cannot
+    // change as a result of an add — the call would be a guaranteed no-op.
+    // Under Flatpak it would still fire a real RequestBackground portal
+    // request (and can pop an unwanted "let Loft run in the background?"
+    // dialog) on every "Add service" click, including the first service
+    // added to a fresh install. Don't add it back.
+    notifyHub();
+  });
+
+  ipcMain.on('hub:removeService', (_e, m: { id: string; deleteData: boolean }) => {
+    const d = getService(m.id); if (!d) return;
+    quitService(m.id); // tear down a running view/window first
+    removeService(d, config, m.deleteData);
+    saveConfig(configPath(), config);
+    reconcileAutostart();
+    loft?.refreshRail(); // it is no longer installed, so it leaves the rail
+    notifyHub();
+  });
+
+  ipcMain.on('hub:setServiceSetting', (_e, m: { id: string; patch: ServicePatch }) => {
+    setServiceSetting(m.id, m.patch);
+    notifyHub();
+  });
+
+  ipcMain.on('hub:setGlobal', (_e, patch: GlobalPatch) => {
+    if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; saveConfig(configPath(), config); }
+    notifyHub();
+  });
+
+  ipcMain.on('hub:recoverService', (_e, m: { id: string; opts: RecoverOpts }) => {
+    const host = hostOf(m.id);
+    // clearCaches:false with no running host (host undefined) is a deliberate
+    // no-op: there's nothing to reload and nothing to clear. Unreachable today
+    // (the hub only ever sends true), kept for API completeness.
+    if (!m.opts.clearCaches) { host?.reload(); return; }
+    // Works whether or not the service is running: with no host we still clear,
+    // so the next launch loads clean.
+    if (host) { void host.clearAndReload(); return; }
+    void clearServiceCaches(session.fromPartition(`persist:${m.id}`));
+  });
+
+  ipcMain.on('hub:quit', () => { quitting = true; app.quit(); });
+
   ipcMain.on('service:badge', (e, payload?: { count?: number }) => {
     if (typeof payload?.count !== 'number') return;
     const sw = findBySenderId(e.sender.id);
@@ -508,7 +594,7 @@ if (!app.requestSingleInstanceLock()) {
     // service's rail entry would otherwise sit stale until something else repainted it.
     // Above the badgesEnabled return on purpose: the rail model does its own gating.
     loft?.refreshRail();
-    hub?.notifyChanged();
+    notifyHub();
     // SetBadgesEnabled(false) keeps the true count in currentBadge (GetStatus
     // still reports it) but suppresses the visible tray/title indicator.
     if (config.services[sw.def.id]?.badgesEnabled === false) return;
@@ -569,7 +655,9 @@ if (!app.requestSingleInstanceLock()) {
         onQuitService: (id) => quitService(id),
         onToggleDnd: (id, enabled) => { setServiceDnd(id, enabled); tray?.setDnd(id, enabled); notifications?.setServiceDnd(id, enabled); },
         onToggleGlobalDnd: (enabled) => { setGlobalDnd(enabled); notifications?.setGlobalDnd(enabled); },
-        onShowHub: () => hub?.open(),
+        // "Settings…" = show the manager tab, not a window of its own — same as the rail
+        // menu's Settings… and the D-Bus ShowHub().
+        onShowHub: () => { loft?.showManager(); loft?.open(); },
         onQuit: () => { quitting = true; app.quit(); },
       };
       // gnome-panel requires a live helper; force sni when the helper factory
@@ -681,66 +769,11 @@ if (!app.requestSingleInstanceLock()) {
       } catch (err) { console.error(`Launcher self-heal failed for ${id}:`, err); }
     }
 
-    const hubDeps: HubDeps = {
-      buildState: () => buildHubState({
-        services: SERVICES,
-        config,
-        running: (id) => hostOf(id) !== undefined,
-        visible: (id) => hostOf(id)?.isVisible() ?? false,
-        badge: (id) => currentBadge.get(id) ?? 0,
-        trayBackend: config.trayBackend ?? 'auto',
-        autostartBlocked: wantsAutostart(config.services) && !isAutostartEnabled(),
-      }),
-      openService: (id) => { const d = getService(id); if (d) showService(d); },
-      addService: (id, customUrl) => {
-        const d = getService(id); if (!d) return;
-        addService(d, config, { execPath: process.execPath, iconSourceDir, customUrl });
-        saveConfig(configPath(), config);
-        loft?.refreshRail(); // the rail lists every INSTALLED service
-
-        // Deliberately no reconcileAutostart() here: addService only ever sets
-        // customUrl and never touches openOnStartup, so wantsAutostart() cannot
-        // change as a result of an add — the call would be a guaranteed no-op.
-        // Under Flatpak it would still fire a real RequestBackground portal
-        // request (and can pop an unwanted "let Loft run in the background?"
-        // dialog) on every "Add service" click, including the first service
-        // added to a fresh install. Don't add it back.
-      },
-      removeService: (id, deleteData) => {
-        const d = getService(id); if (!d) return;
-        quitService(id); // tear down a running view/window first
-        removeService(d, config, deleteData);
-        saveConfig(configPath(), config);
-        reconcileAutostart();
-        loft?.refreshRail(); // it is no longer installed, so it leaves the rail
-      },
-      setServiceSetting,
-      setGlobal: (patch: GlobalPatch) => {
-        if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; saveConfig(configPath(), config); }
-      },
-      recoverService: (id, opts) => {
-        const host = hostOf(id);
-        // clearCaches:false with no running host (host undefined) is a deliberate
-        // no-op: there's nothing to reload and nothing to clear. Unreachable today
-        // (the hub only ever sends true), kept for API completeness.
-        if (!opts.clearCaches) { host?.reload(); return; }
-        // Works whether or not the service is running: with no host we still clear,
-        // so the next launch loads clean.
-        if (host) { void host.clearAndReload(); return; }
-        void clearServiceCaches(session.fromPartition(`persist:${id}`));
-      },
-      quitApp: () => { quitting = true; app.quit(); },
-      preloadPath: join(__dirname, '..', 'preload', 'hub.js'),
-      htmlPath: join(__dirname, '..', 'renderer', 'hub', 'index.html'),
-      iconPath: join(iconSourceDir, 'loft.png'),
-    };
-    hub = createHub(hubDeps);
-
     // The unified window (spec 09 §2): manager + rail + every attached service. It exists
     // on every launch path, shown or not — its startup set loads into it either way.
-    // Ordering: after migrateConfig, because the rail is built from config; and after
-    // createHub, because the manager view it mounts is the hub renderer, which invokes
-    // hub:getState the moment it loads.
+    // Ordering: after migrateConfig, because the rail is built from config. The manager view
+    // it mounts is the hub renderer, which invokes hub:getState the moment it loads — that
+    // handler is registered at module scope above, so it is already there.
     loft = createLoftWindow({
       cfg: config,
       services: [...SERVICES], // the registry is readonly; the rail wants a plain array
@@ -839,7 +872,7 @@ if (!app.requestSingleInstanceLock()) {
           saveConfig(configPath(), config);
         },
         quitApp: () => { quitting = true; app.quit(); },
-        showHub: () => hub?.open(),
+        showHub: () => { loft?.showManager(); loft?.open(); },
         setGlobalDnd: (enabled) => { setGlobalDnd(enabled); notifications?.setGlobalDnd(enabled); },
       };
       await startLoftDbusService(loftDeps);

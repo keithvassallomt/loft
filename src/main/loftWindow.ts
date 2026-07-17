@@ -39,6 +39,11 @@ export interface LoftWindow {
   setBadge(id: string, count: number): void;
   refreshRail(): void;
   showManager(): void;
+  /** Push to the manager view (the hub renderer). index.ts owns the `hub:*` IPC — those
+   *  handlers drive main's own state (config, hosts, autostart), not this window's — but the
+   *  manager is a view in here, so this is its way in. No-ops before the view has loaded;
+   *  the renderer pulls its own first state over `hub:getState`, so nothing is lost. */
+  sendManager(channel: string, ...args: unknown[]): void;
   popServiceMenu(id: string): void;
   ownsWebContents(id: number): boolean;
   persist(): void;
@@ -183,7 +188,9 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   // actually finishes; this also covers a renderer that reloads for any reason, since
   // did-finish-load fires again and picks up current state. The manager view needs no
   // such binding — its state travels over the hub:* channels (hub:getState/hub:state),
-  // owned by hubWindow.ts, not this file.
+  // owned by index.ts, not this file: the renderer PULLS its first state with a
+  // hub:getState invoke once it's up, so it cannot miss an early push the way the rail
+  // and titlebar (push-only) can.
   rail.webContents.on('did-finish-load', refreshAll);
   titlebar.webContents.on('did-finish-load', refreshAll);
 
@@ -319,6 +326,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
 
     refreshRail: refreshAll,
     showManager,
+    sendManager: (channel, ...args) => safeSend(manager, channel, ...args),
 
     /** Native per-service context menu (rail right-click). Main owns it so it renders
      *  as a real menu rather than CSS, and so the actions are the same ones the tray
