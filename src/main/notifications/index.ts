@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { NotificationGate } from './gate';
 import { resolveAvatar, avatarCacheDir, type AvatarDeps } from './avatars';
 import { connectNotificationServer, type NotificationServer } from './dbus';
-import { watchSystemDnd } from './systemDnd';
+import { watchSystemDnd, type SystemDndWatcher } from './systemDnd';
 
 export interface NotifyPayload {
   title: string;
@@ -29,6 +29,9 @@ export interface Notifications {
   setFocused(id: string, v: boolean): void;
   setVisible(id: string, v: boolean): void;
   registerService(id: string): void;
+  /** Release OS resources held by the watcher (the GNOME backend's `gsettings monitor`
+   *  child). Must be called on every exit path; safe to call more than once. */
+  close(): void;
 }
 
 /**
@@ -78,12 +81,19 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
     deps.pushHidden(id, !(isFocused && isVisible));
   };
 
+  // Declared out here, not inside the try: close() has to be able to stop it. The GNOME
+  // backend spawns a `gsettings monitor` child, and leaving it running outlives the app —
+  // under Flatpak that child keeps bwrap alive, so the flatpak instance never exits, GNOME
+  // still thinks Loft is running, and clicking its icon activates a corpse instead of
+  // launching. Stays undefined when the watcher throws (missing gsettings must not kill
+  // startup), so close() has to tolerate that.
+  let systemDndWatcher: SystemDndWatcher | undefined;
   try {
-    const watcher = watchSystemDnd((dnd) => {
+    systemDndWatcher = watchSystemDnd((dnd) => {
       gate.setSystemDnd(dnd);
       pushDndToAll();
     });
-    gate.setSystemDnd(watcher.current());
+    gate.setSystemDnd(systemDndWatcher.current());
   } catch (err) {
     console.error('Failed to watch system Do Not Disturb; assuming disabled:', err);
   }
@@ -154,6 +164,11 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
       knownIds.add(id);
       deps.pushDnd(id, gate.effectiveDnd(id));
       recomputeHidden(id);
+    },
+
+    close() {
+      systemDndWatcher?.stop();
+      systemDndWatcher = undefined; // idempotent: both shutdown routes can fire
     },
   };
 }

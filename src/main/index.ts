@@ -544,6 +544,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', () => {
     quitting = true; // fires before window 'close' events, so close-to-tray yields to a real quit
     persistAll();
+    releaseOsResources();
   });
 
   // Session-end (logout/shutdown): systemd SIGTERMs our scope ~1s BEFORE it tears down
@@ -559,7 +560,10 @@ if (!app.requestSingleInstanceLock()) {
   // the race; app.exit(0) is deliberate. Reproduced the abort directly by killing a private
   // bus under a running Electron; verified the exact FATAL:dbus/bus.cc:1245 message, and
   // that this drops SIGTERM exit from ~600ms to ~116ms. (createSignalShutdown is unit-tested.)
-  const fastExit = createSignalShutdown({ persist: persistAll, exit: () => app.exit(0) });
+  const fastExit = createSignalShutdown({
+    persist: () => { persistAll(); releaseOsResources(); },
+    exit: () => app.exit(0),
+  });
   for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.on(sig, fastExit);
 }
 
@@ -568,4 +572,26 @@ if (!app.requestSingleInstanceLock()) {
 function persistAll(): void {
   for (const sw of windows.values()) sw.persist();
   saveConfig(configPath(), config);
+}
+
+/**
+ * Kill OS resources that outlive the process. Runs on BOTH exit paths: before-quit does
+ * not fire for app.exit(0), which is exactly what the session-end handler above uses.
+ *
+ * Currently just the system-DND watcher, whose GNOME backend spawns a `gsettings monitor`
+ * child. Node does not reap spawned children on exit, and `gsettings monitor` only notices
+ * its closed stdout when it next writes — which may be never. Leaking it is not cosmetic:
+ * under Flatpak the surviving child holds bwrap open, so the app's flatpak instance never
+ * exits. GNOME Shell then still sees Loft as running and ACTIVATES it on an icon click
+ * rather than launching it — the app becomes unstartable until the corpse is killed by
+ * hand, with nothing on screen to explain why.
+ *
+ * Best-effort and never throws: an exit path must always reach its exit().
+ */
+function releaseOsResources(): void {
+  try {
+    notifications?.close();
+  } catch (e) {
+    console.error('releaseOsResources failed:', (e as Error)?.message ?? e);
+  }
 }

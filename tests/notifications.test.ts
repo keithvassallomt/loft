@@ -68,6 +68,40 @@ beforeEach(() => {
 });
 
 describe('startNotifications', () => {
+  it('close() stops the system-DND watcher', async () => {
+    // Regression: the GNOME backend spawns `gsettings monitor` as a child process, and
+    // watchSystemDnd returns the stopper that kills it — but nothing ever called it, so
+    // every run leaked the child. Under Flatpak the leaked child keeps bwrap alive, so
+    // the app's flatpak instance never exits; GNOME then treats Loft as still running and
+    // ACTIVATES it instead of launching, and clicking the icon does nothing at all.
+    const stop = vi.fn();
+    watchSystemDndMock.mockReturnValue({ current: () => false, stop });
+    connectNotificationServerMock.mockResolvedValue(makeFakeServer());
+
+    const n = await startNotifications(makeDeps());
+    expect(stop).not.toHaveBeenCalled();
+    n.close();
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('close() is idempotent and survives a watcher that never started', async () => {
+    // watchSystemDnd is wrapped in try/catch (a missing gsettings must not kill startup),
+    // so `watcher` can legitimately be undefined. close() must not throw on that path, and
+    // must not double-kill on the normal one — both shutdown routes can fire.
+    const stop = vi.fn();
+    watchSystemDndMock.mockImplementation(() => { throw new Error('gsettings missing'); });
+    connectNotificationServerMock.mockResolvedValue(makeFakeServer());
+    const failed = await startNotifications(makeDeps());
+    expect(() => { failed.close(); failed.close(); }).not.toThrow();
+
+    watchSystemDndMock.mockReset().mockReturnValue({ current: () => false, stop });
+    connectNotificationServerMock.mockResolvedValue(makeFakeServer());
+    const ok = await startNotifications(makeDeps());
+    ok.close();
+    ok.close();
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
   it('suppresses handle() when the gate says no (per-service DND)', async () => {
     const server = makeFakeServer();
     connectNotificationServerMock.mockResolvedValue(server);
