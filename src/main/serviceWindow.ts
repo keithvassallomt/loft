@@ -114,6 +114,7 @@ export function createServiceWindow(
       window.focus();
     },
     hide: () => window.hide(),
+    isVisible: () => window.isVisible(),
     setZoom: (delta: number) => {
       sv.setZoom(delta);
       persist();

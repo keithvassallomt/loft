@@ -139,8 +139,8 @@ function openService(def: ServiceDef, minimized: boolean): void {
   focusExternal(def.displayName);
   tray?.addService({ id: def.id, displayName: def.displayName, dnd: config.services[def.id]?.dnd ?? false });
   tray?.setRunning(def.id, true);
-  tray?.setVisible(def.id, sw.window.isVisible());
-  notifications?.setVisible(def.id, sw.window.isVisible());
+  tray?.setVisible(def.id, sw.isVisible());
+  notifications?.setVisible(def.id, sw.isVisible());
   notifications?.setFocused(def.id, sw.window.isFocused());
   bgStatus?.refresh();
   hub?.notifyChanged();
@@ -149,7 +149,7 @@ function openService(def: ServiceDef, minimized: boolean): void {
 // Tray menu "Show/Hide" for a service: show if hidden, hide if visible.
 function toggleService(id: string): void {
   const sw = windows.get(id);
-  if (sw && sw.window.isVisible()) { sw.hide(); hideExternal(sw.def.displayName); return; }
+  if (sw && sw.isVisible()) { sw.hide(); hideExternal(sw.def.displayName); return; }
   const def = getService(id);
   if (def) openService(def, false);
 }
@@ -296,7 +296,7 @@ if (!app.requestSingleInstanceLock()) {
           dnd: config.services[d.id]?.dnd ?? false,
           // Route through hostOf() so reimplementing for a shared host requires only one change
           running: hostOf(d.id) !== undefined,
-          visible: windows.get(d.id)?.window.isVisible() ?? false,
+          visible: hostOf(d.id)?.isVisible() ?? false,
         }));
       const deps: TrayDeps = {
         configuredServices: configured,
@@ -323,7 +323,7 @@ if (!app.requestSingleInstanceLock()) {
         const d = getService(id);
         if (d) tray.addService({ id, displayName: d.displayName, dnd: config.services[id]?.dnd ?? false });
         tray.setRunning(id, true);
-        tray.setVisible(id, sw.window.isVisible());
+        tray.setVisible(id, sw.isVisible());
       }
     } catch (err) {
       console.error('Failed to start tray:', err);
@@ -352,7 +352,7 @@ if (!app.requestSingleInstanceLock()) {
       // a defensive no-op — kept for symmetry with the tray loop and to cover any
       // future path that opens a window before notifications init.
       for (const [id, sw] of windows) {
-        notifications.setVisible(id, sw.window.isVisible());
+        notifications.setVisible(id, sw.isVisible());
         notifications.setFocused(id, sw.window.isFocused());
       }
     } catch (err) {
@@ -417,7 +417,7 @@ if (!app.requestSingleInstanceLock()) {
         services: SERVICES,
         config,
         running: (id) => hostOf(id) !== undefined,
-        visible: (id) => windows.get(id)?.window.isVisible() ?? false,
+        visible: (id) => hostOf(id)?.isVisible() ?? false,
         badge: (id) => currentBadge.get(id) ?? 0,
         trayBackend: config.trayBackend ?? 'auto',
         autostartBlocked: wantsAutostart(config.services) && !isAutostartEnabled(),
@@ -510,7 +510,7 @@ if (!app.requestSingleInstanceLock()) {
       const loftDeps: LoftServiceDeps = {
         show: (id) => { const d = getService(id); if (d) openService(d, false); },
         hide: (id) => {
-          const sw = windows.get(id);
+          const sw = hostOf(id);
           if (!sw) return;
           sw.hide();
           hideExternal(sw.def.displayName);
@@ -518,8 +518,8 @@ if (!app.requestSingleInstanceLock()) {
         toggle: (id) => toggleService(id),
         quitService: (id) => quitService(id),
         getStatus: (id) => {
-          const sw = windows.get(id);
-          const visible = sw?.window.isVisible() ?? false;
+          const sw = hostOf(id);
+          const visible = sw?.isVisible() ?? false;
           const badge = currentBadge.get(id) ?? 0;
           const dnd = config.services[id]?.dnd ?? false;
           return [visible, badge, dnd];
