@@ -7,6 +7,7 @@ import { parseArgs } from './cli';
 import { getService, SERVICES, ServiceDef, effectiveUrl } from './registry';
 import { loadConfig, saveConfig, configPath, LoftConfig } from './config';
 import { createServiceWindow, ServiceWindow } from './serviceWindow';
+import type { ServiceHost } from './serviceHost';
 import { clearServiceCaches } from './recovery';
 import { Tray, TrayDeps, TrayServiceSeed } from './tray';
 import { startTrayBackend } from './tray/backend';
@@ -90,6 +91,10 @@ function serviceIconPath(id: string): string {
 
 const config: LoftConfig = loadConfig(configPath());
 const windows = new Map<string, ServiceWindow>();
+// Where a service currently lives, as the narrow contract consumers should use.
+// Today every host is a ServiceWindow; in 09b an attached service's host is the
+// Loft window instead, and nothing below this line has to care.
+const hostOf = (id: string): ServiceHost | undefined => windows.get(id);
 // Latest badge count per service, independent of whether the badge indicator
 // is currently enabled — GetStatus() always reports the true count.
 const currentBadge = new Map<string, number>();
@@ -326,9 +331,9 @@ if (!app.requestSingleInstanceLock()) {
         serviceIconPath,
         sessionFetch: (id, url) => session.fromPartition(`persist:${id}`).fetch(url),
         focusService: (id) => { const d = getService(id); if (d) openService(d, false); },
-        navigate: (id, url) => windows.get(id)?.navigate(url),
-        pushDnd: (id, v) => windows.get(id)?.pushDnd(v),
-        pushHidden: (id, hidden) => windows.get(id)?.pushHidden(hidden),
+        navigate: (id, url) => hostOf(id)?.navigate(url),
+        pushDnd: (id, v) => hostOf(id)?.pushDnd(v),
+        pushHidden: (id, hidden) => hostOf(id)?.pushHidden(hidden),
       });
       // Seed the gate from persisted config so DND holds across a restart,
       // even for services not yet running (effectiveDnd is read back on
@@ -435,7 +440,7 @@ if (!app.requestSingleInstanceLock()) {
       setServiceSetting: (id, patch: ServicePatch) => {
         config.services[id] = { ...config.services[id], ...patch };
         saveConfig(configPath(), config);
-        if (patch.dnd !== undefined) { tray?.setDnd(id, patch.dnd); notifications?.setServiceDnd(id, patch.dnd); windows.get(id)?.pushDnd(patch.dnd); }
+        if (patch.dnd !== undefined) { tray?.setDnd(id, patch.dnd); notifications?.setServiceDnd(id, patch.dnd); hostOf(id)?.pushDnd(patch.dnd); }
         if (patch.badgesEnabled !== undefined) {
           const sw = windows.get(id);
           const count = currentBadge.get(id) ?? 0;

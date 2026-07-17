@@ -3,7 +3,7 @@
  * app's own navigation) or handed to the user's default browser (everything else).
  *
  * Pure decisions only — no electron import — so the whole policy is unit-testable;
- * serviceWindow.ts wires these to setWindowOpenHandler / will-navigate and does the
+ * serviceView.ts wires these to setWindowOpenHandler / will-navigate and does the
  * actual shell.openExternal.
  */
 export type LinkAction = 'in-app' | 'external';

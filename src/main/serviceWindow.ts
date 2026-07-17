@@ -5,39 +5,21 @@ import type { LoftConfig } from './config';
 import { computeLayout } from './layout';
 import { formatWindowTitle } from './serviceTitle';
 import { createServiceView } from './serviceView';
+import type { ServiceHost } from './serviceHost';
 
 /**
  * A detached host: one BrowserWindow showing exactly one service, with our own
  * titlebar strip above it. Everything about the *service* lives in ServiceView;
  * this file is only about the *window* — bounds, close-to-tray, the titlebar.
  */
-export interface ServiceWindow {
+export interface ServiceWindow extends ServiceHost {
   def: ServiceDef;
   window: BrowserWindow;
   serviceView: WebContentsView;
   titlebarView: WebContentsView;
-  show(): void;
-  hide(): void;
-  /** Adjust the service view's zoom by delta (clamped 0.3–3.0), apply, and persist. */
-  setZoom(delta: number): void;
-  /** Write current bounds + zoom into the in-memory config. */
+  /** Write current bounds + zoom into the in-memory config. Window-only: a rail
+   *  entry has no bounds of its own, so this is not part of ServiceHost. */
   persist(): void;
-  /** Reflect the unread count in the window title. */
-  setBadge(count: number): void;
-  /** Push the current Do Not Disturb state to the page (gates Notification-API relays). */
-  pushDnd(enabled: boolean): void;
-  /** Tell the page whether the window is hidden (drives document.hidden/visibilityState). */
-  pushHidden(hidden: boolean): void;
-  /** Ask the page to navigate to a conversation (Messenger notification click). */
-  navigate(url: string): void;
-  /** Navigate the service view, hiding any stale recovery overlay and re-arming stuck detection. */
-  loadUrl(url: string): void;
-  /** Reload the service view and re-arm stuck detection. */
-  reload(): void;
-  /** Clear the service's caches (never cookies), then reload. */
-  clearAndReload(): Promise<void>;
-  /** True if the given webContents id belongs to this window (titlebar, service, or recovery overlay). */
-  ownsWebContents(id: number): boolean;
 }
 
 export function createServiceWindow(
