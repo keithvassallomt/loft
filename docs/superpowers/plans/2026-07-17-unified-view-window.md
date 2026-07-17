@@ -1055,7 +1055,11 @@ The core. One window: rail view (full height, left), titlebar view (top of the r
     open(): void;                         // show + focus
     hide(): void;
     attach(def: ServiceDef): ServiceHost; // create+mount a view; does NOT select it
-    detach(id: string): ServiceView | undefined;  // unmount, hand the live view back
+    /** Unmount and hand the still-live view back for re-mounting elsewhere.
+     *  ORDERING CONTRACT: call this BEFORE writing `detached: true` to config. It picks
+     *  the next tab by locating `id` in the attached list, so a config flag flipped first
+     *  makes it show the manager instead of the next service. */
+    detach(id: string): ServiceView | undefined;
     unload(id: string): void;             // destroy the view; drop to sleeping
     select(id: string | undefined): void; // undefined = show the manager
     activeId(): string | undefined;
@@ -1297,9 +1301,16 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     detach: (id) => {
       const sv = views.get(id);
       if (!sv) return undefined;
+      // Snapshot the successor BEFORE the transition. nextActiveId locates `id` in the
+      // ATTACHED list to pick its neighbour, so it must still be both loaded and
+      // not-yet-detached: call it after views.delete (or after deps.detached(id) flips)
+      // and it finds nothing, returns undefined, and we show the manager instead of the
+      // next service. Hence also the ordering contract on this method — see the doc on
+      // LoftWindow.detach: the caller must not write `detached: true` to config first.
+      const next = active === id ? nextActiveId(model(), id) : undefined;
       sv.unmount();
       views.delete(id);
-      if (active === id) select(nextActiveId(model(), id));
+      if (active === id) select(next);
       refreshAll();
       return sv; // still live — the caller re-mounts it into its own window
     },
@@ -1307,11 +1318,13 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     unload: (id) => {
       const sv = views.get(id);
       if (!sv) return;
-      if (active === id) select(nextActiveId(model(), id));
+      // Same rule: compute the successor while `id` is still in the attached list.
+      const next = active === id ? nextActiveId(model(), id) : undefined;
       sv.unmount();
       sv.dispose();
       if (!sv.view.webContents.isDestroyed()) sv.view.webContents.close();
       views.delete(id);
+      if (active === id) select(next);
       refreshAll();
     },
 
@@ -1489,7 +1502,22 @@ and build the menu template (spec §7 — every per-service action lives here):
     };
 ```
 
-`setDetached(id, v)` writes `config.services[id].detached = v`, saves, and moves the live view: attached→detached hands `loft.detach(id)`'s returned live `ServiceView` to a new `serviceWindow`; detached→attached does the reverse. **If moving a live view proves troublesome, unload-and-reload is an acceptable fallback for 09b** — say so in the report; the gesture-driven version is 09c's problem.
+`setDetached(id, v)` moves the live view and writes `config.services[id].detached = v`, **in that order** — `loft.detach(id)` picks the next tab by locating `id` in the attached list, so flipping the config flag first makes it show the manager instead of the next service (see the ordering contract on `LoftWindow.detach`):
+
+```ts
+    const setDetached = (id: string, v: boolean): void => {
+      const d = getService(id);
+      if (!d) return;
+      // Move the view FIRST, while config still says what it said — see LoftWindow.detach.
+      if (v) loft?.detach(id);            // hands back the live ServiceView
+      config.services[id] = { ...config.services[id], detached: v };
+      saveConfig(configPath(), config);
+      // then re-place it in its new home
+      ...
+    };
+```
+
+**If re-mounting the live view into the other host proves troublesome, unload-and-reload is an acceptable fallback for 09b** — the service reloads rather than keeping its scroll and drafts. Say so in the report; the gesture-driven version is 09c's problem, and Task 3's spike is what tells you whether the live move is viable at all.
 
 - [ ] **Step 4: `setActive` wiring**
 
