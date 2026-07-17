@@ -54,10 +54,19 @@ export interface LoftWindowDeps {
   badge(id: string): number;
   /** Is this service detached? Detached services appear in the rail but aren't tabs. */
   detached(id: string): boolean;
+  /** Is this service loaded somewhere ELSE — i.e. in its own window? The rail lists every
+   *  installed service, detached ones included (spec §3), and this window can only see its
+   *  own views: without this it would draw a live detached service as sleeping, badge and
+   *  all. */
+  loadedElsewhere(id: string): boolean;
   /** Rail right-click → the per-service menu. Main owns it so it's native. */
   buildServiceMenu(id: string): Electron.MenuItemConstructorOptions[];
   /** Selection changed (or the manager took over, id undefined). */
   onActiveChanged(id: string | undefined): void;
+  /** This service's page finished loading. A navigation drops everything main pushed into
+   *  the page (DND, hidden), so main re-pushes it here — the shared-host twin of the
+   *  per-service window's own did-finish-load binding. */
+  onServiceLoad(id: string): void;
   railPreload: string;
   railHtml: string;
   titlebarPreload: string;
@@ -129,7 +138,9 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   const model = (): RailItem[] => buildRailModel({
     services: deps.services,
     config: deps.cfg,
-    loaded: (id) => views.has(id),
+    // A tab of ours, or a live view in its own window — both are loaded, and only the
+    // first kind is something this window can see.
+    loaded: (id) => views.has(id) || deps.loadedElsewhere(id),
     detached: deps.detached,
     badge: deps.badge,
     activeId: active,
@@ -255,6 +266,10 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       sv.mount(window, rects().content);
       sv.setVisible(false); // select() decides what's on screen
       views.set(def.id, sv);
+      // Mirrors serviceWindow's binding: a load wipes whatever main pushed into the page,
+      // so main gets told to push it again. Without this an attached service never hears
+      // about DND or its own hidden-ness after the first navigation.
+      sv.view.webContents.on('did-finish-load', () => deps.onServiceLoad(def.id));
       refreshAll();
       return hostFor(def.id)!;
     },

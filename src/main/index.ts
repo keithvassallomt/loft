@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
 import { getService, SERVICES, ServiceDef, effectiveUrl } from './registry';
-import { loadConfig, saveConfig, configPath, LoftConfig } from './config';
+import { loadConfig, saveConfig, configPath, LoftConfig, reopenDetachedEnabled } from './config';
 import { createServiceWindow, ServiceWindow } from './serviceWindow';
+import { createLoftWindow, LOFT_WINDOW_KEY, type LoftWindow } from './loftWindow';
 import type { ServiceHost } from './serviceHost';
 import { clearServiceCaches } from './recovery';
 import { Tray, TrayDeps, TrayServiceSeed } from './tray';
@@ -90,38 +91,75 @@ function serviceIconPath(id: string): string {
 }
 
 const config: LoftConfig = loadConfig(configPath());
+// DETACHED services only — one window each. An attached service's host is `loft`.
 const windows = new Map<string, ServiceWindow>();
-// Where a service currently lives, as the narrow contract consumers should use.
-// Today every host is a ServiceWindow; in 09b an attached service's host is the
-// Loft window instead, and nothing below this line has to care.
-const hostOf = (id: string): ServiceHost | undefined => windows.get(id);
+// The unified window (spec 09 §2): manager + rail + every attached service. Created on
+// app-ready, before anything is placed, and never destroyed until quit.
+let loft: LoftWindow | undefined;
+
+// Where a service currently lives, across BOTH host kinds. This is the seam: when a
+// service moves between the rail and its own window, only this function knows.
+const hostOf = (id: string): ServiceHost | undefined => windows.get(id) ?? loft?.hostOf(id);
+
+// Every loaded service, wherever it lives. hostOf is per-id and cannot answer this;
+// the background-status sweep needs it.
+const allHosts = (): ServiceHost[] => [
+  ...windows.values(),
+  ...(loft?.ids().map((id) => loft!.hostOf(id)!) ?? []),
+];
+
+// Would this service load into its own window? `reopenDetached: false` parks every
+// detached service in the rail at startup (spec §7) without forgetting the flag.
+const wantsOwnWindow = (id: string): boolean =>
+  config.services[id]?.detached === true && reopenDetachedEnabled(config);
+
+// Does this service live in its own window? Answered from where it ACTUALLY is whenever
+// it's loaded, and only from config while it sleeps. Not the same as the config flag:
+// with reopenDetached off, a `detached: true` service sits in the rail, and claiming
+// otherwise would make its tab unselectable (loftWindow.select refuses a detached id).
+const isDetached = (id: string): boolean => {
+  if (windows.has(id)) return true;
+  if (loft?.has(id)) return false;
+  return wantsOwnWindow(id);
+};
+
+// The WM key (window title) of the host a service lives in — 'Loft' when attached, its
+// own display name when detached (spec §6a). What focusExternal/hideExternal match on.
+const hostKey = (id: string): string | undefined => {
+  const sw = windows.get(id);
+  if (sw) return sw.def.displayName;
+  return loft?.has(id) ? LOFT_WINDOW_KEY : undefined;
+};
+
 // Latest badge count per service, independent of whether the badge indicator
 // is currently enabled — GetStatus() always reports the true count.
 const currentBadge = new Map<string, number>();
 
-// Display-name keys for every currently-open service window (open = present in
-// `windows`, regardless of shown/hidden) — what the GNOME helper hides from
-// alt-tab/overview/dock when minimized (`SetLoftWindows`).
+// Display-name keys for every Loft-owned WINDOW (open = shown or hidden-to-tray) — what
+// the GNOME helper hides from alt-tab/overview/dock when minimized (`SetLoftWindows`).
+// Deliberately not allHosts(): an attached service is not a window, it is a tab inside
+// the one keyed 'Loft'.
 function windowKeys(): string[] {
-  return [...windows.values()].map((sw) => sw.def.displayName);
+  const keys = [...windows.values()].map((sw) => sw.def.displayName);
+  if (loft) keys.push(LOFT_WINDOW_KEY);
+  return keys;
 }
 function syncLoftWindows(): void { helper?.setLoftWindows(windowKeys()); }
 
-function openService(def: ServiceDef, minimized: boolean): void {
-  // The reuse check goes through hostOf, not the windows map: once a service can
-  // live in a shared host, "is it already open?" must consult every host, and
-  // reimplementing hostOf is then the only change needed here. The create path
-  // below still needs the map directly — hostOf deliberately cannot create.
+/** Create (or reuse) a service's OWN window. Reached only through placeService — go via
+ *  that (or showService), so nothing can duplicate an attached service into a window. */
+function openService(def: ServiceDef, minimized: boolean): ServiceHost {
+  // The reuse check goes through hostOf, not the windows map: a service can live in a
+  // shared host now, so "is it already open?" must consult every host.
   const existing = hostOf(def.id);
   // focusExternal (GNOME helper or KWin) bypasses focus-stealing prevention; fire
   // it in parallel with the native show — never await (a missing/erroring backend
   // must never block or crash a window action).
-  if (existing) { existing.show(); focusExternal(def.displayName); return; }
-  // First launch of a service implicitly Adds it (writes its launcher + icon) so a
-  // directly-launched service shows up as Installed in the hub.
-  if (!config.services[def.id]) {
-    addService(def, config, { execPath: process.execPath, iconSourceDir });
-    saveConfig(configPath(), config);
+  if (existing) {
+    existing.show();
+    const key = hostKey(def.id);
+    if (key) focusExternal(key);
+    return existing;
   }
   const sw = createServiceWindow(def, config, { minimized, onQuit: () => quitting });
   // Keep the tray's visibility state in sync with the window (drives Show/Hide label).
@@ -142,37 +180,216 @@ function openService(def: ServiceDef, minimized: boolean): void {
   tray?.setVisible(def.id, sw.isVisible());
   notifications?.setVisible(def.id, sw.isVisible());
   notifications?.setFocused(def.id, sw.window.isFocused());
+  // Its own window: no other tab it can be sitting behind, so always the active one.
+  notifications?.setActive(def.id, true);
+  bgStatus?.refresh();
+  loft?.refreshRail(); // the rail lists it as living in its own window now
+  hub?.notifyChanged();
+  return sw;
+}
+
+/** Load a service into the Loft window's rail. Does NOT select it — attaching is not
+ *  showing (the open-on-startup set attaches without stealing the manager's place). */
+function attachService(def: ServiceDef): ServiceHost {
+  const l = loft!;
+  const host = l.attach(def);
+  tray?.addService({ id: def.id, displayName: def.displayName, dnd: config.services[def.id]?.dnd ?? false });
+  tray?.setRunning(def.id, true);
+  tray?.setVisible(def.id, host.isVisible());
+  // One window, N services: the Loft window's focus/visibility handlers only fire on
+  // CHANGES from here on, so seed all three gate axes for this service now. `active` is
+  // whatever the current selection says — attach never selects, so normally false.
+  notifications?.setVisible(def.id, l.window.isVisible());
+  notifications?.setFocused(def.id, l.window.isFocused());
+  notifications?.setActive(def.id, l.activeId() === def.id);
   bgStatus?.refresh();
   hub?.notifyChanged();
+  return host;
+}
+
+/** Load a service into the host its config asks for. THE one place that decides where a
+ *  service lives (spec §7); everything else asks hostOf where it ended up. */
+function placeService(def: ServiceDef, minimized: boolean): ServiceHost {
+  // First launch of a service implicitly Adds it (writes its launcher + icon) so a
+  // directly-launched service shows up as Installed in the hub (spec §6f). Here rather
+  // than in openService so an attached first launch installs itself too.
+  if (!config.services[def.id]) {
+    addService(def, config, { execPath: process.execPath, iconSourceDir });
+    saveConfig(configPath(), config);
+  }
+  // No Loft window yet ⇒ its own window is the only host that exists. Reachable for real:
+  // `second-instance` is bound at module scope, while whenReady can sit for minutes on
+  // ensureGnomeHelper's install dialog — so a launcher click during first-run setup lands
+  // here. That service then keeps its own window for the session even though it isn't
+  // configured detached (the rail draws it ⧉ and the menu's checkbox reads unticked, since
+  // that follows config). Recoverable: Unload it, then click it again. Degrading to a real
+  // window beats refusing to open the service at all.
+  if (wantsOwnWindow(def.id) || !loft) return openService(def, minimized);
+  return attachService(def);
+}
+
+/** Make a service visible wherever it lives, loading it if it is asleep. The single entry
+ *  point for "show me X" — CLI, second-instance, tray, hub, D-Bus and notification clicks
+ *  all land here, so none of them can spawn a second window for an attached service. */
+function showService(def: ServiceDef): ServiceHost {
+  const host = hostOf(def.id) ?? placeService(def, false);
+  host.show();
+  // Bypass focus-stealing prevention on the window it actually lives in (spec §6a).
+  const key = hostKey(def.id);
+  if (key) focusExternal(key);
+  return host;
 }
 
 // Tray menu "Show/Hide" for a service: show if hidden, hide if visible.
 function toggleService(id: string): void {
-  const sw = hostOf(id);
-  if (sw && sw.isVisible()) { sw.hide(); hideExternal(sw.def.displayName); return; }
+  const host = hostOf(id);
+  // Attached: "visible" means the Loft window is up AND this is the selected tab, so an
+  // unselected tab toggles to selected rather than hiding the window it is sitting in.
+  if (host && host.isVisible()) {
+    host.hide();
+    const key = hostKey(id);
+    if (key) hideExternal(key);
+    return;
+  }
   const def = getService(id);
-  if (def) openService(def, false);
+  if (def) showService(def);
 }
 
 // Persist a service's DND to config immediately (survives a kill before before-quit).
 function setServiceDnd(id: string, enabled: boolean): void {
   config.services[id] = { ...config.services[id], dnd: enabled };
   saveConfig(configPath(), config);
+  loft?.refreshRail();
   hub?.notifyChanged();
 }
 
-// Tray per-service "Quit": stop the service (destroy its window). It stays
-// configured, so it drops into the tray's available section and can be relaunched.
+/** Apply + persist a per-service settings patch, then re-push everything it changes.
+ *  Shared by the hub's IPC and the rail's context menu, so the two cannot drift: a menu
+ *  that only wrote config would leave the tray icon and the notification gate stale. */
+function setServiceSetting(id: string, patch: ServicePatch): void {
+  config.services[id] = { ...config.services[id], ...patch };
+  saveConfig(configPath(), config);
+  // No hostOf(id)?.pushDnd(patch.dnd) here: setServiceDnd already pushes the EFFECTIVE
+  // value (system || global || this service) into the page, and re-pushing the raw flag
+  // on top of it would tell a page that global DND is off whenever a service's own DND
+  // is — main still swallows the banner, but the web app's in-page ding would play.
+  if (patch.dnd !== undefined) { tray?.setDnd(id, patch.dnd); notifications?.setServiceDnd(id, patch.dnd); }
+  if (patch.badgesEnabled !== undefined) {
+    const host = hostOf(id);
+    const count = currentBadge.get(id) ?? 0;
+    // Re-push the current badge so enabling shows it immediately; disabling clears the indicator.
+    host?.setBadge(patch.badgesEnabled ? count : 0);
+    tray?.setBadge(id, patch.badgesEnabled ? count : 0);
+    bgStatus?.refresh();
+  }
+  if (patch.customUrl !== undefined) {
+    const d = getService(id); const host = hostOf(id);
+    if (d && host) host.loadUrl(effectiveUrl(d, patch.customUrl || undefined));
+  }
+  if (patch.openOnStartup !== undefined) reconcileAutostart();
+  loft?.refreshRail();
+  hub?.notifyChanged();
+}
+
+/** Stop a service: unload its view (attached) or destroy its window (detached). It stays
+ *  configured, so it drops to sleeping in the rail and into the tray's available section.
+ *  This is D-Bus Quit(), the tray's per-service Quit, and the rail menu's Unload — spec
+ *  §6b: Quit() already meant exactly "unload", so the rail needed no new verb. */
 function quitService(id: string): void {
-  const sw = windows.get(id);
-  if (!sw) return;
-  windows.delete(id);
+  // ORDERING: loft.unload picks the next tab by locating `id` in the ATTACHED list, so it
+  // must run before anything flips this service's `detached` flag — see the ordering
+  // contract on LoftWindow.detach.
+  if (loft?.has(id)) loft.unload(id);
+  else {
+    const sw = windows.get(id);
+    if (!sw) return; // not loaded anywhere — nothing to stop
+    windows.delete(id);
+    sw.window.destroy();
+  }
   syncLoftWindows();
   tray?.setRunning(id, false);
   tray?.setVisible(id, false);
-  sw.window.destroy();
+  // Spec §7: an unloaded view has no unread count. A stale one would leave the tray
+  // overlay (and `Loft (7)`) claiming messages nothing is watching for any more.
+  currentBadge.delete(id);
+  tray?.setBadge(id, 0);
   bgStatus?.refresh();
+  loft?.refreshRail();
   hub?.notifyChanged();
+}
+
+/**
+ * Move a service between the rail and its own window, and remember which (spec §3).
+ *
+ * FALLBACK (09b, explicitly permitted by the plan): this unloads and reloads rather than
+ * moving the live view, so the service loses its scroll position and any half-typed
+ * draft. `LoftWindow.detach()` does hand back a still-live `ServiceView`, but nothing can
+ * accept one — `createServiceWindow` always builds its own, and there is no re-attach
+ * path at all — so a live move would work in one direction only and still reload coming
+ * back. 09c owns the gesture-driven version: give `createServiceWindow` an optional
+ * pre-built view and `LoftWindow.attach` the same, and this becomes detach()/attach(view).
+ */
+function setDetached(id: string, v: boolean): void {
+  const def = getService(id);
+  // `detached` is absent-means-false, so compare the normalised flag, not the raw one:
+  // `undefined === false` is false, and this must be a no-op when nothing changes.
+  if (!def || (config.services[id]?.detached === true) === v) return;
+  const host = hostOf(id);
+  const loaded = host !== undefined;
+  const wasVisible = host?.isVisible() ?? false;
+  // Take the view out FIRST, while config still says what it said (see the ordering note
+  // in quitService), THEN flip the flag, THEN re-place it in its new home.
+  if (loaded) quitService(id);
+  config.services[id] = { ...config.services[id], detached: v };
+  saveConfig(configPath(), config);
+  if (loaded) {
+    // Place it where the user just asked, rather than letting placeService derive it:
+    // `reopenDetached: false` governs STARTUP only (spec §7), so deriving here would
+    // silently re-attach the very service they asked to pop out — and leave a ticked
+    // "Open in its own window" next to a service that is visibly still a tab.
+    if (v || !loft) openService(def, true); else attachService(def);
+    if (wasVisible) showService(def); // it was on screen — keep it there
+  }
+  loft?.refreshRail();
+  hub?.notifyChanged();
+}
+
+/** The per-service menu (rail right-click). Spec §7: every per-service action lives here.
+ *  Built in main so it renders as a real menu and drives the same code the tray does. */
+function buildServiceMenu(id: string): Electron.MenuItemConstructorOptions[] {
+  const def = getService(id);
+  const cfg = config.services[id] ?? {};
+  return [
+    { label: `Go to ${def?.displayName ?? id}`, click: () => { if (def) showService(def); } },
+    { type: 'separator' },
+    { label: 'Do Not Disturb', type: 'checkbox', checked: cfg.dnd === true,
+      click: (mi) => setServiceSetting(id, { dnd: mi.checked }) },
+    { label: 'Show badge', type: 'checkbox', checked: cfg.badgesEnabled !== false,
+      click: (mi) => setServiceSetting(id, { badgesEnabled: mi.checked }) },
+    { type: 'separator' },
+    { label: 'Open in its own window', type: 'checkbox', checked: cfg.detached === true,
+      click: (mi) => setDetached(id, mi.checked) },
+    { label: 'Unload', enabled: hostOf(id) !== undefined, click: () => quitService(id) },
+    { type: 'separator' },
+    { label: 'Settings…', click: () => { loft?.showManager(); loft?.open(); } },
+  ];
+}
+
+/**
+ * The selected tab changed. Nothing else can tell the notification gate: a tab switch
+ * fires no window event at all, so without this every background tab keeps looking
+ * focused+visible and silently stops notifying (spec §6d — it fails as absence, which is
+ * why it is wired explicitly rather than left to the window handlers).
+ */
+function syncActiveTab(activeId: string | undefined): void {
+  for (const id of loft?.ids() ?? []) {
+    notifications?.setActive(id, id === activeId);
+    // The tray's Show/Hide label asks "is this service on screen?" — for a tab that means
+    // the window is up AND it is the selected one.
+    tray?.setVisible(id, (loft?.window.isVisible() ?? false) && id === activeId);
+  }
+  // A service in its own window has no other tab to be behind — always active.
+  for (const id of windows.keys()) notifications?.setActive(id, true);
 }
 
 // Global DND: persist + reflect in the tray (notification gating is Stage 3b).
@@ -212,13 +429,29 @@ function resolveServiceFromArgs(argv: string[]): ServiceDef | undefined {
   return service ? getService(service) : undefined;
 }
 
-// Titlebar IPC events come from the titlebar view's preload; map the sender's
-// webContents id back to its ServiceWindow (match titlebar or service view).
-function findBySenderId(senderId: number): ServiceWindow | undefined {
+// Titlebar/badge/notify IPC comes from a view's preload; map the sender's webContents id
+// back to the ServiceHost that owns it — either kind of host.
+function findBySenderId(senderId: number): ServiceHost | undefined {
   for (const sw of windows.values()) {
     if (sw.ownsWebContents(senderId)) return sw;
   }
-  return undefined;
+  const id = loft?.ids().find((i) => loft!.hostOf(i)!.ownsWebContents(senderId));
+  return id ? loft!.hostOf(id) : undefined;
+}
+
+// The Loft window's rail/titlebar/manager views belong to the WINDOW, not to any one
+// service, so no ServiceHost owns them and findBySenderId cannot see them. Checked
+// after findBySenderId, never before: loft.ownsWebContents is also true for its own
+// attached service views, and those must resolve to their own host.
+const isLoftChrome = (senderId: number): boolean =>
+  loft !== undefined && loft.ownsWebContents(senderId) && findBySenderId(senderId) === undefined;
+
+// Where a titlebar action lands: a per-service window's titlebar acts on its own service;
+// the Loft window's single titlebar acts on whichever service is SELECTED.
+function titlebarTarget(senderId: number): ServiceHost | undefined {
+  if (!isLoftChrome(senderId)) return findBySenderId(senderId);
+  const id = loft!.activeId();
+  return id ? loft!.hostOf(id) : undefined;
 }
 
 // Single-instance: a second launch routes its --service to us; the second process
@@ -228,16 +461,32 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', (_e, argv) => {
     const def = resolveServiceFromArgs(argv);
-    if (def) openService(def, false);
-    else hub?.open();
+    // Same two branches as the CLI below — a second launch must never build a duplicate
+    // window for a service that is already living somewhere.
+    if (def) { showService(def); return; }
+    loft?.showManager();
+    loft?.open();
   });
 
-  ipcMain.on('titlebar:zoom-in', (e) => findBySenderId(e.sender.id)?.setZoom(+0.1));
-  ipcMain.on('titlebar:zoom-out', (e) => findBySenderId(e.sender.id)?.setZoom(-0.1));
-  ipcMain.on('titlebar:close', (e) => findBySenderId(e.sender.id)?.hide());
-  ipcMain.on('titlebar:reload', (e) => findBySenderId(e.sender.id)?.reload());
+  ipcMain.on('titlebar:zoom-in', (e) => titlebarTarget(e.sender.id)?.setZoom(+0.1));
+  ipcMain.on('titlebar:zoom-out', (e) => titlebarTarget(e.sender.id)?.setZoom(-0.1));
+  // Close IS hide (CLAUDE.md). On the Loft window that means the window itself: routing it
+  // to the active service's host.hide() would do the same thing today, but reads as a
+  // per-service action and stops working the moment nothing is selected (the manager).
+  ipcMain.on('titlebar:close', (e) => {
+    if (isLoftChrome(e.sender.id)) { loft!.hide(); return; }
+    findBySenderId(e.sender.id)?.hide();
+  });
+  ipcMain.on('titlebar:reload', (e) => titlebarTarget(e.sender.id)?.reload());
+  // Recovery overlays belong to a service view, so findBySenderId resolves them in either
+  // host kind — no active-tab fallback wanted here.
   ipcMain.on('recovery:reload', (e) => findBySenderId(e.sender.id)?.reload());
   ipcMain.on('recovery:clear-and-reload', (e) => { void findBySenderId(e.sender.id)?.clearAndReload(); });
+
+  // Rail click = go to that service, loading it where it belongs if it is asleep and
+  // raising its own window if it is detached. Right-click = the per-service menu.
+  ipcMain.on('rail:select', (_e, id: string) => { const d = getService(id); if (d) showService(d); });
+  ipcMain.on('rail:menu', (_e, id: string) => loft?.popServiceMenu(id));
 
   ipcMain.on('service:badge', (e, payload?: { count?: number }) => {
     if (typeof payload?.count !== 'number') return;
@@ -245,6 +494,11 @@ if (!app.requestSingleInstanceLock()) {
     if (!sw) return;
     currentBadge.set(sw.def.id, payload.count);
     bgStatus?.refresh();
+    // The rail draws a count for every LOADED service, detached ones included, and
+    // sw.setBadge below only reaches the rail when the service is attached — a detached
+    // service's rail entry would otherwise sit stale until something else repainted it.
+    // Above the badgesEnabled return on purpose: the rail model does its own gating.
+    loft?.refreshRail();
     hub?.notifyChanged();
     // SetBadgesEnabled(false) keeps the true count in currentBadge (GetStatus
     // still reports it) but suppresses the visible tray/title indicator.
@@ -302,7 +556,7 @@ if (!app.requestSingleInstanceLock()) {
         configuredServices: configured,
         globalDnd: config.globalDnd ?? false,
         onToggleService: (id) => toggleService(id),
-        onLaunchService: (id) => { const d = getService(id); if (d) openService(d, false); },
+        onLaunchService: (id) => { const d = getService(id); if (d) showService(d); },
         onQuitService: (id) => quitService(id),
         onToggleDnd: (id, enabled) => { setServiceDnd(id, enabled); tray?.setDnd(id, enabled); notifications?.setServiceDnd(id, enabled); },
         onToggleGlobalDnd: (enabled) => { setGlobalDnd(enabled); notifications?.setGlobalDnd(enabled); },
@@ -335,7 +589,10 @@ if (!app.requestSingleInstanceLock()) {
         displayName: (id) => getService(id)?.displayName ?? id,
         serviceIconPath,
         sessionFetch: (id, url) => session.fromPartition(`persist:${id}`).fetch(url),
-        focusService: (id) => { const d = getService(id); if (d) openService(d, false); },
+        // Spec §6d: resolve the host → load it where it belongs if sleeping → select the
+        // tab or raise the window. Never openService: a click on an attached service's
+        // notification would then spawn a second, detached window for it.
+        focusService: (id) => { const d = getService(id); if (d) showService(d); },
         navigate: (id, url) => hostOf(id)?.navigate(url),
         pushDnd: (id, v) => hostOf(id)?.pushDnd(v),
         pushHidden: (id, hidden) => hostOf(id)?.pushHidden(hidden),
@@ -354,6 +611,7 @@ if (!app.requestSingleInstanceLock()) {
       for (const [id, sw] of windows) {
         notifications.setVisible(id, sw.isVisible());
         notifications.setFocused(id, sw.window.isFocused());
+        notifications.setActive(id, true); // its own window: nothing to be behind
       }
     } catch (err) {
       console.error('Failed to start notifications:', err);
@@ -364,11 +622,13 @@ if (!app.requestSingleInstanceLock()) {
     // other DEs.
     if (gnome) {
       bgStatus = startBackgroundStatus({
-        collect: () => [...windows.values()].map((sw) => ({
-          displayName: sw.def.displayName,
+        // Every loaded service, attached or detached: the status line describes the app,
+        // not one window (spec §6a — same reasoning as the tray's aggregate overlay).
+        collect: () => allHosts().map((h) => ({
+          displayName: h.def.displayName,
           // A badges-disabled service doesn't contribute its unread count to the
           // aggregate status line (still counts as a running service).
-          badge: config.services[sw.def.id]?.badgesEnabled === false ? 0 : (currentBadge.get(sw.def.id) ?? 0),
+          badge: config.services[h.def.id]?.badgesEnabled === false ? 0 : (currentBadge.get(h.def.id) ?? 0),
         })),
       });
       bgStatus.refresh();
@@ -422,11 +682,13 @@ if (!app.requestSingleInstanceLock()) {
         trayBackend: config.trayBackend ?? 'auto',
         autostartBlocked: wantsAutostart(config.services) && !isAutostartEnabled(),
       }),
-      openService: (id) => { const d = getService(id); if (d) openService(d, false); },
+      openService: (id) => { const d = getService(id); if (d) showService(d); },
       addService: (id, customUrl) => {
         const d = getService(id); if (!d) return;
         addService(d, config, { execPath: process.execPath, iconSourceDir, customUrl });
         saveConfig(configPath(), config);
+        loft?.refreshRail(); // the rail lists every INSTALLED service
+
         // Deliberately no reconcileAutostart() here: addService only ever sets
         // customUrl and never touches openOnStartup, so wantsAutostart() cannot
         // change as a result of an add — the call would be a guaranteed no-op.
@@ -437,29 +699,13 @@ if (!app.requestSingleInstanceLock()) {
       },
       removeService: (id, deleteData) => {
         const d = getService(id); if (!d) return;
-        quitService(id); // tear down a running window first
+        quitService(id); // tear down a running view/window first
         removeService(d, config, deleteData);
         saveConfig(configPath(), config);
         reconcileAutostart();
+        loft?.refreshRail(); // it is no longer installed, so it leaves the rail
       },
-      setServiceSetting: (id, patch: ServicePatch) => {
-        config.services[id] = { ...config.services[id], ...patch };
-        saveConfig(configPath(), config);
-        if (patch.dnd !== undefined) { tray?.setDnd(id, patch.dnd); notifications?.setServiceDnd(id, patch.dnd); hostOf(id)?.pushDnd(patch.dnd); }
-        if (patch.badgesEnabled !== undefined) {
-          const host = hostOf(id);
-          const count = currentBadge.get(id) ?? 0;
-          // Re-push the current badge so enabling shows it immediately; disabling clears the indicator.
-          host?.setBadge(patch.badgesEnabled ? count : 0);
-          tray?.setBadge(id, patch.badgesEnabled ? count : 0);
-          bgStatus?.refresh();
-        }
-        if (patch.customUrl !== undefined) {
-          const d = getService(id); const host = hostOf(id);
-          if (d && host) host.loadUrl(effectiveUrl(d, patch.customUrl || undefined));
-        }
-        if (patch.openOnStartup !== undefined) reconcileAutostart();
-      },
+      setServiceSetting,
       setGlobal: (patch: GlobalPatch) => {
         if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; saveConfig(configPath(), config); }
       },
@@ -481,6 +727,47 @@ if (!app.requestSingleInstanceLock()) {
     };
     hub = createHub(hubDeps);
 
+    // The unified window (spec 09 §2): manager + rail + every attached service. It exists
+    // on every launch path, shown or not — its startup set loads into it either way.
+    // Ordering: after migrateConfig, because the rail is built from config; and after
+    // createHub, because the manager view it mounts is the hub renderer, which invokes
+    // hub:getState the moment it loads.
+    loft = createLoftWindow({
+      cfg: config,
+      services: [...SERVICES], // the registry is readonly; the rail wants a plain array
+      onQuit: () => quitting,
+      badge: (id) => currentBadge.get(id) ?? 0,
+      detached: isDetached,
+      loadedElsewhere: (id) => windows.has(id),
+      buildServiceMenu,
+      onActiveChanged: syncActiveTab,
+      onServiceLoad: (id) => notifications?.registerService(id),
+      railPreload: join(__dirname, '..', 'preload', 'rail.js'),
+      railHtml: join(__dirname, '..', 'renderer', 'rail', 'index.html'),
+      titlebarPreload: join(__dirname, '..', 'preload', 'titlebar.js'),
+      titlebarHtml: join(__dirname, '..', 'renderer', 'titlebar', 'index.html'),
+      managerPreload: join(__dirname, '..', 'preload', 'hub.js'),
+      managerHtml: join(__dirname, '..', 'renderer', 'hub', 'index.html'),
+      iconPath: join(iconSourceDir, 'loft.png'),
+    });
+    // 'Loft' is now one of the windows the GNOME helper hides while minimized.
+    syncLoftWindows();
+    // One window, N services: its focus and visibility belong to every attached service at
+    // once, so fan each event out across the whole tab set. These fire on CHANGES only —
+    // attachService seeds a newly-attached service — and a tab SWITCH fires none of them,
+    // which is what syncActiveTab exists for.
+    loft.window.on('focus', () => { for (const id of loft!.ids()) notifications?.setFocused(id, true); });
+    loft.window.on('blur', () => { for (const id of loft!.ids()) notifications?.setFocused(id, false); });
+    loft.window.on('show', () => {
+      for (const id of loft!.ids()) {
+        notifications?.setVisible(id, true);
+        tray?.setVisible(id, loft!.activeId() === id); // on screen = shown AND selected
+      }
+    });
+    loft.window.on('hide', () => {
+      for (const id of loft!.ids()) { notifications?.setVisible(id, false); tray?.setVisible(id, false); }
+    });
+
     const args = parseArgs(process.argv);
     const def = args.service ? getService(args.service) : undefined;
     // Self-heal installs whose entry doesn't match their flags (e.g. upgrades from
@@ -492,15 +779,24 @@ if (!app.requestSingleInstanceLock()) {
     // out-of-sync (see its comment), so this costs one existsSync on the common
     // already-in-sync path.
     reconcileAutostart();
+    // Load every service flagged open-on-startup, each into the host its config asks for.
+    // DELIBERATE CHANGE (spec §6f): this loop used to live in the `--service`-less branch, so
+    // launching WhatsApp from its own launcher started only WhatsApp. The Loft window now
+    // exists on every launch path, so its startup set loads on every launch path too.
+    // Users who relied on a per-service launcher starting only that service will notice.
+    for (const id of Object.keys(config.services)) {
+      if (!config.services[id]?.openOnStartup) continue;
+      const d = getService(id);
+      if (d && !hostOf(id)) placeService(d, true);
+    }
     if (def) {
-      openService(def, args.minimized);
-    } else {
-      // No --service: open every service flagged open-on-startup (minimized to tray),
-      // and show the hub as the app's home surface.
-      for (const id of Object.keys(config.services)) {
-        if (config.services[id]?.openOnStartup) { const d = getService(id); if (d) openService(d, true); }
-      }
-      if (!args.minimized) hub!.open();
+      // "Go to X", not "open a window for X" — X may already be a tab in the rail.
+      if (!hostOf(def.id)) placeService(def, args.minimized);
+      if (!args.minimized) showService(def);
+    } else if (!args.minimized) {
+      // No --service: the Loft window is the app's home surface, showing the manager.
+      loft!.showManager();
+      loft!.open();
     }
 
     // chat.loft.Loft D-Bus service (parity/scripting; also the target of the
@@ -508,12 +804,16 @@ if (!app.requestSingleInstanceLock()) {
     // instance) must not crash startup.
     try {
       const loftDeps: LoftServiceDeps = {
-        show: (id) => { const d = getService(id); if (d) openService(d, false); },
+        // Spec §6b: only the referent of "this service" widens to "this service's host" —
+        // Show() on an attached service selects its tab and raises Loft; Hide() hides the
+        // Loft window, and with it every other attached service (the documented wart).
+        show: (id) => { const d = getService(id); if (d) showService(d); },
         hide: (id) => {
-          const sw = hostOf(id);
-          if (!sw) return;
-          sw.hide();
-          hideExternal(sw.def.displayName);
+          const host = hostOf(id);
+          if (!host) return;
+          host.hide();
+          const key = hostKey(id);
+          if (key) hideExternal(key);
         },
         toggle: (id) => toggleService(id),
         quitService: (id) => quitService(id),
@@ -568,9 +868,12 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 /** Persist every open window's bounds/zoom and flush config. Shared by the in-app quit
- *  path (before-quit) and the session-end signal handler. */
+ *  path (before-quit) and the session-end signal handler. Not allHosts(): persist() is
+ *  window-shaped (bounds), so it is deliberately off ServiceHost — a tab has no bounds
+ *  of its own, and the Loft window persists its own plus every attached service's zoom. */
 function persistAll(): void {
   for (const sw of windows.values()) sw.persist();
+  loft?.persist();
   saveConfig(configPath(), config);
 }
 
