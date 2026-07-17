@@ -68,6 +68,23 @@ function safeSend(view: WebContentsView, channel: string, ...args: unknown[]): v
   }
 }
 
+/**
+ * The caller MUST `mount()` in the same synchronous tick as this returns.
+ *
+ * This starts the first navigation immediately (see startInitialLoad below), which
+ * arms the stuck watcher — and `showRecovery` early-returns while unmounted. The
+ * watcher flips its own `showing` flag *before* calling us and never re-arms
+ * (recovery.ts), so a view left unmounted across the 15s timeout would silently
+ * never show its recovery overlay, and the later onRecovered() would no-op against
+ * a `showing` that is stuck true. A blank, unrecoverable service view is exactly
+ * what that overlay exists to prevent.
+ *
+ * Unreachable today: `serviceWindow` mounts synchronously and never unmounts. It
+ * becomes reachable the moment anything re-parents a view, which is this file's
+ * whole purpose — so before 09b calls `unmount()`, give the overlay a pending flag
+ * that `mount()` re-checks, or move the initial load into an explicit start() the
+ * host calls after mounting.
+ */
 export function createServiceView(def: ServiceDef, cfg: LoftConfig): ServiceView {
   const partition = `persist:${def.id}`;
   const ses = session.fromPartition(partition);
