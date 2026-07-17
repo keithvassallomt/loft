@@ -116,7 +116,14 @@ export function loadConfig(path: string): LoftConfig {
         ? (parsed.services as Record<string, unknown>)
         : {};
     const services: Record<string, ServiceConfig> = {};
-    for (const [id, v] of Object.entries(rawServices)) services[id] = sanitizeServiceConfig(v);
+    for (const [id, v] of Object.entries(rawServices)) {
+      // Assigning this key hits Object.prototype's __proto__ setter rather than
+      // creating an entry: the service would vanish AND the map's prototype would be
+      // reassigned. JSON.parse gives it to us as a normal own property, so it can
+      // reach here from a hand-edited config.
+      if (id === '__proto__') continue;
+      services[id] = sanitizeServiceConfig(v);
+    }
 
     const trayBackend =
       parsed.trayBackend === 'gnome-panel' || parsed.trayBackend === 'sni' || parsed.trayBackend === 'auto'

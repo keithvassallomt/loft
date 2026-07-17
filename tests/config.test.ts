@@ -117,6 +117,33 @@ describe('config', () => {
     writeFileSync(p, '{"services":{},"railOrder":["slack",7,null,"whatsapp"]}', 'utf8');
     expect(loadConfig(p).railOrder).toEqual(['slack', 'whatsapp']);
   });
+
+  it('round-trips an explicit reopenDetached: true', () => {
+    const cfg = defaultConfig();
+    cfg.reopenDetached = true;
+    const p = join(dir, 'reopen-detached-true.json');
+    saveConfig(p, cfg);
+    expect(loadConfig(p)).toEqual(cfg);
+    expect(loadConfig(p).reopenDetached).toBe(true);
+  });
+
+  it('round-trips an explicit badgesEnabled: true', () => {
+    const cfg = defaultConfig();
+    cfg.services.slack = { badgesEnabled: true };
+    const p = join(dir, 'badges-enabled-true.json');
+    saveConfig(p, cfg);
+    expect(loadConfig(p)).toEqual(cfg);
+    expect(loadConfig(p).services.slack.badgesEnabled).toBe(true);
+  });
+
+  it('does not let a __proto__ key in services corrupt the map', () => {
+    const p = join(dir, 'proto-services.json');
+    writeFileSync(p, '{"services":{"__proto__":{"dnd":true},"slack":{"dnd":true}}}', 'utf8');
+    const cfg = loadConfig(p);
+    expect(cfg.services.slack).toEqual({ dnd: true });
+    expect(Object.getPrototypeOf(cfg.services)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(cfg.services, 'dnd')).toBe(false);
+  });
 });
 
 describe('reopenDetachedEnabled', () => {
