@@ -28,6 +28,8 @@ export interface Notifications {
   setGlobalDnd(v: boolean): void;
   setFocused(id: string, v: boolean): void;
   setVisible(id: string, v: boolean): void;
+  /** For a shared host: is this the selected tab? Detached services are always active. */
+  setActive(id: string, v: boolean): void;
   registerService(id: string): void;
   /** Release OS resources held by the watcher (the GNOME backend's `gsettings monitor`
    *  child). Must be called on every exit path; safe to call more than once. */
@@ -51,6 +53,7 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
   // mirror them here so pushHidden can be recomputed from both at once.
   const focused = new Map<string, boolean>();
   const visible = new Map<string, boolean>();
+  const active = new Map<string, boolean>();
 
   let server: NotificationServer | undefined;
   try {
@@ -78,7 +81,11 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
   const recomputeHidden = (id: string): void => {
     const isFocused = focused.get(id) ?? false;
     const isVisible = visible.get(id) ?? false;
-    deps.pushHidden(id, !(isFocused && isVisible));
+    const isActive = active.get(id) ?? true; // detached services have no tab to be behind
+    // Deliberately not `!visible`: an unfocused-but-visible service is told it's hidden
+    // so web apps that gate new Notification() on document.hidden still fire. An
+    // unselected tab is hidden for the same reason.
+    deps.pushHidden(id, !(isFocused && isVisible && isActive));
   };
 
   // Declared out here, not inside the try: close() has to be able to stop it. The GNOME
@@ -157,6 +164,13 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
       knownIds.add(id);
       visible.set(id, v);
       gate.setVisible(id, v);
+      recomputeHidden(id);
+    },
+
+    setActive(id, v) {
+      knownIds.add(id);
+      active.set(id, v);
+      gate.setActive(id, v);
       recomputeHidden(id);
     },
 
