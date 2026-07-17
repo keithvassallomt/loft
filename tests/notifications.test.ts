@@ -179,6 +179,36 @@ describe('startNotifications', () => {
     expect(deps.pushHiddenCalls.at(-1)).toEqual(['slack', false]); // focused + visible → not hidden
   });
 
+  it('setActive feeds recomputeHidden, not just the gate (mechanism 2)', async () => {
+    // Regression: setActive must update BOTH gate.setActive (delivery gating, mechanism 1,
+    // covered by notificationGate.test.ts) AND the local `active` map that recomputeHidden
+    // reads (mechanism 2, which drives pushHidden -> the preload's document.hidden override
+    // -> whether the web app fires its own new Notification()). A prior draft of this commit
+    // called gate.setActive(id, v) but omitted active.set(id, v), so recomputeHidden kept
+    // reading `active.get(id) ?? true` forever and a background tab's web app never stopped
+    // suppressing its own notifications. No gate test can catch that, since gate.shouldNotify
+    // reads a different map entirely.
+    connectNotificationServerMock.mockResolvedValue(makeFakeServer());
+    const deps = makeDeps();
+    const n = await startNotifications(deps);
+
+    n.setVisible('slack', true);
+    n.setFocused('slack', true);
+    expect(deps.pushHiddenCalls.at(-1)).toEqual(['slack', false]); // focused + visible, active defaults true
+
+    n.setActive('slack', false);
+    expect(deps.pushHiddenCalls.at(-1)).toEqual(['slack', true]); // looking at a different tab → hidden
+
+    n.setActive('slack', true);
+    expect(deps.pushHiddenCalls.at(-1)).toEqual(['slack', false]); // back to the active tab → not hidden
+
+    // A service that setActive() is never called for at all must behave exactly as before
+    // this feature existed: active defaults to true, so focused + visible alone is enough.
+    n.setVisible('whatsapp', true);
+    n.setFocused('whatsapp', true);
+    expect(deps.pushHiddenCalls.at(-1)).toEqual(['whatsapp', false]);
+  });
+
   it('degrades without throwing when the notification server is unreachable', async () => {
     connectNotificationServerMock.mockRejectedValue(new Error('no bus'));
     const deps = makeDeps();
