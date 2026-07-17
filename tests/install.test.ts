@@ -57,4 +57,20 @@ describe('install', () => {
     removeService(wa, cfg, false, env);
     expect(existsSync(part)).toBe(true);
   });
+
+  it('addService records that the added service has a launcher', () => {
+    const data = tmp();
+    const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
+    const cfg: LoftConfig = { services: {} };
+    addService(wa, cfg, { env, execPath: '/usr/bin/loft', iconSourceDir: iconSrc() });
+    expect(cfg.services.whatsapp.launcher).toBe(true);
+  });
+
+  it('addService sets launcher on an existing entry without dropping its fields', () => {
+    const data = tmp();
+    const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
+    const cfg: LoftConfig = { services: { whatsapp: { dnd: true } } };
+    addService(wa, cfg, { env, execPath: '/usr/bin/loft', iconSourceDir: iconSrc() });
+    expect(cfg.services.whatsapp).toEqual({ dnd: true, launcher: true });
+  });
 });
