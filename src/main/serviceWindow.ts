@@ -1,16 +1,16 @@
-import { BrowserWindow, WebContentsView, session, shell } from 'electron';
+import { BrowserWindow, WebContentsView } from 'electron';
 import { join } from 'node:path';
 import type { ServiceDef } from './registry';
-import { effectiveUrl } from './registry';
 import type { LoftConfig } from './config';
 import { computeLayout } from './layout';
-import { configureSession } from './session';
-import { dechromeCssFor } from './dechromeCss';
 import { formatWindowTitle } from './serviceTitle';
-import { createStuckWatcher, clearServiceCaches, startInitialLoad } from './recovery';
-import { classifyNavigation, classifyWindowOpen, isExternallyOpenable } from './links';
-import { clampZoom } from './zoom';
+import { createServiceView } from './serviceView';
 
+/**
+ * A detached host: one BrowserWindow showing exactly one service, with our own
+ * titlebar strip above it. Everything about the *service* lives in ServiceView;
+ * this file is only about the *window* — bounds, close-to-tray, the titlebar.
+ */
 export interface ServiceWindow {
   def: ServiceDef;
   window: BrowserWindow;
@@ -22,7 +22,7 @@ export interface ServiceWindow {
   setZoom(delta: number): void;
   /** Write current bounds + zoom into the in-memory config. */
   persist(): void;
-  /** Reflect the unread count in the window title (until the tray lands in Stage 3). */
+  /** Reflect the unread count in the window title. */
   setBadge(count: number): void;
   /** Push the current Do Not Disturb state to the page (gates Notification-API relays). */
   pushDnd(enabled: boolean): void;
@@ -45,17 +45,11 @@ export function createServiceWindow(
   cfg: LoftConfig,
   opts: { minimized: boolean; onQuit: () => boolean },
 ): ServiceWindow {
-  const partition = `persist:${def.id}`;
-  const ses = session.fromPartition(partition);
-  configureSession(ses, partition);
-
   const saved = cfg.services[def.id]?.window;
-  const width = saved?.width ?? 1100;
-  const height = saved?.height ?? 800;
 
   const window = new BrowserWindow({
-    width,
-    height,
+    width: saved?.width ?? 1100,
+    height: saved?.height ?? 800,
     x: saved?.x,
     y: saved?.y,
     frame: false,
@@ -63,15 +57,16 @@ export function createServiceWindow(
     title: def.displayName,
   });
 
-  // Sending to a view's webContents throws "Render frame was disposed before
-  // WebFrameMain could be accessed" when the frame is transiently gone — e.g. a
-  // Messenger call opening its popup, or any navigation — and these sends fire
-  // from window focus/blur/show/hide handlers that can land in that window. Guard
-  // them; dropped state is re-pushed on the view's did-finish-load (registerService).
+  // Guarded send — the titlebar's frame can be transiently gone during navigation,
+  // and setBadge fires from handlers that can land in that window.
   const safeSend = (view: WebContentsView, channel: string, ...args: unknown[]): void => {
     const wc = view.webContents;
     if (wc.isDestroyed()) return;
-    try { wc.send(channel, ...args); } catch { /* render frame disposed transiently */ }
+    try {
+      wc.send(channel, ...args);
+    } catch {
+      /* render frame disposed transiently */
+    }
   };
 
   // Titlebar view (our chrome) — its own partition-free session is fine.
@@ -83,116 +78,20 @@ export function createServiceWindow(
   );
   titlebar.webContents.loadFile(join(__dirname, '../renderer/titlebar/index.html'));
 
-  // Service view (remote URL) — the isolated per-service partition + our preload.
-  const serviceView = new WebContentsView({
-    webPreferences: {
-      partition,
-      backgroundThrottling: false,
-      preload: join(__dirname, '../preload/service.js'),
-      additionalArguments: [`--loft-service=${def.id}`],
-      // Sandboxed (a same-origin window.open call popup shares this opener's
-      // renderer process; a non-sandboxed WebRTC renderer SIGSEGVs on Intel Xe),
-      // but contextIsolation:false so the (sandboxed) preload still shares the
-      // page's main world and can wrap window.Notification directly (Stage 3b).
-      sandbox: true,
-      contextIsolation: false,
-    },
-  });
-  serviceView.webContents.setUserAgent(ses.getUserAgent());
+  const sv = createServiceView(def, cfg);
 
-  // Static de-chrome CSS (the dynamic Messenger-banner bit runs in the preload).
-  const dechromeCss = dechromeCssFor(def.id);
-  if (dechromeCss) {
-    serviceView.webContents.on('did-finish-load', () => {
-      void serviceView.webContents.insertCSS(dechromeCss);
-    });
-  }
-
-  // Hand a URL to the user's default browser (never a scheme we shouldn't, e.g.
-  // javascript:/file:). Used by both link-handling paths below.
-  const openInBrowser = (url: string): void => {
-    if (!isExternallyOpenable(url)) return;
-    void shell.openExternal(url).catch((err) => console.error('openExternal failed:', url, err));
+  const relayout = (): void => {
+    const [w, h] = window.getContentSize();
+    const { titlebar: t, content } = computeLayout(w, h);
+    titlebar.setBounds(t);
+    sv.setRect(content);
   };
-
-  // window.open / target=_blank. A user-clicked external link opens in the browser
-  // (classifyWindowOpen); calls and windowed (featured) SSO/auth popups stay in-app.
-  // Same-origin ALWAYS stays in-app, which is what guarantees a Messenger call popup
-  // (opened same-origin) is never flung to the browser regardless of its disposition.
-  //
-  // For the in-app case: a child window inherits the OPENER's webPreferences, so
-  // without overriding, the popup would inherit the service view's main-world/
-  // un-sandboxed prefs (contextIsolation:false, sandbox:false) + our preload +
-  // --loft-service, and its renderer SIGSEGVs (exitCode 139) doing WebRTC. Force a
-  // plain, sandboxed, isolated child (matching the POC's default popup) with no Loft
-  // preload/arg — it needs no integration.
-  serviceView.webContents.setWindowOpenHandler((details) => {
-    if (classifyWindowOpen(serviceView.webContents.getURL(), details.url, details.disposition) === 'external') {
-      openInBrowser(details.url);
-      return { action: 'deny' };
-    }
-    return {
-      action: 'allow',
-      overrideBrowserWindowOptions: {
-        webPreferences: {
-          partition,
-          sandbox: true,
-          contextIsolation: true,
-          nodeIntegration: false,
-          additionalArguments: [],
-        },
-      },
-    };
-  });
-
-  // Top-level navigation of the service view itself. The view must never leave its
-  // web app: a cross-origin nav — or, for Messenger (which shares facebook.com with
-  // all of Facebook), a nav out of the messaging app to a post/profile/photo — opens
-  // in the browser and is prevented in-place, so the user never "loses" the service.
-  // isInPlace (same-document fragment nav) is left alone; the initial loadURL and
-  // same-origin app/auth navigations are not top-level document changes we hijack.
-  serviceView.webContents.on('will-navigate', (e, url, isInPlace) => {
-    if (isInPlace) return;
-    if (classifyNavigation(def.id, serviceView.webContents.getURL(), url) !== 'external') return;
-    // Only intercept schemes we can actually hand off. For anything else (ftp:, a
-    // custom app scheme) let Chromium's own external-protocol handling take it rather
-    // than dead-ending the click with a bare preventDefault.
-    if (!isExternallyOpenable(url)) return;
-    e.preventDefault();
-    openInBrowser(url);
-  });
-
-  // The call popup must present as real Chrome per-webContents (not just via the
-  // session default) — mirrors the POC (dev_local/electron_test/main.js), which
-  // set the child UA explicitly on did-create-window.
-  serviceView.webContents.on('did-create-window', (child) => {
-    child.webContents.setUserAgent(ses.getUserAgent());
-  });
 
   window.contentView.addChildView(titlebar);
-  window.contentView.addChildView(serviceView);
-
-  // Declared up here, not beside the recovery block below: relayout() reads it and
-  // runs eagerly (line ~145), so a `let` declared later puts it in the temporal
-  // dead zone and createServiceWindow throws before any window ever opens.
-  let recoveryView: WebContentsView | undefined;
-
-  const relayout = () => {
-    const [w, h] = window.getContentSize();
-    const { titlebar: t, content: s } = computeLayout(w, h);
-    titlebar.setBounds(t);
-    serviceView.setBounds(s);
-    recoveryView?.setBounds(s);
-  };
+  const [w0, h0] = window.getContentSize();
+  sv.mount(window, computeLayout(w0, h0).content); // above the titlebar, as before
   relayout();
   window.on('resize', relayout);
-
-  // Zoom: track the live factor so user changes survive in-page reloads (Electron
-  // resets zoom on a full navigation) and so persist() records the current value.
-  let currentZoom = saved?.zoom ?? 1;
-  serviceView.webContents.on('did-finish-load', () =>
-    serviceView.webContents.setZoomFactor(currentZoom),
-  );
 
   // Close-to-tray: hide unless the app is actually quitting.
   window.on('close', (e) => {
@@ -205,100 +104,36 @@ export function createServiceWindow(
   // Persist bounds + zoom into the in-memory config (index.ts saveConfig runs on
   // before-quit). Bind to resize/move AND hide so a session that only zooms or never
   // moves the window still records its state.
-  const persist = () => {
+  const persist = (): void => {
     const [w, h] = window.getSize();
     const [x, y] = window.getPosition();
     cfg.services[def.id] = {
       ...cfg.services[def.id],
-      window: { x, y, width: w, height: h, zoom: currentZoom },
+      window: { x, y, width: w, height: h, zoom: sv.getZoom() },
     };
   };
   window.on('resize', persist);
   window.on('move', persist);
   window.on('hide', persist);
 
-  // --- Recovery overlay -------------------------------------------------------
-  // A view can end up permanently blank (e.g. a corrupt service worker aborting
-  // every navigation). Detect "nothing ever committed" and offer a way out; the
-  // user chooses — we never clear their data unasked.
-  // (`recoveryView` itself is declared above, next to relayout — see the note there.)
-
-  const showRecovery = (): void => {
-    if (recoveryView) return;
-    const view = new WebContentsView({
-      webPreferences: { preload: join(__dirname, '../preload/recovery.js') },
-    });
-    recoveryView = view;
-    view.webContents.on('did-finish-load', () =>
-      safeSend(view, 'recovery:set-service', def.displayName),
-    );
-    void view.webContents.loadFile(join(__dirname, '../renderer/recovery/index.html'));
-    window.contentView.addChildView(view); // above the service view
-    const [w, h] = window.getContentSize();
-    view.setBounds(computeLayout(w, h).content);
-  };
-
-  const hideRecovery = (): void => {
-    if (!recoveryView) return;
-    const view = recoveryView;
-    recoveryView = undefined;
-    // The window (and this view's webContents) may already be gone by the time
-    // this runs — e.g. quit/remove-service landing during clearAndReload's await,
-    // or a late did-navigate firing after quit. Never throw from a window action.
-    if (!window.isDestroyed()) window.contentView.removeChildView(view);
-    if (!view.webContents.isDestroyed()) view.webContents.close();
-  };
-
-  const watcher = createStuckWatcher({
-    timeoutMs: 15_000,
-    getUrl: () => serviceView.webContents.getURL(),
-    onStuck: showRecovery,
-    onRecovered: hideRecovery,
-    setTimer: (fn, ms) => setTimeout(fn, ms),
-    clearTimer: (h) => clearTimeout(h as NodeJS.Timeout),
-  });
-  serviceView.webContents.on('did-navigate', (_e, url) => watcher.navigated(url));
-  // Safe only because hideRecovery guards on isDestroyed() above — 'closed' fires
-  // after the window (and this view, since win.destroy() doesn't tear down child
-  // WebContentsView webContents on its own) is already destroyed.
-  window.on('closed', () => { watcher.dispose(); hideRecovery(); });
-
-  // Single choke point for real navigations: hides a stale overlay and re-arms
-  // stuck detection so no navigation path (initial load, customUrl change, ...)
-  // can silently bypass the watcher.
-  const loadUrl = (url: string): void => {
-    hideRecovery();
-    void serviceView.webContents.loadURL(url);
-    watcher.armed();
-  };
-
-  // Ctrl+R / F5 — there is no app menu (Menu.setApplicationMenu(null)), so the
-  // usual reload accelerator does not exist.
-  serviceView.webContents.on('before-input-event', (_e, input) => {
-    if (input.type !== 'keyDown') return;
-    const isReload = input.key === 'F5' || (input.control && input.key.toLowerCase() === 'r');
-    if (isReload) api.reload();
-  });
-
-  // Kick off the first navigation. Slack (clearCachesOnStart) has its wedge-prone
-  // persisted service worker cleared first so a fresh, working SW registers each
-  // launch — see startInitialLoad. A clear failure still loads (never left blank).
-  void startInitialLoad(def.clearCachesOnStart ?? false, {
-    clearCaches: () => clearServiceCaches(ses),
-    load: () => loadUrl(effectiveUrl(def, cfg.services[def.id]?.customUrl)),
-    onError: (err) => console.error(`clearCachesOnStart(${def.id}) failed:`, err),
-  });
+  // Safe only because ServiceView.dispose()'s overlay teardown guards on
+  // isDestroyed() — 'closed' fires after the window (and its child views, since
+  // win.destroy() doesn't tear down child WebContentsView webContents on its own)
+  // is already destroyed.
+  window.on('closed', () => sv.dispose());
 
   const api: ServiceWindow = {
     def,
     window,
-    serviceView,
+    serviceView: sv.view,
     titlebarView: titlebar,
-    show: () => { window.show(); window.focus(); },
+    show: () => {
+      window.show();
+      window.focus();
+    },
     hide: () => window.hide(),
     setZoom: (delta: number) => {
-      currentZoom = clampZoom(currentZoom + delta);
-      serviceView.webContents.setZoomFactor(currentZoom);
+      sv.setZoom(delta);
       persist();
     },
     persist,
@@ -307,23 +142,13 @@ export function createServiceWindow(
       window.setTitle(title); // OS window title (alt-tab / taskbar / overview)
       safeSend(titlebar, 'titlebar:set-service', title); // our visible titlebar strip
     },
-    pushDnd: (enabled: boolean) => safeSend(serviceView, 'service:dnd', enabled),
-    pushHidden: (hidden: boolean) => safeSend(serviceView, 'service:visibility', hidden),
-    navigate: (url: string) => safeSend(serviceView, 'service:navigate', url),
-    loadUrl,
-    reload: () => {
-      hideRecovery();
-      serviceView.webContents.reload();
-      watcher.armed();
-    },
-    clearAndReload: async () => {
-      await clearServiceCaches(ses);
-      api.reload();
-    },
-    ownsWebContents: (id: number) =>
-      titlebar.webContents.id === id ||
-      serviceView.webContents.id === id ||
-      recoveryView?.webContents.id === id,
+    pushDnd: (enabled: boolean) => sv.pushDnd(enabled),
+    pushHidden: (hidden: boolean) => sv.pushHidden(hidden),
+    navigate: (url: string) => sv.navigate(url),
+    loadUrl: (url: string) => sv.loadUrl(url),
+    reload: () => sv.reload(),
+    clearAndReload: () => sv.clearAndReload(),
+    ownsWebContents: (id: number) => titlebar.webContents.id === id || sv.ownsWebContents(id),
   };
 
   if (!opts.minimized) api.show();
