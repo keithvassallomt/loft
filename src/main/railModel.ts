@@ -16,6 +16,13 @@ export interface RailItem {
   active: boolean;
 }
 
+/** The rail renderer's full state: the service items plus whether the manager tab is the
+ *  active selection, so the rail's Loft "home" button can render as current. */
+export interface RailState {
+  items: RailItem[];
+  managerActive: boolean;
+}
+
 export interface RailModelInput {
   /** The registry, in its canonical order — the tiebreak for anything railOrder omits. */
   services: ServiceDef[];

@@ -517,6 +517,7 @@ if (!app.requestSingleInstanceLock()) {
   // raising its own window if it is detached. Right-click = the per-service menu.
   ipcMain.on('rail:select', (_e, id: string) => { const d = getService(id); if (d) showService(d); });
   ipcMain.on('rail:menu', (_e, id: string) => loft?.popServiceMenu(id));
+  ipcMain.on('rail:showManager', () => loft?.showManager());
 
   // --- hub:* — the manager view (src/renderer/hub) ----------------------------------
   // Owned here, not by the window hosting the manager: these drive main's own state

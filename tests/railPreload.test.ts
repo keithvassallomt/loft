@@ -31,13 +31,21 @@ describe('rail bridge', () => {
     expect(ipc.sent).toEqual([['rail:select', 'slack'], ['rail:menu', 'whatsapp']]);
   });
 
-  it('delivers state to the subscriber', () => {
+  it('delivers rail state (items + managerActive) to the subscriber', () => {
     const ipc = fakeIpc();
     const b = buildRailBridge(ipc as never);
     const cb = vi.fn();
     b.onState(cb);
-    ipc.listeners.get('rail:state')!(null, [{ id: 'slack' }]);
-    expect(cb).toHaveBeenCalledWith([{ id: 'slack' }]);
+    const state = { items: [{ id: 'slack' }], managerActive: true };
+    ipc.listeners.get('rail:state')!(null, state);
+    expect(cb).toHaveBeenCalledWith(state);
+  });
+
+  it('showManager asks main to open the manager', () => {
+    const ipc = fakeIpc();
+    const b = buildRailBridge(ipc as never);
+    b.showManager();
+    expect(ipc.sent).toEqual([['rail:showManager', undefined]]);
   });
 
   it('unsubscribes so a re-render cannot stack duplicate listeners', () => {

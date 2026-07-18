@@ -151,7 +151,8 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     activeId: active,
   });
 
-  const refreshRail = (): void => safeSend(rail, 'rail:state', model());
+  const refreshRail = (): void =>
+    safeSend(rail, 'rail:state', { items: model(), managerActive: active === undefined });
 
   const refreshTitlebar = (): void => {
     if (!active) { safeSend(titlebar, 'titlebar:set-service', 'Loft'); return; }
