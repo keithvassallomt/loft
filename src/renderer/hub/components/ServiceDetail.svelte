@@ -7,7 +7,7 @@
   // (Svelte reparses `$state` as a store auto-subscription of that binding), which
   // makes `store_get()` throw at mount time since a plain HubState object has no
   // `.subscribe`. See https://svelte.dev/e/store_rune_conflict.
-  let { state: hubState, id, onBack }: { state: HubState; id: string; onBack: () => void } = $props();
+  let { state: hubState, id, onDone }: { state: HubState; id: string; onDone: () => void } = $props();
   const svc = $derived(hubState.services.find((s) => s.id === id)!);
 
   function set(patch: Parameters<typeof window.loftHub.setServiceSetting>[1]) {
@@ -22,7 +22,7 @@
   function confirmRemove() {
     showRemove = false;
     window.loftHub.removeService(id, deleteData);
-    onBack();
+    onDone();
   }
 </script>
 

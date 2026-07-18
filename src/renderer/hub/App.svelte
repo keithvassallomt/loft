@@ -1,59 +1,72 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { hubState, initStore } from './lib/store';
-  import ServiceList from './components/ServiceList.svelte';
+  import { managerNav, resolveSelection, type ManagerSelection } from './managerModel';
+  import AddServices from './components/AddServices.svelte';
   import ServiceDetail from './components/ServiceDetail.svelte';
   import GlobalSettings from './components/GlobalSettings.svelte';
   import About from './components/About.svelte';
 
-  let view = $state<{ page: 'main' } | { page: 'detail'; id: string } | { page: 'settings' } | { page: 'about' }>({ page: 'main' });
-  let menuOpen = $state(false);
+  let selection = $state<ManagerSelection>('add');
   onMount(initStore);
 
-  function gear(id: string) { view = { page: 'detail', id }; }
+  // A service can vanish while its detail is open (removed here or elsewhere); fold an
+  // orphaned selection back to Add so the pane never renders a missing service.
+  const view = $derived($hubState ? resolveSelection(selection, $hubState) : 'add');
+  const nav = $derived($hubState ? managerNav($hubState) : { configure: [] });
+  const isService = (s: ManagerSelection): s is { service: string } => typeof s === 'object';
 </script>
 
-<header>
-  <span class="title">Loft</span>
-  <div class="menu">
-    <button class="hamburger" onclick={() => (menuOpen = !menuOpen)} aria-label="Menu">≡</button>
-    {#if menuOpen}
-      <div class="dropdown" role="menu">
-        <button onclick={() => { view = { page: 'settings' }; menuOpen = false; }}>Settings</button>
-        <button onclick={() => { view = { page: 'about' }; menuOpen = false; }}>About</button>
-        <button onclick={() => window.loftHub.quit()}>Quit</button>
-      </div>
-    {/if}
-  </div>
-</header>
+{#if $hubState}
+  <div class="shell">
+    <nav class="side" aria-label="Manager">
+      <button class="n" class:on={view === 'add'} onclick={() => (selection = 'add')}>Add a service</button>
 
-<main>
-  {#if $hubState}
-    {#if view.page === 'main'}
-      <ServiceList state={$hubState} onGear={gear} />
-    {:else}
-      <button class="back" onclick={() => (view = { page: 'main' })}>‹ Back</button>
-      {#if view.page === 'detail'}
-        <ServiceDetail state={$hubState} id={view.id} onBack={() => (view = { page: 'main' })} />
-      {:else if view.page === 'settings'}
-        <GlobalSettings state={$hubState} />
-      {:else if view.page === 'about'}
-        <About version={__LOFT_VERSION__} />
+      {#if nav.configure.length > 0}
+        <p class="sec">Configure</p>
+        {#each nav.configure as c (c.id)}
+          <button class="n" class:on={isService(view) && view.service === c.id}
+                  onclick={() => (selection = { service: c.id })}>{c.displayName}</button>
+        {/each}
       {/if}
-    {/if}
-  {/if}
-</main>
+
+      <div class="foot">
+        <button class="n" class:on={view === 'settings'} onclick={() => (selection = 'settings')}>Settings</button>
+        <button class="n" class:on={view === 'about'} onclick={() => (selection = 'about')}>About</button>
+        <button class="n" onclick={() => window.loftHub.quit()}>Quit Loft</button>
+      </div>
+    </nav>
+
+    <section class="pane">
+      {#if view === 'add'}
+        <AddServices state={$hubState} />
+      {:else if view === 'settings'}
+        <GlobalSettings state={$hubState} />
+      {:else if view === 'about'}
+        <About version={__LOFT_VERSION__} />
+      {:else if isService(view)}
+        <ServiceDetail state={$hubState} id={view.service} onDone={() => (selection = 'add')} />
+      {/if}
+    </section>
+  </div>
+{/if}
 
 <style>
-  header { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid var(--divider); flex: 0 0 auto; }
-  .title { font-weight: 700; }
-  .menu { position: relative; }
-  .hamburger { border: 0; background: transparent; font-size: 1.3em; cursor: pointer; }
-  .dropdown { position: absolute; right: 0; top: 100%; background: var(--card); border: 1px solid var(--divider); border-radius: 8px; display: flex; flex-direction: column; min-width: 140px; z-index: 10; }
-  .dropdown button { border: 0; background: transparent; text-align: left; padding: 8px 12px; cursor: pointer; }
-  .dropdown button:hover { background: var(--divider); }
-  /* Takes the space under the fixed header and scrolls internally only when the
-     content genuinely exceeds it (min-height:0 lets a flex child actually scroll). */
-  main { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 16px; }
-  .back { border: 0; background: transparent; cursor: pointer; padding: 12px 0; font: inherit; opacity: 0.7; }
+  .shell { flex: 1 1 auto; display: flex; min-height: 0; }
+  .side {
+    flex: 0 0 208px; display: flex; flex-direction: column; gap: 2px;
+    padding: 12px 10px; border-right: 1px solid var(--divider); overflow-y: auto;
+  }
+  .side .n {
+    text-align: left; border: 0; background: transparent; color: var(--fg);
+    font: inherit; padding: 8px 10px; border-radius: 8px; cursor: pointer;
+  }
+  .side .n:hover { background: var(--card); }
+  .side .n.on { background: var(--accent); color: #fff; }
+  .side .sec {
+    font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.05em;
+    opacity: 0.5; margin: 12px 10px 2px;
+  }
+  .side .foot { margin-top: auto; }
+  .pane { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; padding: 18px 22px; }
 </style>
