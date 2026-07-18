@@ -4,7 +4,7 @@ import type { ServiceDef } from './registry';
 import type { LoftConfig } from './config';
 import { computeLayout } from './layout';
 import { formatWindowTitle } from './serviceTitle';
-import { createServiceView } from './serviceView';
+import { createServiceView, type ServiceView } from './serviceView';
 import type { ServiceHost } from './serviceHost';
 
 /**
@@ -20,12 +20,16 @@ export interface ServiceWindow extends ServiceHost {
   /** Write current bounds + zoom into the in-memory config. Window-only: a rail
    *  entry has no bounds of its own, so this is not part of ServiceHost. */
   persist(): void;
+  /** Hand this window's LIVE view back for re-mounting elsewhere (the mirror of
+   *  LoftWindow.detach), and tear down just the window shell. The returned view is NOT
+   *  disposed — the caller re-mounts it. */
+  releaseView(): ServiceView;
 }
 
 export function createServiceWindow(
   def: ServiceDef,
   cfg: LoftConfig,
-  opts: { minimized: boolean; onQuit: () => boolean },
+  opts: { minimized: boolean; onQuit: () => boolean; view?: ServiceView },
 ): ServiceWindow {
   const saved = cfg.services[def.id]?.window;
 
@@ -60,7 +64,7 @@ export function createServiceWindow(
   );
   titlebar.webContents.loadFile(join(__dirname, '../renderer/titlebar/index.html'));
 
-  const sv = createServiceView(def, cfg);
+  const sv = opts.view ?? createServiceView(def, cfg);
 
   const relayout = (): void => {
     const [w, h] = window.getContentSize();
@@ -102,7 +106,9 @@ export function createServiceWindow(
   // isDestroyed() — 'closed' fires after the window (and its child views, since
   // win.destroy() doesn't tear down child WebContentsView webContents on its own)
   // is already destroyed.
-  window.on('closed', () => sv.dispose());
+  // Do NOT dispose a view we've handed to another host via releaseView().
+  let released = false;
+  window.on('closed', () => { if (!released) sv.dispose(); });
 
   const api: ServiceWindow = {
     def,
@@ -120,6 +126,12 @@ export function createServiceWindow(
       persist();
     },
     persist,
+    releaseView: () => {
+      released = true;   // the 'closed' handler below must not dispose it now
+      sv.unmount();      // take the live view out of this window
+      window.destroy();  // tear down just the shell; the view lives on
+      return sv;
+    },
     setBadge: (count: number) => {
       const title = formatWindowTitle(def.displayName, count);
       window.setTitle(title); // OS window title (alt-tab / taskbar / overview)

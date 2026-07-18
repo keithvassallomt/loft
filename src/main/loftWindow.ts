@@ -24,7 +24,9 @@ export interface LoftWindow {
   window: BrowserWindow;
   open(): void; // show + focus
   hide(): void;
-  attach(def: ServiceDef): ServiceHost; // create+mount a view; does NOT select it
+  /** create+mount a view; does NOT select it. Pass a pre-built (live) view to MOVE it in
+   *  from a detached window without reloading; omit it to build a fresh one. */
+  attach(def: ServiceDef, view?: ServiceView): ServiceHost;
   /** Unmount and hand the still-live view back for re-mounting elsewhere.
    *  ORDERING CONTRACT: call this BEFORE writing `detached: true` to config. It picks
    *  the next tab by locating `id` in the attached list, so a config flag flipped first
@@ -272,13 +274,12 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     open: () => { window.show(); window.focus(); },
     hide: () => window.hide(),
 
-    attach: (def) => {
+    attach: (def, view) => {
       const existing = views.get(def.id);
       if (existing) return hostFor(def.id)!;
-      const sv = createServiceView(def, deps.cfg);
-      // mount() must be in the same synchronous tick as createServiceView — see its
-      // doc comment: the initial load is already away and arms the stuck watcher,
-      // whose showRecovery early-returns while unmounted.
+      // A pre-built view is a LIVE view moving in from a detached window — mount it as-is
+      // (no reload ⇒ scroll + drafts survive). Otherwise build a fresh one.
+      const sv = view ?? createServiceView(def, deps.cfg);
       sv.mount(window, rects().content);
       sv.setVisible(false); // select() decides what's on screen
       views.set(def.id, sv);
