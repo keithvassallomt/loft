@@ -246,7 +246,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     let host = hosts.get(id);
     if (!host) {
       host = {
-        def: sv.def,
+        get def() { return sv.def; },
         show: () => { select(id); api.open(); },
         // Spec §6b: the only way to make an attached service not-visible is to hide its
         // host — and that hides every other attached service too. Documented wart.

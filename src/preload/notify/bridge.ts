@@ -104,6 +104,7 @@ export function startNotifyBridge(serviceId: string, deps: BridgeDeps): void {
       case 'href': win.location.href = action.url; break;
       case 'hash': win.location.hash = action.url; break;
       case 'none': break;
+      default: { const _exhaustive: never = action; void _exhaustive; break; }
     }
   });
 }
