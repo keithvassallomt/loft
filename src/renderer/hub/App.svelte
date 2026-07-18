@@ -8,7 +8,11 @@
   import About from './components/About.svelte';
 
   let selection = $state<ManagerSelection>('add');
-  onMount(initStore);
+  onMount(() => {
+    initStore();
+    // Right-click a rail icon → "Settings…" asks the manager to open that service.
+    window.loftHub.onSelect((id) => { selection = { service: id }; });
+  });
 
   // A service can vanish while its detail is open (removed here or elsewhere); fold an
   // orphaned selection back to Add so the pane never renders a missing service.

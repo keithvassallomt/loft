@@ -57,4 +57,16 @@ describe('hub preload bridge', () => {
     off();
     expect(ipc.removeListener).toHaveBeenCalledWith('hub:state', expect.any(Function));
   });
+
+  it('onSelect subscribes to manager:select and returns an unsubscribe', () => {
+    const ipc = mockIpc();
+    const cb = vi.fn();
+    const off = buildBridge(ipc as never).onSelect(cb);
+    expect(ipc.on).toHaveBeenCalledWith('manager:select', expect.any(Function));
+    const handler = ipc.on.mock.calls.find((c) => c[0] === 'manager:select')![1] as (e: unknown, id: string) => void;
+    handler({}, 'slack');
+    expect(cb).toHaveBeenCalledWith('slack');
+    off();
+    expect(ipc.removeListener).toHaveBeenCalledWith('manager:select', expect.any(Function));
+  });
 });

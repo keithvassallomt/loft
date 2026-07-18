@@ -13,6 +13,7 @@ declare global {
       setGlobal(patch: GlobalPatch): void;
       recoverService(id: string, opts: RecoverOpts): void;
       quit(): void;
+      onSelect(cb: (id: string) => void): () => void;
     };
   }
 }

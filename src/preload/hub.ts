@@ -11,6 +11,8 @@ export interface LoftHub {
   setGlobal(patch: GlobalPatch): void;
   recoverService(id: string, opts: RecoverOpts): void;
   quit(): void;
+  /** Main asks the manager to open a specific service's settings (rail right-click → Settings…). */
+  onSelect(cb: (id: string) => void): () => void;
 }
 
 // Pure factory (testable with a mock ipc); the real bridge passes ipcRenderer.
@@ -29,6 +31,11 @@ export function buildBridge(ipc: IpcRenderer): LoftHub {
     setGlobal: (patch) => ipc.send('hub:setGlobal', patch),
     recoverService: (id, opts) => ipc.send('hub:recoverService', { id, opts }),
     quit: () => ipc.send('hub:quit'),
+    onSelect: (cb) => {
+      const handler = (_e: unknown, id: string) => cb(id);
+      ipc.on('manager:select', handler);
+      return () => ipc.removeListener('manager:select', handler);
+    },
   };
 }
 

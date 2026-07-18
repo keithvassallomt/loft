@@ -392,7 +392,7 @@ function buildServiceMenu(id: string): Electron.MenuItemConstructorOptions[] {
       click: (mi) => setDetached(id, mi.checked) },
     { label: 'Unload', enabled: hostOf(id) !== undefined, click: () => quitService(id) },
     { type: 'separator' },
-    { label: 'Settings…', click: () => { loft?.showManager(); loft?.open(); } },
+    { label: 'Settings…', click: () => { loft?.showManager(); loft?.open(); loft?.sendManager('manager:select', id); } },
   ];
 }
 
