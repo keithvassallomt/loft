@@ -24,7 +24,7 @@ import { registerHubIpc } from './hubIpc';
 import { addService, removeService } from './install';
 import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
 import { createSignalShutdown } from './shutdown';
-import { ensureHubDesktopEntry, writeServiceLauncher, serviceLauncherPath } from './desktop';
+import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath } from './desktop';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
 import type { HubState, ServicePatch } from '../shared/hubTypes';
@@ -304,6 +304,15 @@ function setServiceSetting(id: string, patch: ServicePatch): void {
     host?.setBadge(patch.badgesEnabled ? count : 0);
     tray?.setBadge(id, patch.badgesEnabled ? count : 0);
     bgStatus?.refresh();
+  }
+  // A launcher toggle takes effect now, not just on next launch. writeServiceLauncher no-ops
+  // under a dev run; removeServiceLauncher clears an existing file.
+  if (patch.launcher !== undefined) {
+    const d = getService(id);
+    if (d) {
+      if (patch.launcher) writeServiceLauncher(d, { execPath: process.execPath, iconSourceDir });
+      else removeServiceLauncher(d);
+    }
   }
   if (patch.customUrl !== undefined) {
     const d = getService(id); const host = hostOf(id);
@@ -730,19 +739,18 @@ if (!app.requestSingleInstanceLock()) {
       if (removed.length) console.log(`Removed ${removed.length} legacy autostart entr${removed.length === 1 ? 'y' : 'ies'} (v1)`);
     } catch (err) { console.error('Legacy autostart cleanup failed:', err); }
 
-    // Re-assert every installed service's launcher + icon. Idempotent and cheap, and it
-    // repairs a deleted or stale entry with no user action — notably v1-era launchers,
-    // which share our filenames but point Icon= at an XDG theme name we no longer
-    // install, leaving a blank icon in the launcher. Skipped under a dev run (see
-    // writeServiceLauncher) so a checkout can't clobber the packaged install's entries.
-    // Per-service try: one unwritable entry must not skip the rest (removeLegacyAutostart
-    // isolates per-file for the same reason).
-    for (const id of Object.keys(config.services)) {
-      try {
-        const d = getService(id);
-        if (d) writeServiceLauncher(d, { execPath: process.execPath, iconSourceDir });
-      } catch (err) { console.error(`Launcher self-heal failed for ${id}:`, err); }
-    }
+    // Enforce each service's opt-in launcher flag (spec 09 Q2 / 09c-3): write a .desktop for
+    // services that asked for one, remove it for those that didn't. Idempotent and cheap; it
+    // also repairs a stale/deleted entry. Skipped writes under a dev run (see writeServiceLauncher)
+    // so a checkout can't clobber the packaged install's entries.
+    reconcileServiceLaunchers(
+      Object.keys(config.services),
+      (id) => config.services[id]?.launcher === true,
+      {
+        write: (id) => { const d = getService(id); if (d) writeServiceLauncher(d, { execPath: process.execPath, iconSourceDir }); },
+        remove: (id) => { const d = getService(id); if (d) removeServiceLauncher(d); },
+      },
+    );
 
     // The unified window (spec 09 §2): manager + rail + every attached service. It exists
     // on every launch path, shown or not — its startup set loads into it either way.

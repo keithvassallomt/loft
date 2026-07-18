@@ -113,6 +113,19 @@ export function removeServiceLauncher(def: ServiceDef, env: Env = process.env): 
   if (existsSync(p)) rmSync(p, { force: true });
 }
 
+/** Enforce each service's opt-in launcher flag: write the .desktop for services that want one,
+ *  remove it for those that do not. Per-id try/catch so one unwritable entry can't skip the rest. */
+export function reconcileServiceLaunchers(
+  ids: string[],
+  wants: (id: string) => boolean,
+  ops: { write: (id: string) => void; remove: (id: string) => void },
+): void {
+  for (const id of ids) {
+    try { (wants(id) ? ops.write : ops.remove)(id); }
+    catch (err) { console.error(`Launcher self-heal failed for ${id}:`, err); }
+  }
+}
+
 /** The hub's own launcher — for dev/AppImage; packaged/Flatpak provide their own. */
 export function ensureHubDesktopEntry(opts: { env?: Env; execPath?: string; iconSourceDir: string }): void {
   const env = opts.env ?? process.env;
