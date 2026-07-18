@@ -194,8 +194,11 @@ function openService(def: ServiceDef, minimized: boolean, view?: ServiceView): S
   sw.window.on('blur', () => notifications?.setFocused(def.id, false));
   sw.window.on('show', () => notifications?.setVisible(def.id, true));
   sw.window.on('hide', () => notifications?.setVisible(def.id, false));
-  sw.serviceView.webContents.on('did-finish-load', () => notifications?.registerService(def.id));
+  sw.setOnLoad(() => notifications?.registerService(def.id));
   windows.set(def.id, sw);
+  // A moved view keeps its scraped count (no reload), but a fresh window title starts at the
+  // plain name — seed it from currentBadge so it isn't briefly countless.
+  sw.setBadge(config.services[def.id]?.badgesEnabled === false ? 0 : (currentBadge.get(def.id) ?? 0));
   syncLoftWindows();
   focusExternal(def.displayName);
   tray?.addService({ id: def.id, displayName: def.displayName, dnd: config.services[def.id]?.dnd ?? false });

@@ -287,7 +287,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       // Mirrors serviceWindow's binding: a load wipes whatever main pushed into the page,
       // so main gets told to push it again. Without this an attached service never hears
       // about DND or its own hidden-ness after the first navigation.
-      sv.view.webContents.on('did-finish-load', () => deps.onServiceLoad(def.id));
+      sv.setOnLoad(() => deps.onServiceLoad(def.id));
       refreshAll();
       return hostFor(def.id)!;
     },

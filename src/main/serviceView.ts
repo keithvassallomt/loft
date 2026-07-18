@@ -25,6 +25,10 @@ export interface ServiceView {
   mount(window: BrowserWindow, rect: Rect): void;
   /** Remove from the current window WITHOUT destroying the page. */
   unmount(): void;
+  /** Set the single "page finished loading" host hook (re-push of DND/hidden). Replaces any
+   *  previous one — the view's webContents outlives any one host now, so hosts must set this
+   *  rather than each binding their own did-finish-load listener (which would leak per move). */
+  setOnLoad(fn: () => void): void;
   /** Re-lay-out within the current window. */
   setRect(rect: Rect): void;
   /** Whether the view is drawn. JS keeps running either way (backgroundThrottling: false). */
@@ -185,6 +189,11 @@ export function createServiceView(def: ServiceDef, cfg: LoftConfig): ServiceView
     serviceView.webContents.setZoomFactor(currentZoom),
   );
 
+  // Single host-owned did-finish-load hook (see setOnLoad). Bound exactly once; hosts
+  // re-point the target on adoption instead of stacking their own listeners.
+  let onLoad: (() => void) | undefined;
+  serviceView.webContents.on('did-finish-load', () => onLoad?.());
+
   // Current host + rect. Both are undefined/zero until mount(); the recovery overlay
   // needs them because it is added to whichever window the service currently lives in.
   let host: BrowserWindow | undefined;
@@ -292,6 +301,7 @@ export function createServiceView(def: ServiceDef, cfg: LoftConfig): ServiceView
       }
       host = undefined;
     },
+    setOnLoad: (fn) => { onLoad = fn; },
     setRect: (r) => {
       rect = r;
       serviceView.setBounds(r);

@@ -24,6 +24,9 @@ export interface ServiceWindow extends ServiceHost {
    *  LoftWindow.detach), and tear down just the window shell. The returned view is NOT
    *  disposed — the caller re-mounts it. */
   releaseView(): ServiceView;
+  /** Route the host's page-load hook to the underlying view's single slot (see
+   *  ServiceView.setOnLoad) — so re-adopting a moved view never stacks listeners. */
+  setOnLoad(fn: () => void): void;
 }
 
 export function createServiceWindow(
@@ -132,6 +135,7 @@ export function createServiceWindow(
       window.destroy();  // tear down just the shell; the view lives on
       return sv;
     },
+    setOnLoad: (fn) => sv.setOnLoad(fn),
     setBadge: (count: number) => {
       const title = formatWindowTitle(def.displayName, count);
       window.setTitle(title); // OS window title (alt-tab / taskbar / overview)
