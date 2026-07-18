@@ -14,6 +14,7 @@ export interface HubService {
   dnd: boolean;
   openOnStartup: boolean;
   customUrl: string;
+  launcher: boolean;
 }
 
 export interface HubGlobals { trayBackend: TrayBackend; autostartBlocked: boolean }
@@ -24,6 +25,7 @@ export interface ServicePatch {
   badgesEnabled?: boolean;
   dnd?: boolean;
   customUrl?: string;
+  launcher?: boolean;
 }
 export interface GlobalPatch { trayBackend?: TrayBackend }
 export interface RecoverOpts { clearCaches: boolean }

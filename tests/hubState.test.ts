@@ -42,6 +42,15 @@ describe('buildHubState', () => {
     expect(s.globals).toEqual({ trayBackend: 'sni', autostartBlocked: true });
   });
 
+  it('reports launcher as configured (absent means off)', () => {
+    const config: LoftConfig = {
+      services: { telegram: { launcher: true }, slack: {} },
+    };
+    const s = buildHubState({ ...base, config });
+    expect(s.services.find((x) => x.id === 'telegram')!.launcher).toBe(true);
+    expect(s.services.find((x) => x.id === 'slack')!.launcher).toBe(false);
+  });
+
   it('defaults badgesEnabled to true when unset', () => {
     const config: LoftConfig = { services: { slack: {} } };
     const s = buildHubState({ ...base, config });

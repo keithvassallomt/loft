@@ -28,6 +28,7 @@ export function buildHubState(deps: HubStateDeps): HubState {
       dnd: c?.dnd ?? false,
       openOnStartup: c?.openOnStartup ?? false,
       customUrl: c?.customUrl ?? '',
+      launcher: c?.launcher === true,
     };
   });
   return { services, globals: { trayBackend: deps.trayBackend, autostartBlocked: deps.autostartBlocked } };

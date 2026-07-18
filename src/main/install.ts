@@ -1,7 +1,7 @@
 import { existsSync, rmSync } from 'node:fs';
 import type { ServiceDef } from './registry';
 import type { LoftConfig } from './config';
-import { writeServiceLauncher, removeServiceLauncher } from './desktop';
+import { removeServiceLauncher } from './desktop';
 import { partitionDir } from './paths';
 
 type Env = NodeJS.ProcessEnv;
@@ -11,20 +11,12 @@ export function removePartitionData(id: string, env: Env = process.env): void {
   if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
 }
 
-/** Idempotent: mark the service configured, set a custom URL if given, write its launcher. */
-export function addService(
-  def: ServiceDef,
-  cfg: LoftConfig,
-  opts: { env?: Env; execPath?: string; iconSourceDir: string; customUrl?: string },
-): void {
+/** Idempotent: mark the service configured and set a custom URL if given. New services are
+ *  launcher-less by default (spec 09 Q2 / 09c-3) — a per-service .desktop is opt-in from the
+ *  service's settings, so Add no longer writes one. */
+export function addService(def: ServiceDef, cfg: LoftConfig, opts: { customUrl?: string } = {}): void {
   cfg.services[def.id] = { ...cfg.services[def.id] };
   if (opts.customUrl !== undefined) cfg.services[def.id].customUrl = opts.customUrl;
-  // Every added service still gets a launcher, exactly as before — but from config
-  // v2 the config has to say so. Migration has already stamped v2 by the time any
-  // add can happen, so an entry without this flag would read as "no launcher" and
-  // 09c's remove-sweep would delete the file we are about to write.
-  cfg.services[def.id].launcher = true;
-  writeServiceLauncher(def, { env: opts.env, execPath: opts.execPath, iconSourceDir: opts.iconSourceDir });
 }
 
 export function removeService(

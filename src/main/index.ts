@@ -232,11 +232,12 @@ function attachService(def: ServiceDef): ServiceHost {
 /** Load a service into the host its config asks for. THE one place that decides where a
  *  service lives (spec §7); everything else asks hostOf where it ended up. */
 function placeService(def: ServiceDef, minimized: boolean): ServiceHost {
-  // First launch of a service implicitly Adds it (writes its launcher + icon) so a
-  // directly-launched service shows up as Installed in the hub (spec §6f). Here rather
-  // than in openService so an attached first launch installs itself too.
+  // First launch of a service implicitly Adds it (marks it configured, per opt-in-off
+  // launcher default — no launcher/icon write here) so a directly-launched service shows
+  // up as Installed in the hub (spec §6f). Here rather than in openService so an attached
+  // first launch installs itself too.
   if (!config.services[def.id]) {
-    addService(def, config, { execPath: process.execPath, iconSourceDir });
+    addService(def, config);
     saveConfig(configPath(), config);
   }
   // No Loft window yet ⇒ its own window is the only host that exists. Reachable for real:
@@ -529,7 +530,7 @@ if (!app.requestSingleInstanceLock()) {
     openService: (id) => { const d = getService(id); if (d) showService(d); },
     addService: (id, customUrl) => {
       const d = getService(id); if (!d) return;
-      addService(d, config, { execPath: process.execPath, iconSourceDir, customUrl });
+      addService(d, config, { customUrl });
       saveConfig(configPath(), config);
       loft?.refreshRail();
       notifyHub();
