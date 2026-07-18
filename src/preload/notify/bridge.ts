@@ -5,6 +5,7 @@ import {
 import { MessengerNotifier, type NotifyPayload } from './messenger';
 import { TelegramNotifier } from './telegram';
 import { installNotificationSoundGate } from './notificationSound';
+import { navigateAction } from './navigate';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface BridgeDeps {
@@ -86,22 +87,24 @@ export function startNotifyBridge(serviceId: string, deps: BridgeDeps): void {
     soundGate.setHidden(!!hidden);
   });
 
-  // Messenger only: notification click routes here from main. Try SPA
-  // navigation via the matching anchor first, else fall back to a full
-  // navigation (port of content.js's navigate_to_conversation handler).
+  // Notification click routes here from main. The chat row is a live <a href> for both
+  // Messenger and Telegram, so try an anchor-click first; otherwise a per-service fallback.
   ipc.on('service:navigate', (_e: unknown, url?: unknown) => {
-    if (serviceId !== 'messenger' || typeof url !== 'string') return;
+    if (typeof url !== 'string') return;
     let anchor: Element | null = null;
     try {
       anchor = doc.querySelector(`a[href="${url}"]`);
     } catch {
-      // Malformed url (e.g. contains a stray `"`) breaks the attribute
-      // selector; fall back to full navigation below instead of throwing
-      // inside the IPC handler.
+      // Malformed url (e.g. a stray `"`) breaks the attribute selector; treat as no anchor.
       anchor = null;
     }
-    if (anchor) (anchor as HTMLElement).click();
-    else win.location.href = `https://www.facebook.com${url}`;
+    const action = navigateAction(serviceId, url, anchor !== null);
+    switch (action.kind) {
+      case 'click': (anchor as HTMLElement).click(); break;
+      case 'href': win.location.href = action.url; break;
+      case 'hash': win.location.hash = action.url; break;
+      case 'none': break;
+    }
   });
 }
 
