@@ -22,7 +22,7 @@ export function managerNav(state: HubState): ManagerNav {
  * renders a service that isn't there. Every other selection passes through.
  */
 export function resolveSelection(sel: ManagerSelection, state: HubState): ManagerSelection {
-  if (typeof sel === 'object') {
+  if (typeof sel === 'object' && sel !== null) {
     const ok = state.services.some((s) => s.id === sel.service && s.installed);
     return ok ? sel : 'add';
   }

@@ -18,25 +18,30 @@
   // orphaned selection back to Add so the pane never renders a missing service.
   const view = $derived($hubState ? resolveSelection(selection, $hubState) : 'add');
   const nav = $derived($hubState ? managerNav($hubState) : { configure: [] });
-  const isService = (s: ManagerSelection): s is { service: string } => typeof s === 'object';
+  const isService = (s: ManagerSelection): s is { service: string } =>
+    typeof s === 'object' && s !== null;
 </script>
 
 {#if $hubState}
   <div class="shell">
     <nav class="side" aria-label="Manager">
-      <button class="n" class:on={view === 'add'} onclick={() => (selection = 'add')}>Add a service</button>
+      <button class="n" class:on={view === 'add'} aria-current={view === 'add' ? 'page' : undefined}
+              onclick={() => (selection = 'add')}>Add a service</button>
 
       {#if nav.configure.length > 0}
         <p class="sec">Configure</p>
         {#each nav.configure as c (c.id)}
           <button class="n" class:on={isService(view) && view.service === c.id}
+                  aria-current={isService(view) && view.service === c.id ? 'page' : undefined}
                   onclick={() => (selection = { service: c.id })}>{c.displayName}</button>
         {/each}
       {/if}
 
       <div class="foot">
-        <button class="n" class:on={view === 'settings'} onclick={() => (selection = 'settings')}>Settings</button>
-        <button class="n" class:on={view === 'about'} onclick={() => (selection = 'about')}>About</button>
+        <button class="n" class:on={view === 'settings'} aria-current={view === 'settings' ? 'page' : undefined}
+                onclick={() => (selection = 'settings')}>Settings</button>
+        <button class="n" class:on={view === 'about'} aria-current={view === 'about' ? 'page' : undefined}
+                onclick={() => (selection = 'about')}>About</button>
         <button class="n" onclick={() => window.loftHub.quit()}>Quit Loft</button>
       </div>
     </nav>

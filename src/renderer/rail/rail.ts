@@ -63,8 +63,7 @@ function render(state: RailState): void {
   divider.setAttribute('aria-hidden', 'true');
   root.replaceChildren(
     homeButton(state.managerActive),
-    divider,
-    ...state.items.map(serviceButton),
+    ...(state.items.length ? [divider, ...state.items.map(serviceButton)] : []),
   );
 }
 

@@ -27,7 +27,7 @@ import { createSignalShutdown } from './shutdown';
 import { ensureHubDesktopEntry, writeServiceLauncher, serviceLauncherPath } from './desktop';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
-import type { HubState, ServicePatch, GlobalPatch, RecoverOpts } from '../shared/hubTypes';
+import type { HubState, ServicePatch } from '../shared/hubTypes';
 
 app.setName('Loft');
 app.setAppUserModelId('chat.loft.Loft');
