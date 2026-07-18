@@ -64,11 +64,17 @@ export function buildRailModel(i: RailModelInput): RailItem[] {
 /**
  * Which service the Loft window should select when `closingId` stops being a tab
  * (unloaded, detached, or removed). Next one along, else the previous; undefined when
- * nothing attached remains — the caller then shows the manager, which is the correct
+ * no selectable tab remains — the caller then shows the manager, which is the correct
  * empty state rather than a special case.
+ *
+ * "Selectable" excludes both detached AND sleeping services: a detached one lives in its
+ * own window, and a sleeping one has no view, so handing either back would make select()
+ * refuse it and leave a dead active id over a blank content rect. `closingId` itself is
+ * loaded at call time (the ordering contract on LoftWindow.detach guarantees it), so it
+ * survives the filter and its position is found.
  */
 export function nextActiveId(items: RailItem[], closingId: string): string | undefined {
-  const attached = items.filter((it) => !it.detached);
+  const attached = items.filter((it) => !it.detached && !it.sleeping);
   const at = attached.findIndex((it) => it.id === closingId);
   if (at === -1) return undefined;
   const rest = attached.filter((it) => it.id !== closingId);

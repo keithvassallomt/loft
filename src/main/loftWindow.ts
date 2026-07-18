@@ -196,8 +196,10 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
 
   // --- selection --------------------------------------------------------------
   const select = (id: string | undefined): void => {
-    // A detached service isn't a tab here; the caller raises its window instead.
-    if (id !== undefined && (!views.has(id) || deps.detached(id))) return;
+    // An unselectable id (sleeping ⇒ no view, or detached ⇒ its own window) must not be
+    // left as `active`: that strands a dead id over a blank content rect. Fall back to the
+    // manager rather than returning. select(undefined) passes the guard, so no recursion.
+    if (id !== undefined && (!views.has(id) || deps.detached(id))) { select(undefined); return; }
     active = id;
     const r = rects().content;
     manager.setVisible(id === undefined);

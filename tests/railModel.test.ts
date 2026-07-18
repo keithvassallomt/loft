@@ -83,9 +83,9 @@ describe('buildRailModel', () => {
 });
 
 describe('nextActiveId', () => {
-  const items = (ids: string[], detached: string[] = []) =>
+  const items = (ids: string[], detached: string[] = [], sleeping: string[] = []) =>
     ids.map((id) => ({
-      id, displayName: id, badge: 0, dnd: false, sleeping: false,
+      id, displayName: id, badge: 0, dnd: false, sleeping: sleeping.includes(id),
       detached: detached.includes(id), active: false,
     }));
 
@@ -99,6 +99,17 @@ describe('nextActiveId', () => {
 
   it('skips detached services — they are not selectable tabs', () => {
     expect(nextActiveId(items(['a', 'b', 'c'], ['c']), 'b')).toBe('a');
+  });
+
+  it('skips sleeping services — they have no view to select, only the manager would show', () => {
+    // The failure this guards: unload the active service with the next one asleep, and a
+    // naive nextActiveId hands back a sleeping id that select() then refuses — stranding a
+    // dead active id and a blank content rect.
+    expect(nextActiveId(items(['a', 'b', 'c'], [], ['b']), 'a')).toBe('c');
+  });
+
+  it('returns undefined when every remaining attached service is asleep, so the manager shows', () => {
+    expect(nextActiveId(items(['a', 'b', 'c'], [], ['b', 'c']), 'a')).toBeUndefined();
   });
 
   it('returns undefined when nothing attached is left, so the manager shows', () => {

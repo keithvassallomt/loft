@@ -657,7 +657,7 @@ if (!app.requestSingleInstanceLock()) {
         onToggleGlobalDnd: (enabled) => { setGlobalDnd(enabled); notifications?.setGlobalDnd(enabled); },
         // "Settings…" = show the manager tab, not a window of its own — same as the rail
         // menu's Settings… and the D-Bus ShowHub().
-        onShowHub: () => { loft?.showManager(); loft?.open(); },
+        onShowHub: () => { loft?.showManager(); loft?.open(); focusExternal(LOFT_WINDOW_KEY); },
         onQuit: () => { quitting = true; app.quit(); },
       };
       // gnome-panel requires a live helper; force sni when the helper factory
@@ -872,7 +872,7 @@ if (!app.requestSingleInstanceLock()) {
           saveConfig(configPath(), config);
         },
         quitApp: () => { quitting = true; app.quit(); },
-        showHub: () => { loft?.showManager(); loft?.open(); },
+        showHub: () => { loft?.showManager(); loft?.open(); focusExternal(LOFT_WINDOW_KEY); },
         setGlobalDnd: (enabled) => { setGlobalDnd(enabled); notifications?.setGlobalDnd(enabled); },
       };
       await startLoftDbusService(loftDeps);
