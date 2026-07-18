@@ -20,6 +20,7 @@ import { isGnome, isKde, resolveTrayBackend } from './trayBackend';
 import { createKwinClient, type KwinClient } from './kde/kwin';
 import { startBackgroundStatus } from './gnome/backgroundStatus';
 import { buildHubState } from './hubState';
+import { registerHubIpc } from './hubIpc';
 import { addService, removeService } from './install';
 import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
 import { createSignalShutdown } from './shutdown';
@@ -519,70 +520,42 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on('rail:menu', (_e, id: string) => loft?.popServiceMenu(id));
   ipcMain.on('rail:showManager', () => loft?.showManager());
 
-  // --- hub:* — the manager view (src/renderer/hub) ----------------------------------
-  // Owned here, not by the window hosting the manager: these drive main's own state
-  // (config, hosts, autostart, the app's lifetime), which is why they outlived the
-  // standalone hub window they used to ship with. Registered at module scope with the rest
-  // of the IPC on purpose — the manager view loads during whenReady and invokes
-  // hub:getState the moment it does, so the handler has to be there already. Channel names
-  // and payload shapes are the renderer's contract (src/preload/hub.ts) — don't reshape
-  // them here.
-  ipcMain.handle('hub:getState', () => hubState());
-
-  // Select the tab rather than open a window: the manager is a tab in the same window as
-  // the services now, so its "Open" means exactly what a rail click means. Routed through
-  // rail:select so the two cannot drift into two answers for one question.
-  ipcMain.on('hub:openService', (_e, id: string) => { ipcMain.emit('rail:select', null, id); });
-
-  ipcMain.on('hub:addService', (_e, m: { id: string; customUrl?: string }) => {
-    const d = getService(m.id); if (!d) return;
-    addService(d, config, { execPath: process.execPath, iconSourceDir, customUrl: m.customUrl });
-    saveConfig(configPath(), config);
-    loft?.refreshRail(); // the rail lists every INSTALLED service
-
-    // Deliberately no reconcileAutostart() here: addService only ever sets
-    // customUrl and never touches openOnStartup, so wantsAutostart() cannot
-    // change as a result of an add — the call would be a guaranteed no-op.
-    // Under Flatpak it would still fire a real RequestBackground portal
-    // request (and can pop an unwanted "let Loft run in the background?"
-    // dialog) on every "Add service" click, including the first service
-    // added to a fresh install. Don't add it back.
-    notifyHub();
+  // --- hub:* — the manager view (src/renderer/hub). Wiring lives in hubIpc.ts so it's
+  // unit-testable; the deps below are index.ts's own operations, unchanged. hub:openService
+  // does exactly what rail:select does (showService(getService(id))) — the old version
+  // re-emitted rail:select to avoid drift; calling the same helper keeps them identical.
+  registerHubIpc(ipcMain, {
+    getState: hubState,
+    openService: (id) => { const d = getService(id); if (d) showService(d); },
+    addService: (id, customUrl) => {
+      const d = getService(id); if (!d) return;
+      addService(d, config, { execPath: process.execPath, iconSourceDir, customUrl });
+      saveConfig(configPath(), config);
+      loft?.refreshRail();
+      notifyHub();
+    },
+    removeService: (id, deleteData) => {
+      const d = getService(id); if (!d) return;
+      quitService(id);
+      removeService(d, config, deleteData);
+      saveConfig(configPath(), config);
+      reconcileAutostart();
+      loft?.refreshRail();
+      notifyHub();
+    },
+    setServiceSetting: (id, patch) => { setServiceSetting(id, patch); notifyHub(); },
+    setGlobal: (patch) => {
+      if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; saveConfig(configPath(), config); }
+      notifyHub();
+    },
+    recoverService: (id, opts) => {
+      const host = hostOf(id);
+      if (!opts.clearCaches) { host?.reload(); return; }
+      if (host) { void host.clearAndReload(); return; }
+      void clearServiceCaches(session.fromPartition(`persist:${id}`));
+    },
+    quit: () => { quitting = true; app.quit(); },
   });
-
-  ipcMain.on('hub:removeService', (_e, m: { id: string; deleteData: boolean }) => {
-    const d = getService(m.id); if (!d) return;
-    quitService(m.id); // tear down a running view/window first
-    removeService(d, config, m.deleteData);
-    saveConfig(configPath(), config);
-    reconcileAutostart();
-    loft?.refreshRail(); // it is no longer installed, so it leaves the rail
-    notifyHub();
-  });
-
-  ipcMain.on('hub:setServiceSetting', (_e, m: { id: string; patch: ServicePatch }) => {
-    setServiceSetting(m.id, m.patch);
-    notifyHub();
-  });
-
-  ipcMain.on('hub:setGlobal', (_e, patch: GlobalPatch) => {
-    if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; saveConfig(configPath(), config); }
-    notifyHub();
-  });
-
-  ipcMain.on('hub:recoverService', (_e, m: { id: string; opts: RecoverOpts }) => {
-    const host = hostOf(m.id);
-    // clearCaches:false with no running host (host undefined) is a deliberate
-    // no-op: there's nothing to reload and nothing to clear. Unreachable today
-    // (the hub only ever sends true), kept for API completeness.
-    if (!m.opts.clearCaches) { host?.reload(); return; }
-    // Works whether or not the service is running: with no host we still clear,
-    // so the next launch loads clean.
-    if (host) { void host.clearAndReload(); return; }
-    void clearServiceCaches(session.fromPartition(`persist:${m.id}`));
-  });
-
-  ipcMain.on('hub:quit', () => { quitting = true; app.quit(); });
 
   ipcMain.on('service:badge', (e, payload?: { count?: number }) => {
     if (typeof payload?.count !== 'number') return;
