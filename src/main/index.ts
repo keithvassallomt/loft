@@ -9,6 +9,7 @@ import { loadConfig, saveConfig, configPath, LoftConfig, reopenDetachedEnabled }
 import { createServiceWindow, ServiceWindow } from './serviceWindow';
 import { createLoftWindow, LOFT_WINDOW_KEY, type LoftWindow } from './loftWindow';
 import type { ServiceHost } from './serviceHost';
+import type { ServiceView } from './serviceView';
 import { clearServiceCaches } from './recovery';
 import { Tray, TrayDeps, TrayServiceSeed } from './tray';
 import { startTrayBackend } from './tray/backend';
@@ -170,7 +171,7 @@ function notifyHub(): void { loft?.sendManager('hub:state', hubState()); }
 
 /** Create (or reuse) a service's OWN window. Reached only through placeService — go via
  *  that (or showService), so nothing can duplicate an attached service into a window. */
-function openService(def: ServiceDef, minimized: boolean): ServiceHost {
+function openService(def: ServiceDef, minimized: boolean, view?: ServiceView): ServiceHost {
   // The reuse check goes through hostOf, not the windows map: a service can live in a
   // shared host now, so "is it already open?" must consult every host.
   const existing = hostOf(def.id);
@@ -183,7 +184,7 @@ function openService(def: ServiceDef, minimized: boolean): ServiceHost {
     if (key) focusExternal(key);
     return existing;
   }
-  const sw = createServiceWindow(def, config, { minimized, onQuit: () => quitting });
+  const sw = createServiceWindow(def, config, { minimized, onQuit: () => quitting, view });
   // Keep the tray's visibility state in sync with the window (drives Show/Hide label).
   sw.window.on('show', () => tray?.setVisible(def.id, true));
   sw.window.on('hide', () => tray?.setVisible(def.id, false));
@@ -212,9 +213,9 @@ function openService(def: ServiceDef, minimized: boolean): ServiceHost {
 
 /** Load a service into the Loft window's rail. Does NOT select it — attaching is not
  *  showing (the open-on-startup set attaches without stealing the manager's place). */
-function attachService(def: ServiceDef): ServiceHost {
+function attachService(def: ServiceDef, view?: ServiceView): ServiceHost {
   const l = loft!;
-  const host = l.attach(def);
+  const host = l.attach(def, view);
   tray?.addService({ id: def.id, displayName: def.displayName, dnd: config.services[def.id]?.dnd ?? false });
   tray?.setRunning(def.id, true);
   tray?.setVisible(def.id, host.isVisible());
@@ -353,33 +354,46 @@ function quitService(id: string): void {
 /**
  * Move a service between the rail and its own window, and remember which (spec §3).
  *
- * FALLBACK (09b, explicitly permitted by the plan): this unloads and reloads rather than
- * moving the live view, so the service loses its scroll position and any half-typed
- * draft. `LoftWindow.detach()` does hand back a still-live `ServiceView`, but nothing can
- * accept one — `createServiceWindow` always builds its own, and there is no re-attach
- * path at all — so a live move would work in one direction only and still reload coming
- * back. 09c owns the gesture-driven version: give `createServiceWindow` an optional
- * pre-built view and `LoftWindow.attach` the same, and this becomes detach()/attach(view).
+ * MOVES the live ServiceView across (09c-2a) rather than unloading + reloading, so the
+ * service keeps its scroll position, half-typed drafts, and any in-progress call. The
+ * view is taken out of its current host WITHOUT being disposed, then re-mounted in the
+ * new one. If for any reason no live view comes back (`moved` undefined), the re-place
+ * builds a fresh one — a safe degradation to the old reload behaviour, never a crash.
  */
 function setDetached(id: string, v: boolean): void {
   const def = getService(id);
-  // `detached` is absent-means-false, so compare the normalised flag, not the raw one:
-  // `undefined === false` is false, and this must be a no-op when nothing changes.
+  // `detached` is absent-means-false: compare the normalised flag so this is a no-op when
+  // nothing changes.
   if (!def || (config.services[id]?.detached === true) === v) return;
   const host = hostOf(id);
   const loaded = host !== undefined;
   const wasVisible = host?.isVisible() ?? false;
-  // Take the view out FIRST, while config still says what it said (see the ordering note
-  // in quitService), THEN flip the flag, THEN re-place it in its new home.
-  if (loaded) quitService(id);
+
+  // Take the LIVE view out of its current home, without disposing it. Do this BEFORE flipping
+  // the flag (the ordering note in quitService): loft.detach locates `id` in the attached list.
+  let moved: ServiceView | undefined;
+  if (loaded) {
+    if (loft?.has(id)) {
+      moved = loft.detach(id);              // unmount, drop from the rail, re-select next tab
+    } else {
+      const sw = windows.get(id);
+      if (sw) { moved = sw.releaseView(); windows.delete(id); } // unmount + tear down shell, keep view
+    }
+    syncLoftWindows();                       // the open-window set changed
+  }
+
   config.services[id] = { ...config.services[id], detached: v };
   saveConfig(configPath(), config);
+
   if (loaded) {
-    // Place it where the user just asked, rather than letting placeService derive it:
-    // `reopenDetached: false` governs STARTUP only (spec §7), so deriving here would
-    // silently re-attach the very service they asked to pop out — and leave a ticked
-    // "Open in its own window" next to a service that is visibly still a tab.
-    if (v || !loft) openService(def, true); else attachService(def);
+    // Place where the user just asked (reopenDetached governs STARTUP only), handing the
+    // live view across so nothing reloads.
+    if (v || !loft) openService(def, !wasVisible, moved); else attachService(def, moved);
+    // A moved view fires no did-finish-load, so the DND/hidden re-push that binding does
+    // (openService's did-finish-load → registerService, and attach's onServiceLoad) never
+    // runs — do it explicitly for the new host. (visible/focused/active are already re-seeded
+    // by openService/attachService.)
+    notifications?.registerService(id);
     if (wasVisible) showService(def); // it was on screen — keep it there
   }
   loft?.refreshRail();
