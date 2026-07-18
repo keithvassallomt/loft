@@ -102,6 +102,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   });
 
   const views = new Map<string, ServiceView>();
+  const hosts = new Map<string, ServiceHost>();
   let active: string | undefined;
 
   // --- chrome views -----------------------------------------------------------
@@ -241,24 +242,29 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
 
   const hostFor = (id: string): ServiceHost | undefined => {
     const sv = views.get(id);
-    if (!sv) return undefined;
-    return {
-      def: sv.def,
-      show: () => { select(id); api.open(); },
-      // Spec §6b: the only way to make an attached service not-visible is to hide its
-      // host — and that hides every other attached service too. Documented wart.
-      hide: () => window.hide(),
-      isVisible: () => window.isVisible() && active === id,
-      setZoom: (d) => { sv.setZoom(d); persist(); },
-      setBadge: (c) => api.setBadge(id, c),
-      pushDnd: (v) => sv.pushDnd(v),
-      pushHidden: (v) => sv.pushHidden(v),
-      navigate: (u) => sv.navigate(u),
-      loadUrl: (u) => sv.loadUrl(u),
-      reload: () => sv.reload(),
-      clearAndReload: () => sv.clearAndReload(),
-      ownsWebContents: (wcId) => sv.ownsWebContents(wcId),
-    };
+    if (!sv) { hosts.delete(id); return undefined; }
+    let host = hosts.get(id);
+    if (!host) {
+      host = {
+        def: sv.def,
+        show: () => { select(id); api.open(); },
+        // Spec §6b: the only way to make an attached service not-visible is to hide its
+        // host — and that hides every other attached service too. Documented wart.
+        hide: () => window.hide(),
+        isVisible: () => window.isVisible() && active === id,
+        setZoom: (d) => { sv.setZoom(d); persist(); },
+        setBadge: (c) => api.setBadge(id, c),
+        pushDnd: (v) => sv.pushDnd(v),
+        pushHidden: (v) => sv.pushHidden(v),
+        navigate: (u) => sv.navigate(u),
+        loadUrl: (u) => sv.loadUrl(u),
+        reload: () => sv.reload(),
+        clearAndReload: () => sv.clearAndReload(),
+        ownsWebContents: (wcId) => sv.ownsWebContents(wcId),
+      };
+      hosts.set(id, host);
+    }
+    return host;
   };
 
   const api: LoftWindow = {
@@ -276,6 +282,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       sv.mount(window, rects().content);
       sv.setVisible(false); // select() decides what's on screen
       views.set(def.id, sv);
+      hosts.delete(def.id);
       // Mirrors serviceWindow's binding: a load wipes whatever main pushed into the page,
       // so main gets told to push it again. Without this an attached service never hears
       // about DND or its own hidden-ness after the first navigation.
@@ -296,6 +303,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       const next = active === id ? nextActiveId(model(), id) : undefined;
       sv.unmount();
       views.delete(id);
+      hosts.delete(id);
       if (active === id) select(next);
       refreshAll();
       return sv; // still live — the caller re-mounts it into its own window
@@ -310,6 +318,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       sv.dispose();
       if (!sv.view.webContents.isDestroyed()) sv.view.webContents.close();
       views.delete(id);
+      hosts.delete(id);
       if (active === id) select(next);
       refreshAll();
     },
