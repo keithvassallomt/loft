@@ -60,6 +60,10 @@
     <input type="checkbox" checked={svc.dnd} onchange={(e) => set({ dnd: e.currentTarget.checked })} />
     <span>Do Not Disturb</span>
   </label>
+  <label class="toggle">
+    <input type="checkbox" checked={svc.launcher} onchange={(e) => set({ launcher: e.currentTarget.checked })} />
+    <span>Create a desktop launcher</span>
+  </label>
 
   <div class="trouble">
     <h3>Troubleshooting</h3>
