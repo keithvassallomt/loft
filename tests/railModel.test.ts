@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRailModel, nextActiveId, type RailModelInput } from '../src/main/railModel';
+import { buildRailModel, nextActiveId, orderedRailIds, type RailModelInput } from '../src/main/railModel';
 import type { ServiceDef } from '../src/main/registry';
 
 const def = (id: string, displayName: string): ServiceDef =>
@@ -119,5 +119,31 @@ describe('nextActiveId', () => {
 
   it('returns undefined for an id that is not in the rail', () => {
     expect(nextActiveId(items(['a', 'b']), 'zz')).toBeUndefined();
+  });
+});
+
+describe('orderedRailIds', () => {
+  const services = [
+    { id: 'whatsapp', displayName: 'WhatsApp', url: 'u' },
+    { id: 'slack', displayName: 'Slack', url: 'u' },
+    { id: 'telegram', displayName: 'Telegram', url: 'u' },
+  ] as never;
+
+  it('lists only installed services, in registry order when railOrder is absent', () => {
+    const config = { services: { whatsapp: {}, telegram: {} } } as never;
+    expect(orderedRailIds(services, config)).toEqual(['whatsapp', 'telegram']);
+  });
+
+  it('honours railOrder, with unlisted ids after it in registry order', () => {
+    const config = {
+      services: { whatsapp: {}, slack: {}, telegram: {} },
+      railOrder: ['telegram', 'slack'],
+    } as never;
+    expect(orderedRailIds(services, config)).toEqual(['telegram', 'slack', 'whatsapp']);
+  });
+
+  it('ignores railOrder entries for services that are not installed', () => {
+    const config = { services: { slack: {} }, railOrder: ['telegram', 'slack'] } as never;
+    expect(orderedRailIds(services, config)).toEqual(['slack']);
   });
 });

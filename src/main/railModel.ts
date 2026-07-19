@@ -34,20 +34,30 @@ export interface RailModelInput {
 }
 
 /**
+ * Installed service ids in rail order. Extracted so main can compute the same order the
+ * rail renders without duplicating the ranking rule — a drag writes railOrder, and it must
+ * agree with what the user saw.
+ */
+export function orderedRailIds(services: readonly ServiceDef[], config: LoftConfig): string[] {
+  const installed = services.filter((d) => config.services[d.id] !== undefined);
+  const order = config.railOrder ?? [];
+  const rank = (id: string): number => {
+    const at = order.indexOf(id);
+    return at === -1 ? order.length + installed.findIndex((d) => d.id === id) : at;
+  };
+  return [...installed].sort((a, b) => rank(a.id) - rank(b.id)).map((d) => d.id);
+}
+
+/**
  * The rail lists every INSTALLED service — including detached ones (spec 09 §3). It is
  * the service list, not the tab strip: that is what makes it the way back from a
  * detached window, and what keeps railOrder meaningful across attach/detach.
  */
 export function buildRailModel(i: RailModelInput): RailItem[] {
-  const installed = i.services.filter((d) => i.config.services[d.id] !== undefined);
-  const order = i.config.railOrder ?? [];
-  const rank = (id: string): number => {
-    const at = order.indexOf(id);
-    return at === -1 ? order.length + installed.findIndex((d) => d.id === id) : at;
-  };
+  const byId = new Map(i.services.map((d) => [d.id, d]));
 
-  return [...installed]
-    .sort((a, b) => rank(a.id) - rank(b.id))
+  return orderedRailIds(i.services, i.config)
+    .map((id) => byId.get(id)!)
     .map((d) => {
       const cfg = i.config.services[d.id] ?? {};
       const sleeping = !i.loaded(d.id);
