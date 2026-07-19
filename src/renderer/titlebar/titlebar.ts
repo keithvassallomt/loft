@@ -6,3 +6,7 @@ document.getElementById('close')!.addEventListener('click', () => window.loft.cl
 // Main sends the service display name once the titlebar has finished loading.
 const nameEl = document.getElementById('name')!;
 window.loft.onSetService((name: string) => { nameEl.textContent = name; });
+
+const attachEl = document.getElementById('attach')!;
+attachEl.addEventListener('click', () => window.loft.attach());
+window.loft.onSetAttachable((on) => { (attachEl as HTMLButtonElement).hidden = !on; });

@@ -538,6 +538,10 @@ if (!app.requestSingleInstanceLock()) {
     findBySenderId(e.sender.id)?.hide();
   });
   ipcMain.on('titlebar:reload', (e) => titlebarTarget(e.sender.id)?.reload());
+  ipcMain.on('titlebar:attach', (e) => {
+    const id = titlebarTarget(e.sender.id)?.def.id;
+    if (id) setDetached(id, false);
+  });
   // Recovery overlays belong to a service view, so findBySenderId resolves them in either
   // host kind — no active-tab fallback wanted here.
   ipcMain.on('recovery:reload', (e) => findBySenderId(e.sender.id)?.reload());

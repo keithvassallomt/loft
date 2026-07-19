@@ -62,9 +62,10 @@ export function createServiceWindow(
   const titlebar = new WebContentsView({
     webPreferences: { preload: join(__dirname, '../preload/titlebar.js') },
   });
-  titlebar.webContents.on('did-finish-load', () =>
-    safeSend(titlebar, 'titlebar:set-service', def.displayName),
-  );
+  titlebar.webContents.on('did-finish-load', () => {
+    safeSend(titlebar, 'titlebar:set-service', def.displayName);
+    safeSend(titlebar, 'titlebar:set-attachable', true);
+  });
   titlebar.webContents.loadFile(join(__dirname, '../renderer/titlebar/index.html'));
 
   const sv = opts.view ?? createServiceView(def, cfg);
