@@ -9,6 +9,8 @@ export interface RailBridge {
   menu(id: string): void;
   /** Open the manager view (the rail's Loft "home" button). */
   showManager(): void;
+  /** Report a drag that ended on a service icon; main decides detach-vs-select from releaseX. */
+  dragEnd(id: string, releaseX: number): void;
 }
 
 /** Pure factory so the bridge is testable against a fake ipc (mirrors preload/hub.ts). */
@@ -22,6 +24,7 @@ export function buildRailBridge(ipc: IpcRenderer): RailBridge {
     select: (id) => ipc.send('rail:select', id),
     menu: (id) => ipc.send('rail:menu', id),
     showManager: () => ipc.send('rail:showManager'),
+    dragEnd: (id, releaseX) => ipc.send('rail:dragEnd', { id, releaseX }),
   };
 }
 

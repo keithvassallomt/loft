@@ -37,7 +37,26 @@ function serviceButton(item: RailItem): HTMLButtonElement {
     b.append(m);
   }
 
-  b.addEventListener('click', () => window.loftRail.select(item.id));
+  if (!item.sleeping && !item.detached) {
+    // A live tab: press + drag it off the rail to detach; a plain click (release on the icon)
+    // selects. setPointerCapture keeps the drag on this button even as the cursor crosses into
+    // the content view (proven on Wayland). clientX is relative to the rail view — main decides.
+    b.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      b.setPointerCapture(e.pointerId);
+      b.classList.add('dragging');
+    });
+    const end = (e: PointerEvent): void => {
+      if (!b.classList.contains('dragging')) return;
+      b.classList.remove('dragging');
+      window.loftRail.dragEnd(item.id, e.clientX);
+    };
+    b.addEventListener('pointerup', end);
+    b.addEventListener('pointercancel', () => b.classList.remove('dragging'));
+  } else {
+    // Sleeping / detached: plain click, unchanged (select / raise its window).
+    b.addEventListener('click', () => window.loftRail.select(item.id));
+  }
   b.addEventListener('contextmenu', (e) => { e.preventDefault(); window.loftRail.menu(item.id); });
   return b;
 }

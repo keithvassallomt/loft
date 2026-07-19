@@ -28,6 +28,8 @@ import { createSignalShutdown } from './shutdown';
 import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath } from './desktop';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
+import { RAIL_WIDTH } from './layout';
+import { railDragOutcome } from './railDrag';
 import type { HubState, ServicePatch } from '../shared/hubTypes';
 
 app.setName('Loft');
@@ -546,6 +548,11 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on('rail:select', (_e, id: string) => { const d = getService(id); if (d) showService(d); });
   ipcMain.on('rail:menu', (_e, id: string) => loft?.popServiceMenu(id));
   ipcMain.on('rail:showManager', () => loft?.showManager());
+  ipcMain.on('rail:dragEnd', (_e, m: { id: string; releaseX: number }) => {
+    if (railDragOutcome(m.releaseX, RAIL_WIDTH) === 'detach') { setDetached(m.id, true); return; }
+    const d = getService(m.id);
+    if (d) showService(d); // released inside the rail ⇒ a normal click ⇒ select the tab
+  });
 
   // --- hub:* — the manager view (src/renderer/hub). Wiring lives in hubIpc.ts so it's
   // unit-testable; the deps below are index.ts's own operations, unchanged. hub:openService
