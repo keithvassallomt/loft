@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { railDragOutcome } from '../src/main/railDrag';
+import { railDragOutcome, railGestureOutcome } from '../src/main/railDrag';
 
 describe('railDragOutcome', () => {
   it('selects when released within the rail (a plain click on the icon)', () => {
@@ -25,5 +25,40 @@ describe('railDragOutcome', () => {
     expect(railDragOutcome(-24, 52, 24)).toBe('select'); // -24 not < -24
     expect(railDragOutcome(-10, 52, 24)).toBe('select');
     expect(railDragOutcome(0, 52)).toBe('select'); // exactly the rail's / window's left edge
+  });
+});
+
+describe('railGestureOutcome', () => {
+  const base = { railWidth: 52, margin: 24, canDetach: true, fromIndex: 1, toIndex: 1 };
+
+  it('detaches when released outside the rail band', () => {
+    expect(railGestureOutcome({ ...base, releaseX: 300 })).toBe('detach');
+    expect(railGestureOutcome({ ...base, releaseX: -140 })).toBe('detach');
+  });
+
+  it('does NOTHING when an un-detachable icon is dragged out (sleeping/detached snap back)', () => {
+    expect(railGestureOutcome({ ...base, releaseX: 300, canDetach: false })).toBe('none');
+    expect(railGestureOutcome({ ...base, releaseX: -140, canDetach: false })).toBe('none');
+  });
+
+  it('selects when released in the band on its own slot (a plain click)', () => {
+    expect(railGestureOutcome({ ...base, releaseX: 26, fromIndex: 1, toIndex: 1 })).toBe('select');
+    // toIndex === fromIndex + 1 is the other side of the same gap — still "stay put".
+    expect(railGestureOutcome({ ...base, releaseX: 26, fromIndex: 1, toIndex: 2 })).toBe('select');
+  });
+
+  it('reorders when released in the band on a different slot', () => {
+    expect(railGestureOutcome({ ...base, releaseX: 26, fromIndex: 1, toIndex: 0 })).toBe('reorder');
+    expect(railGestureOutcome({ ...base, releaseX: 26, fromIndex: 1, toIndex: 3 })).toBe('reorder');
+  });
+
+  it('still reorders an un-detachable icon dragged within the band', () => {
+    // A sleeping service has no view to detach, but its rail position is still its own.
+    expect(railGestureOutcome({ ...base, releaseX: 26, canDetach: false, fromIndex: 1, toIndex: 3 }))
+      .toBe('reorder');
+  });
+
+  it('selects when the icon is not in the order at all (fromIndex -1) and did not leave the band', () => {
+    expect(railGestureOutcome({ ...base, releaseX: 26, fromIndex: -1, toIndex: 0 })).toBe('select');
   });
 });
