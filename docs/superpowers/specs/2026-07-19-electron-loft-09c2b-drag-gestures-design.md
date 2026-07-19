@@ -1,6 +1,22 @@
 # Electron Loft 09c-2b — Drag to detach, grab-handle to attach
 
-**Status:** design approved (2026-07-19), pending implementation plan.
+**Status:** implemented + smoke-tested (2026-07-19).
+
+> **⚠️ CORRECTION (2026-07-19, after implementation).** The reasoning below that ruled out
+> drag-to-attach is **wrong**, and the "not viable on Wayland" claims should not be relied on.
+> It reasoned only about *pointer capture*, whose same-surface limitation is real, and never
+> considered **compositor-mediated drag-and-drop** (`wl_data_device`, surfacing as HTML5
+> `dragstart`/`dragover`/`drop`) — which is the platform's *sanctioned* cross-window drag
+> mechanism and does not need the global cursor at all.
+>
+> A later spike (`dev_local/dnd_spike/`) disproved it outright: dragging a handle from a
+> detached window onto another window's rail produced the full chain —
+> `dragenter` → `dragover` (with live `clientY` over the rail) → `drop` (payload delivered)
+> → `dragend` (`dropEffect: "move"`). **Drag-to-attach IS viable, and so is the
+> cursor-following drop-slot**, since `dragover` gives continuous position over the target.
+>
+> The shipped titlebar grab-handle works and stays; it is simply no longer the *only*
+> option. See "Non-goals" below — items 1 and 3 are retracted.
 
 The second half of 09c-2: the direct gestures that trigger the (already-built, smoke-tested) 09c-2a live-view move. **Detach** by dragging a rail icon off the rail; **attach** by a grab-handle on the detached window's titlebar.
 
@@ -19,9 +35,9 @@ The second half of 09c-2: the direct gestures that trigger the (already-built, s
 
 ## Non-goals
 
-- **Cursor-following drop-slot on attach** — Wayland blocks the cross-window cursor, so it's not achievable; the titlebar handle is the chosen substitute (a service returns to its rail position, briefly highlighted).
-- **Rail reordering** (drag to change `railOrder`) — out of scope; the rail drag here means detach only. A future slice could add reorder for vertical drags.
-- **Drag-to-attach** (drag a window onto the rail) — not viable on Wayland.
+- ~~**Cursor-following drop-slot on attach** — Wayland blocks the cross-window cursor, so it's not achievable; the titlebar handle is the chosen substitute (a service returns to its rail position, briefly highlighted).~~ **RETRACTED** — see the correction at the top: `dragover` gives continuous position over the rail, which is exactly the drop-slot signal. Out of scope for *this* slice, not impossible.
+- **Rail reordering** (drag to change `railOrder`) — out of scope; the rail drag here means detach only. A future slice could add reorder for vertical drags. *(The same HTML5 DnD mechanism makes this straightforward — `railOrder` already exists in config from 09a.)*
+- ~~**Drag-to-attach** (drag a window onto the rail) — not viable on Wayland.~~ **RETRACTED** — spike-disproven; it is viable via HTML5 DnD. Out of scope for this slice only.
 
 ## Components
 
