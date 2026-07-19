@@ -123,4 +123,31 @@ describe('startNotifyBridge routing', () => {
     expect(doc.hidden).toBe(false);
     expect(doc.visibilityState).toBe('visible');
   });
+
+  it('sends the notifyId out with a relayed notification', () => {
+    const { win, doc, ipc } = fakeEnv();
+    startNotifyBridge('slack', { ipc, win, doc });
+    new win.Notification('Ann', { body: 'hi' });
+    const sent = ipc.send.mock.calls.find((c) => c[0] === 'service:notify');
+    expect(sent).toBeTruthy();
+    expect((sent![1] as { notifyId: number }).notifyId).toEqual(expect.any(Number));
+  });
+
+  it('routes service:notify-click into the page handler', () => {
+    const { win, doc, ipc, handlers } = fakeEnv();
+    startNotifyBridge('slack', { ipc, win, doc });
+    const n = new win.Notification('Ann', { body: 'hi' });
+    const clicked = vi.fn();
+    n.onclick = clicked;
+    const sent = ipc.send.mock.calls.find((c) => c[0] === 'service:notify')!;
+    const { notifyId } = sent[1] as { notifyId: number };
+    handlers['service:notify-click']({}, notifyId);
+    expect(clicked).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a service:notify-click that is not a number', () => {
+    const { win, doc, ipc, handlers } = fakeEnv();
+    startNotifyBridge('slack', { ipc, win, doc });
+    expect(() => handlers['service:notify-click']({}, 'nope')).not.toThrow();
+  });
 });
