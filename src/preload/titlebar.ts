@@ -10,4 +10,6 @@ contextBridge.exposeInMainWorld('loft', {
   attach: () => ipcRenderer.send('titlebar:attach'),
   onSetAttachable: (cb: (id: string | null) => void) =>
     ipcRenderer.on('titlebar:set-attachable', (_e, id: string | null) => cb(id)),
+  onSetContext: (cb: (id: string | null) => void) =>
+    ipcRenderer.on('titlebar:set-context', (_e, id: string | null) => cb(id)),
 });

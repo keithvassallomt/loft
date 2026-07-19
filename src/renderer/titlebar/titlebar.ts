@@ -33,3 +33,20 @@ attachEl.addEventListener('dragstart', (e) => {
   e.dataTransfer.setData('text/plain', serviceId);
   e.dataTransfer.effectAllowed = 'move';
 });
+
+// One signal drives both the icon and the service-only controls, because they answer the
+// same question: is this titlebar showing a service, or the manager? A null id is the
+// manager view, where reload and the zoom buttons would act on a web view that is not
+// there. Close stays in every view, and ⇤ keeps its own set-attachable logic — "is this a
+// detached window" is a different question from "is this showing a service".
+const iconEl = document.getElementById('icon') as HTMLImageElement;
+const serviceOnly = ['reload', 'zoom-out', 'zoom-in']
+  .map((el) => document.getElementById(el) as HTMLButtonElement);
+
+iconEl.addEventListener('error', () => { iconEl.hidden = true; });
+
+window.loft.onSetContext((id) => {
+  if (id !== null) iconEl.src = `loft://icon/${id}`;
+  iconEl.hidden = id === null;
+  for (const el of serviceOnly) el.hidden = id === null;
+});

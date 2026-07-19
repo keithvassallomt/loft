@@ -67,6 +67,8 @@ export function createServiceWindow(
     // The id, not a bare flag: the renderer needs it as the drag payload so the rail
     // knows which service was dropped (dataTransfer is unreadable until 'drop').
     safeSend(titlebar, 'titlebar:set-attachable', def.id);
+    // A detached window always shows a service, so it always gets the icon and controls.
+    safeSend(titlebar, 'titlebar:set-context', def.id);
   });
   titlebar.webContents.loadFile(join(__dirname, '../renderer/titlebar/index.html'));
 

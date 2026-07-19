@@ -160,11 +160,18 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     safeSend(rail, 'rail:state', { items: model(), managerActive: active === undefined });
 
   const refreshTitlebar = (): void => {
-    if (!active) { safeSend(titlebar, 'titlebar:set-service', 'Loft'); return; }
+    // set-context tells the titlebar which service it is showing, or null for the manager
+    // view — which is what hides the service-only controls (reload/zoom) and the icon.
+    if (!active) {
+      safeSend(titlebar, 'titlebar:set-service', 'Loft');
+      safeSend(titlebar, 'titlebar:set-context', null);
+      return;
+    }
     const sv = views.get(active);
     if (!sv) return;
     const count = deps.cfg.services[active]?.badgesEnabled === false ? 0 : deps.badge(active);
     safeSend(titlebar, 'titlebar:set-service', formatWindowTitle(sv.def.displayName, count));
+    safeSend(titlebar, 'titlebar:set-context', active);
   };
 
   /**
