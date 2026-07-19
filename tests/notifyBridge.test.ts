@@ -145,9 +145,18 @@ describe('startNotifyBridge routing', () => {
     expect(clicked).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores a service:notify-click that is not a number', () => {
+  it('treats a malformed service:notify-click as inert — no throw, no handler fired', () => {
+    // What this actually pins down: a bad payload from main is harmless. It does NOT prove
+    // the `typeof notifyId === 'number'` guard does runtime work — without it the id would
+    // just miss in the registry's Map and still fire nothing. The guard earns its place by
+    // narrowing `unknown` to `number` for the call site, which no runtime test can observe.
     const { win, doc, ipc, handlers } = fakeEnv();
     startNotifyBridge('slack', { ipc, win, doc });
+    const n = new win.Notification('Ann', { body: 'hi' });
+    const clicked = vi.fn();
+    n.onclick = clicked;
     expect(() => handlers['service:notify-click']({}, 'nope')).not.toThrow();
+    expect(() => handlers['service:notify-click']({}, undefined)).not.toThrow();
+    expect(clicked).not.toHaveBeenCalled();
   });
 });
