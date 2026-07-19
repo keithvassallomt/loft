@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
-import { getService, SERVICES, ServiceDef, effectiveUrl } from './registry';
+import { getService, listServices, SERVICES, ServiceDef, effectiveUrl } from './registry';
 import { loadConfig, saveConfig, configPath, LoftConfig, reopenDetachedEnabled } from './config';
 import { createServiceWindow, ServiceWindow } from './serviceWindow';
 import { createLoftWindow, LOFT_WINDOW_KEY, type LoftWindow } from './loftWindow';
@@ -29,7 +29,10 @@ import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, rec
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
 import { RAIL_WIDTH } from './layout';
-import { railDragOutcome } from './railDrag';
+import { railDragOutcome, railGestureOutcome } from './railDrag';
+import { railSlotIndex, type RailSlot } from './railSlots';
+import { moveInOrder } from './railOrder';
+import { orderedRailIds } from './railModel';
 import type { HubState, ServicePatch } from '../shared/hubTypes';
 
 app.setName('Loft');
@@ -552,13 +555,84 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on('rail:select', (_e, id: string) => { const d = getService(id); if (d) showService(d); });
   ipcMain.on('rail:menu', (_e, id: string) => loft?.popServiceMenu(id));
   ipcMain.on('rail:showManager', () => loft?.showManager());
-  ipcMain.on('rail:dragEnd', (_e, m: { id: string; releaseX: number }) => {
+  // --- rail drag gestures -----------------------------------------------------
+  // The renderer measures and reports; main owns every decision (see railSlots/
+  // railGestureOutcome). One cached geometry snapshot serves both gesture kinds: a
+  // pointer-capture drag of a rail icon, and a cross-window HTML5 drop from a detached
+  // window's titlebar.
+  let railDrag: { slots: RailSlot[]; lastIndex: number } | undefined;
+
+  const railIds = (): string[] => orderedRailIds(listServices(), config);
+
+  const setRailOrder = (ids: string[]): void => {
+    config.railOrder = ids;
+    saveConfig(configPath(), config);
+    loft?.refreshRail();
+  };
+
+  const clearRailDrag = (): void => {
+    railDrag = undefined;
+    loft?.sendRail('rail:dropSlot', -1);
+  };
+
+  ipcMain.on('rail:dragBegin', (_e, m: { slots: RailSlot[] }) => {
+    // lastIndex starts at a value no real index can equal, so the first move always pushes.
+    railDrag = { slots: m.slots, lastIndex: -2 };
+  });
+
+  ipcMain.on('rail:dragMove', (_e, m: { clientX: number; clientY: number }) => {
+    if (!railDrag) return;
+    // Outside the rail band the gesture means detach, not reorder — hide the indicator
+    // rather than promising a slot the release will not honour.
+    const outside = railDragOutcome(m.clientX, RAIL_WIDTH) === 'detach';
+    const index = outside ? -1 : railSlotIndex(m.clientY, railDrag.slots);
+    if (index === railDrag.lastIndex) return;
+    railDrag.lastIndex = index;
+    loft?.sendRail('rail:dropSlot', index);
+  });
+
+  ipcMain.on('rail:dragEnd', (_e, m: { id: string; releaseX: number; releaseY: number }) => {
+    const slots = railDrag?.slots ?? [];
+    clearRailDrag();
     const d = getService(m.id);
     if (!d) return;
-    // A drag says "show me this": detach pops the service into its own window and raises it; a
-    // release inside the rail is a plain click that selects the tab. (The settings-toggle detach
-    // keeps its own "don't steal the screen" behaviour — this only applies to the drag gesture.)
-    if (railDragOutcome(m.releaseX, RAIL_WIDTH) === 'detach') setDetached(m.id, true);
+    const ids = railIds();
+    // Only a service that is loaded AND currently a tab of the Loft window has a view to
+    // pull out; a sleeping or already-detached icon snaps back instead.
+    const canDetach = loft?.has(m.id) === true && config.services[m.id]?.detached !== true;
+    const toIndex = railSlotIndex(m.releaseY, slots);
+    switch (railGestureOutcome({
+      releaseX: m.releaseX,
+      railWidth: RAIL_WIDTH,
+      canDetach,
+      fromIndex: ids.indexOf(m.id),
+      toIndex,
+    })) {
+      case 'detach':
+        setDetached(m.id, true);
+        showService(d);
+        break;
+      case 'reorder':
+        setRailOrder(moveInOrder(ids, m.id, toIndex));
+        break;
+      case 'select':
+        showService(d);
+        break;
+      case 'none':
+        break;
+    }
+  });
+
+  // A detached service dragged back onto the rail: land it in the dropped slot, move the
+  // live view home (no reload), select it, and raise the Loft window — showService routes
+  // through the GNOME helper / KWin because a plain focus() is refused on Wayland.
+  ipcMain.on('rail:dropAttach', (_e, m: { id: string; clientY: number }) => {
+    const slots = railDrag?.slots ?? [];
+    clearRailDrag();
+    const d = getService(m.id);
+    if (!d || config.services[m.id]?.detached !== true) return;
+    setRailOrder(moveInOrder(railIds(), m.id, railSlotIndex(m.clientY, slots)));
+    setDetached(m.id, false);
     showService(d);
   });
 

@@ -46,6 +46,8 @@ export interface LoftWindow {
    *  manager is a view in here, so this is its way in. No-ops before the view has loaded;
    *  the renderer pulls its own first state over `hub:getState`, so nothing is lost. */
   sendManager(channel: string, ...args: unknown[]): void;
+  /** Push to the rail view (e.g. the live drop-slot index during a drag). */
+  sendRail(channel: string, ...args: unknown[]): void;
   popServiceMenu(id: string): void;
   ownsWebContents(id: number): boolean;
   persist(): void;
@@ -340,6 +342,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     refreshRail: refreshAll,
     showManager,
     sendManager: (channel, ...args) => safeSend(manager, channel, ...args),
+    sendRail: (channel, ...args) => safeSend(rail, channel, ...args),
 
     /** Native per-service context menu (rail right-click). Main owns it so it renders
      *  as a real menu rather than CSS, and so the actions are the same ones the tray
