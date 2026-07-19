@@ -621,7 +621,10 @@ with:
 // Loft window's rail to choose the slot it lands in. It must be the drag source rather
 // than the titlebar itself — the titlebar's drag region belongs to the compositor for
 // moving the window, and HTML5 drags cannot start there.
-const RAIL_MIME = 'application/x-loft-service';
+// NOTE the name: rail.ts already declares RAIL_MIME, and both files are non-module scripts
+// compiled together, so their top-level declarations share ONE global scope — reusing the
+// name is a TS2451 redeclaration build error. The string value must stay byte-identical.
+const TITLEBAR_DRAG_MIME = 'application/x-loft-service';
 const attachEl = document.getElementById('attach') as HTMLButtonElement;
 let serviceId: string | null = null;
 
@@ -635,7 +638,7 @@ attachEl.addEventListener('dragstart', (e) => {
   if (!serviceId || !e.dataTransfer) { e.preventDefault(); return; }
   // A private type, so dragging text or a link from any other app can never look like
   // an attach. Some platforms also want a plain-text fallback for the drag to start.
-  e.dataTransfer.setData(RAIL_MIME, serviceId);
+  e.dataTransfer.setData(TITLEBAR_DRAG_MIME, serviceId);
   e.dataTransfer.setData('text/plain', serviceId);
   e.dataTransfer.effectAllowed = 'move';
 });
