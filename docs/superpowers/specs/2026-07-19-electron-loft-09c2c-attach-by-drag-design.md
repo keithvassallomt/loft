@@ -72,7 +72,7 @@ Write `railOrder`, `setDetached(id, false)` (the existing live-view move — no 
 | `src/main/railSlots.ts` **(new, pure)** | `railSlotIndex(clientY, slots) → index` — the insertion index for a pointer position. |
 | `src/main/railOrder.ts` **(new, pure)** | `moveInOrder(ids, id, toIndex) → ids[]` — writes a **full** ordered list (predictable; `buildRailModel` already tolerates partials via its `rank` fallback). |
 | `src/main/railDrag.ts` **(extended)** | Gains `'reorder'` alongside `'detach'`/`'select'`, plus a guard so sleeping/detached icons cannot detach. Existing tests extend, not replace. |
-| `src/preload/rail.ts` | New channels: `dragBegin(id, slots)`, `dragMove(x, y)`, `dropAttach(id, y)`, `onDropSlot(cb)`. `dragEnd` extended with `clientY`. |
+| `src/preload/rail.ts` | New channels: `dragBegin(slots)`, `dragMove(x, y)`, `dropAttach(id, y)`, `onDropSlot(cb)`. `dragEnd` extended with `releaseY`. (`dragBegin` carries no id: on the DnD path the dragged service is unknown until `drop`, and main derives the index from geometry alone.) |
 | `src/renderer/rail/rail.ts` | Reports drag positions; renders the insertion line; becomes an HTML5 **drop target**. Stays import-free. |
 | `src/renderer/rail/rail.css` | The insertion-line element. |
 | `src/renderer/titlebar/*` | `#attach` becomes `draggable`, with `dragstart` carrying the service id. Keeps its click. |
@@ -90,7 +90,8 @@ The titlebar renderer currently only receives a **display name** (`titlebar:set-
 
 - **Foreign drags must not attach.** The spike used `text/plain`, which would mean dragging *any* text or link onto the rail attempts an attach. The real thing uses a private MIME type **`application/x-loft-service`**, and only calls `preventDefault()` when that type is present — so external drags are rejected by the browser naturally rather than by an id lookup failing.
 - **`dragend` is never consulted** for success. Decisions come from `drop` only.
-- **Rail re-render mid-drag** (a badge arrives) invalidates cached geometry — the renderer re-sends it whenever it re-renders during an active drag.
+- **Rail re-render mid-drag** (a badge arrives) would invalidate cached geometry — and worse, `replaceChildren` would destroy the very button holding pointer capture, so the replacement node never receives the `pointerup` and the gesture orphans. The renderer therefore **defers** renders while a drag is in flight and flushes the pending state when it ends, which also keeps the measured geometry valid for the whole gesture.
+- **A release with no tracked geometry is ignored.** Two pointers can interleave (press A, press B, release A, release B), leaving the second release with no cached slots; measuring against an empty list would yield index 0 and silently persist a reorder to the front.
 - **Unknown payload id**, or a payload naming a service that is not actually detached → ignored.
 - **Empty rail** (no installed services) → `railSlotIndex` returns 0; a drop still attaches.
 - **Drop while the Loft window is hidden** cannot occur (nothing to drop onto), so no special case.
