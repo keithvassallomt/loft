@@ -368,7 +368,17 @@ describe('railGestureOutcome', () => {
   });
 
   it('selects when the icon is not in the order at all (fromIndex -1) and did not leave the band', () => {
-    expect(railGestureOutcome({ ...base, releaseX: 26, fromIndex: -1, toIndex: 0 })).toBe('select');
+    // toIndex deliberately far from fromIndex + 1 (which would be 0): this must resolve via the
+    // explicit fromIndex < 0 branch, not by coincidentally looking like "stay put".
+    expect(railGestureOutcome({ ...base, releaseX: 26, fromIndex: -1, toIndex: 5 })).toBe('select');
+  });
+
+  it('prefers the out-of-band decision over the fromIndex -1 check', () => {
+    // Guards the branch ORDER: an unknown-index icon dragged clear of the rail must still
+    // detach (or snap back), never fall through to select.
+    expect(railGestureOutcome({ ...base, releaseX: 300, fromIndex: -1, toIndex: 5 })).toBe('detach');
+    expect(railGestureOutcome({ ...base, releaseX: 300, fromIndex: -1, toIndex: 5, canDetach: false }))
+      .toBe('none');
   });
 });
 ```
