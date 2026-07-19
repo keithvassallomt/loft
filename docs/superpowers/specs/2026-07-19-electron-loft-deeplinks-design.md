@@ -117,3 +117,12 @@ Messenger and Telegram are unchanged: no `notifyId`, an `href`, today's `service
 - **WhatsApp** — lands in the right chat. *Check this one deliberately:* if the window focuses but does not navigate, the standard-handler-first rule needs relaxing to also call `options.onClick` (see Decisions).
 - **Messenger and Telegram** — still work exactly as before (regression check; they take a different path).
 - Clicking a **stale** notification (after ~50 newer ones) focuses the window and does nothing, rather than misrouting.
+
+**Added after the final review** — the original list above would have passed while three real defects were live, because every item clicks a fresh banner immediately:
+
+- **Wait ~60s before clicking.** Apps routinely auto-close their own `Notification` seconds after showing it; our banner persists. Catches the click arriving after the page discarded its object.
+- **Reload, then click an OLD banner.** Notify once, Ctrl+R the service, notify twice more, then click the *first* banner. It must do nothing — it must NOT open the wrong conversation. Ids restart at 1 on every page load, so this is the misroute case the epoch guard exists to prevent.
+- **Click after Unload + relaunch, and after quitting and restarting Loft**, for the same reason.
+- **Run from a terminal and read stderr.** Every failure mode here is a swallowed exception logged as `Loft: notification click handler threw`. Without the console, a handler that throws is indistinguishable from an app that attached no handler — which is exactly the wrong conclusion to draw about WhatsApp.
+- **Both host kinds**: click a banner for a service in its own window *and* one attached in the rail, plus once after a detach → re-attach.
+- **Two notifications from the same conversation**, then click the older one.
