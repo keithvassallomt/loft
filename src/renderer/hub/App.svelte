@@ -85,6 +85,12 @@
     font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.05em;
     opacity: 0.5; margin: 12px 10px 2px;
   }
-  .side .foot { margin-top: auto; }
+  /* A plain div lays its buttons out inline-block, so Settings / About / Quit Loft sat on
+     one line. Flex-column stacks them; the border-top separates them from the service list
+     above. margin-top:auto keeps the whole group pinned to the bottom of the sidebar. */
+  .side .foot {
+    margin-top: auto; display: flex; flex-direction: column; gap: 2px;
+    border-top: 1px solid var(--divider); padding-top: 8px;
+  }
   .pane { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; padding: 18px 22px; }
 </style>
