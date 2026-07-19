@@ -52,3 +52,15 @@ body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
   .home.active { box-shadow: inset 3px 0 0 #0a84ff; background: #48484a; }
   .divider { background: #545456; }
 }
+
+/* Insertion indicator: where a dragged icon would land. Fixed-position so it is not a
+   child of #rail, whose children are replaced on every render. */
+#slot {
+  position: fixed; left: 5px; width: 42px; height: 3px;
+  background: #0071e3; border-radius: 2px;
+  display: none; pointer-events: none;
+}
+#slot.show { display: block; }
+@media (prefers-color-scheme: dark) {
+  #slot { background: #0a84ff; }
+}

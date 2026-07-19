@@ -4,6 +4,41 @@ type RailItem = import('../../main/railModel').RailItem;
 type RailState = import('../../main/railModel').RailState;
 
 const root = document.getElementById('rail')!;
+const slotLine = document.getElementById('slot')!;
+const RAIL_MIME = 'application/x-loft-service';
+
+type Slot = import('../../main/railSlots').RailSlot;
+let slots: Slot[] = [];
+let dragging = false;
+
+/** Measure every icon so main can compute insertion indices from real geometry. */
+function measure(): Slot[] {
+  return [...root.querySelectorAll<HTMLElement>('.item')].map((el) => {
+    const r = el.getBoundingClientRect();
+    return { id: el.dataset.id ?? '', top: r.top, height: r.height };
+  });
+}
+
+/** Draw the insertion line at an index, or hide it for -1. */
+function showSlot(index: number): void {
+  if (index < 0 || slots.length === 0) { slotLine.classList.remove('show'); return; }
+  const y = index < slots.length
+    ? slots[index].top - 2
+    : slots[slots.length - 1].top + slots[slots.length - 1].height - 1;
+  slotLine.style.top = `${y}px`;
+  slotLine.classList.add('show');
+}
+
+function beginDrag(): void {
+  slots = measure();
+  dragging = true;
+  window.loftRail.dragBegin(slots);
+}
+
+function endDrag(): void {
+  dragging = false;
+  showSlot(-1);
+}
 
 const initials = (name: string): string =>
   name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
@@ -37,30 +72,33 @@ function serviceButton(item: RailItem): HTMLButtonElement {
     b.append(m);
   }
 
-  if (!item.sleeping && !item.detached) {
-    // A live tab: press + drag it off the rail to detach; a plain click (release on the icon)
-    // selects. setPointerCapture keeps the drag on this button even as the cursor crosses into
-    // the content view (proven on Wayland). clientX is relative to the rail view — main decides.
-    b.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return; // primary button only — middle/right fall through to contextmenu / nothing
-      e.preventDefault();
-      b.setPointerCapture(e.pointerId);
-      b.classList.add('dragging');
-    });
-    const end = (e: PointerEvent): void => {
-      if (!b.classList.contains('dragging')) return;
-      b.classList.remove('dragging');
-      window.loftRail.dragEnd(item.id, e.clientX);
-    };
-    b.addEventListener('pointerup', end);
-    b.addEventListener('pointercancel', () => b.classList.remove('dragging'));
-    // Keyboard activation (Enter/Space) dispatches a synthetic click with detail 0, not pointer events;
-    // mouse clicks (detail >= 1) stay owned by the pointer path above, so no double-fire.
-    b.addEventListener('click', (e) => { if (e.detail === 0) window.loftRail.select(item.id); });
-  } else {
-    // Sleeping / detached: plain click, unchanged (select / raise its window).
-    b.addEventListener('click', () => window.loftRail.select(item.id));
-  }
+  b.dataset.id = item.id;
+
+  // Every icon drags: vertically to reorder, off the rail to detach. Main resolves which
+  // (railGestureOutcome) — it knows whether this service even has a view to pull out.
+  // setPointerCapture keeps the whole gesture on this button even once the cursor leaves
+  // the window, which is what makes "drag it out to the desktop" detectable at all.
+  b.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return; // primary button only — middle/right fall through
+    e.preventDefault();
+    b.setPointerCapture(e.pointerId);
+    b.classList.add('dragging');
+    beginDrag();
+  });
+  b.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    window.loftRail.dragMove(e.clientX, e.clientY);
+  });
+  b.addEventListener('pointerup', (e) => {
+    if (!b.classList.contains('dragging')) return;
+    b.classList.remove('dragging');
+    endDrag();
+    window.loftRail.dragEnd(item.id, e.clientX, e.clientY);
+  });
+  b.addEventListener('pointercancel', () => { b.classList.remove('dragging'); endDrag(); });
+  // Keyboard activation (Enter/Space) dispatches a synthetic click with detail 0, not
+  // pointer events; mouse clicks (detail >= 1) stay owned by the pointer path above.
+  b.addEventListener('click', (e) => { if (e.detail === 0) window.loftRail.select(item.id); });
   b.addEventListener('contextmenu', (e) => { e.preventDefault(); window.loftRail.menu(item.id); });
   return b;
 }
@@ -88,6 +126,45 @@ function render(state: RailState): void {
     homeButton(state.managerActive),
     ...(state.items.length ? [divider, ...state.items.map(serviceButton)] : []),
   );
+  // A re-render mid-drag (e.g. a badge arrives) moves the icons under the cursor; main's
+  // cached geometry would be stale, so re-measure and re-send.
+  if (dragging) { slots = measure(); window.loftRail.dragBegin(slots); }
 }
 
 window.loftRail.onState(render);
+
+// --- cross-window drop target (attach) --------------------------------------
+// A drag from a detached window's titlebar. Only OUR type is accepted: preventDefault is
+// what tells the browser a drop is allowed, so withholding it for anything else makes the
+// rail reject stray text/link/file drags automatically. dataTransfer.getData() is empty
+// until 'drop' by design, so the service id is unknown until then — which is fine, the
+// indicator only needs a position.
+const ours = (e: DragEvent): boolean =>
+  Boolean(e.dataTransfer && [...e.dataTransfer.types].includes(RAIL_MIME));
+
+root.addEventListener('dragenter', (e) => {
+  if (!ours(e)) return;
+  e.preventDefault();
+  beginDrag();
+});
+root.addEventListener('dragover', (e) => {
+  if (!ours(e)) return;
+  e.preventDefault();
+  e.dataTransfer!.dropEffect = 'move';
+  window.loftRail.dragMove(e.clientX, e.clientY);
+});
+root.addEventListener('dragleave', (e) => {
+  // Only when the pointer actually leaves the rail, not on every child transition.
+  if (e.relatedTarget && root.contains(e.relatedTarget as Node)) return;
+  endDrag();
+});
+root.addEventListener('drop', (e) => {
+  if (!ours(e)) return;
+  e.preventDefault();
+  const id = e.dataTransfer!.getData(RAIL_MIME);
+  endDrag();
+  if (id) window.loftRail.dropAttach(id, e.clientY);
+});
+
+// Main pushes the insertion index only when it changes.
+window.loftRail.onDropSlot(showSlot);
