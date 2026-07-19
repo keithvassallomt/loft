@@ -10,6 +10,8 @@ const RAIL_MIME = 'application/x-loft-service';
 type Slot = import('../../main/railSlots').RailSlot;
 let slots: Slot[] = [];
 let dragging = false;
+/** A rail:state that arrived mid-drag; applied once the gesture ends (see render). */
+let pendingState: RailState | null = null;
 
 /** Measure every icon so main can compute insertion indices from real geometry. */
 function measure(): Slot[] {
@@ -38,6 +40,12 @@ function beginDrag(): void {
 function endDrag(): void {
   dragging = false;
   showSlot(-1);
+  // Apply whatever we refused to render mid-gesture.
+  if (pendingState) {
+    const s = pendingState;
+    pendingState = null;
+    render(s);
+  }
 }
 
 const initials = (name: string): string =>
@@ -119,6 +127,13 @@ function homeButton(active: boolean): HTMLButtonElement {
 }
 
 function render(state: RailState): void {
+  // Never re-render mid-drag. replaceChildren would destroy the very button holding pointer
+  // capture, and the replacement node never receives the pointerup — orphaning the gesture:
+  // `dragging` stuck true, dragEnd never sent, the indicator stranded, and every later hover
+  // reporting movement. A badge landing a second late is invisible next to that. Deferred
+  // state is flushed by endDrag(). This also makes the drag's measured geometry stay valid
+  // for its whole duration, which is why no mid-drag re-measure is needed.
+  if (dragging) { pendingState = state; return; }
   const divider = document.createElement('div');
   divider.className = 'divider';
   divider.setAttribute('aria-hidden', 'true');
@@ -126,9 +141,6 @@ function render(state: RailState): void {
     homeButton(state.managerActive),
     ...(state.items.length ? [divider, ...state.items.map(serviceButton)] : []),
   );
-  // A re-render mid-drag (e.g. a badge arrives) moves the icons under the cursor; main's
-  // cached geometry would be stale, so re-measure and re-send.
-  if (dragging) { slots = measure(); window.loftRail.dragBegin(slots); }
 }
 
 window.loftRail.onState(render);
@@ -145,7 +157,9 @@ const ours = (e: DragEvent): boolean =>
 root.addEventListener('dragenter', (e) => {
   if (!ours(e)) return;
   e.preventDefault();
-  beginDrag();
+  // Only on true entry — dragenter re-fires on every child boundary crossing, and each
+  // beginDrag() is a full re-measure plus an IPC send.
+  if (!dragging) beginDrag();
 });
 root.addEventListener('dragover', (e) => {
   if (!ours(e)) return;
