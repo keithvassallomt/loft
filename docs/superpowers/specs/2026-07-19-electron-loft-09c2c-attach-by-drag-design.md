@@ -1,6 +1,6 @@
 # Electron Loft 09c-2c — Attach by drag, and rail reordering
 
-**Status:** design approved (2026-07-19), pending implementation plan.
+**Status:** implemented, reviewed and smoke-tested (2026-07-19). Plan: `docs/superpowers/plans/2026-07-19-attach-by-drag.md`.
 
 Completes the direct-manipulation story for the unified window. **Attach** a detached service by dragging its titlebar handle onto the Loft rail, landing it in a chosen slot; **reorder** the rail by dragging an icon within it. Both show a live insertion indicator. Both drive engines that already exist.
 
