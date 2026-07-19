@@ -592,8 +592,14 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   ipcMain.on('rail:dragEnd', (_e, m: { id: string; releaseX: number; releaseY: number }) => {
-    const slots = railDrag?.slots ?? [];
+    const drag = railDrag;
     clearRailDrag();
+    // No cached geometry means this release does not belong to a gesture we tracked — e.g. a
+    // second pointer releasing after the first already ended one. Acting anyway would measure
+    // against an empty slot list, whose index is always 0, silently reordering the service to
+    // the front and persisting it.
+    if (!drag) return;
+    const slots = drag.slots;
     const d = getService(m.id);
     if (!d) return;
     const ids = railIds();
@@ -627,8 +633,10 @@ if (!app.requestSingleInstanceLock()) {
   // live view home (no reload), select it, and raise the Loft window — showService routes
   // through the GNOME helper / KWin because a plain focus() is refused on Wayland.
   ipcMain.on('rail:dropAttach', (_e, m: { id: string; clientY: number }) => {
-    const slots = railDrag?.slots ?? [];
+    const drag = railDrag;
     clearRailDrag();
+    if (!drag) return; // same reasoning as rail:dragEnd above
+    const slots = drag.slots;
     const d = getService(m.id);
     if (!d || config.services[m.id]?.detached !== true) return;
     setRailOrder(moveInOrder(railIds(), m.id, railSlotIndex(m.clientY, slots)));

@@ -11,9 +11,10 @@ window.loft.onSetService((name: string) => { nameEl.textContent = name; });
 // Loft window's rail to choose the slot it lands in. It must be the drag source rather
 // than the titlebar itself — the titlebar's drag region belongs to the compositor for
 // moving the window, and HTML5 drags cannot start there.
-// Named distinctly from rail.ts's own RAIL_MIME: both files are loaded as non-module
-// <script> tags (see the import()-type-query note atop rail.ts), so their top-level
-// declarations share one global scope — same string value, different identifier.
+// Named distinctly from rail.ts's own RAIL_MIME: neither file has a top-level
+// import/export (see the import()-type-query note atop rail.ts), so tsc treats both as
+// global scripts and their top-level declarations collide (TS2451) at compile time —
+// same string value, different identifier avoids that.
 const TITLEBAR_DRAG_MIME = 'application/x-loft-service';
 const attachEl = document.getElementById('attach') as HTMLButtonElement;
 let serviceId: string | null = null;

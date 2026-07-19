@@ -168,6 +168,7 @@ root.addEventListener('dragover', (e) => {
   window.loftRail.dragMove(e.clientX, e.clientY);
 });
 root.addEventListener('dragleave', (e) => {
+  if (!ours(e)) return;
   // Only when the pointer actually leaves the rail, not on every child transition.
   if (e.relatedTarget && root.contains(e.relatedTarget as Node)) return;
   endDrag();
