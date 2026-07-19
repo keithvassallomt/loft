@@ -42,6 +42,7 @@ function serviceButton(item: RailItem): HTMLButtonElement {
     // selects. setPointerCapture keeps the drag on this button even as the cursor crosses into
     // the content view (proven on Wayland). clientX is relative to the rail view — main decides.
     b.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return; // primary button only — middle/right fall through to contextmenu / nothing
       e.preventDefault();
       b.setPointerCapture(e.pointerId);
       b.classList.add('dragging');
@@ -53,6 +54,9 @@ function serviceButton(item: RailItem): HTMLButtonElement {
     };
     b.addEventListener('pointerup', end);
     b.addEventListener('pointercancel', () => b.classList.remove('dragging'));
+    // Keyboard activation (Enter/Space) dispatches a synthetic click with detail 0, not pointer events;
+    // mouse clicks (detail >= 1) stay owned by the pointer path above, so no double-fire.
+    b.addEventListener('click', (e) => { if (e.detail === 0) window.loftRail.select(item.id); });
   } else {
     // Sleeping / detached: plain click, unchanged (select / raise its window).
     b.addEventListener('click', () => window.loftRail.select(item.id));

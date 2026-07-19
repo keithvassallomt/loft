@@ -553,9 +553,13 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on('rail:menu', (_e, id: string) => loft?.popServiceMenu(id));
   ipcMain.on('rail:showManager', () => loft?.showManager());
   ipcMain.on('rail:dragEnd', (_e, m: { id: string; releaseX: number }) => {
-    if (railDragOutcome(m.releaseX, RAIL_WIDTH) === 'detach') { setDetached(m.id, true); return; }
     const d = getService(m.id);
-    if (d) showService(d); // released inside the rail ⇒ a normal click ⇒ select the tab
+    if (!d) return;
+    // A drag says "show me this": detach pops the service into its own window and raises it; a
+    // release inside the rail is a plain click that selects the tab. (The settings-toggle detach
+    // keeps its own "don't steal the screen" behaviour — this only applies to the drag gesture.)
+    if (railDragOutcome(m.releaseX, RAIL_WIDTH) === 'detach') setDetached(m.id, true);
+    showService(d);
   });
 
   // --- hub:* — the manager view (src/renderer/hub). Wiring lives in hubIpc.ts so it's
