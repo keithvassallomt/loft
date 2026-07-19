@@ -56,3 +56,32 @@ describe('rail bridge', () => {
     expect(ipc.listeners.has('rail:state')).toBe(false);
   });
 });
+
+describe('rail bridge — drag channels', () => {
+  it('sends drag geometry, movement, end and cross-window drop', () => {
+    const ipc = fakeIpc();
+    const b = buildRailBridge(ipc as never);
+    const slots = [{ id: 'slack', top: 50, height: 34 }];
+    b.dragBegin(slots);
+    b.dragMove(10, 120);
+    b.dragEnd('slack', -140, 120);
+    b.dropAttach('slack', 96);
+    expect(ipc.sent).toEqual([
+      ['rail:dragBegin', { slots }],
+      ['rail:dragMove', { clientX: 10, clientY: 120 }],
+      ['rail:dragEnd', { id: 'slack', releaseX: -140, releaseY: 120 }],
+      ['rail:dropAttach', { id: 'slack', clientY: 96 }],
+    ]);
+  });
+
+  it('delivers the drop-slot index and unsubscribes cleanly', () => {
+    const ipc = fakeIpc();
+    const b = buildRailBridge(ipc as never);
+    const cb = vi.fn();
+    const off = b.onDropSlot(cb);
+    ipc.listeners.get('rail:dropSlot')!(null, 2);
+    expect(cb).toHaveBeenCalledWith(2);
+    off();
+    expect(ipc.listeners.has('rail:dropSlot')).toBe(false);
+  });
+});
