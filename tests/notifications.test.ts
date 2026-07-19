@@ -42,23 +42,27 @@ function makeDeps(): NotificationsDeps & {
   pushHiddenCalls: Array<[string, boolean]>;
   focusCalls: string[];
   navigateCalls: Array<[string, string]>;
+  clickCalls: Array<[string, number]>;
 } {
   const pushDndCalls: Array<[string, boolean]> = [];
   const pushHiddenCalls: Array<[string, boolean]> = [];
   const focusCalls: string[] = [];
   const navigateCalls: Array<[string, string]> = [];
+  const clickCalls: Array<[string, number]> = [];
   return {
     displayName: (id) => id,
     serviceIconPath: (id) => `/icons/${id}.png`,
     sessionFetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(0) }),
     focusService: (id) => focusCalls.push(id),
     navigate: (id, url) => navigateCalls.push([id, url]),
+    click: (id, notifyId) => clickCalls.push([id, notifyId]),
     pushDnd: (id, v) => pushDndCalls.push([id, v]),
     pushHidden: (id, hidden) => pushHiddenCalls.push([id, hidden]),
     pushDndCalls,
     pushHiddenCalls,
     focusCalls,
     navigateCalls,
+    clickCalls,
   };
 }
 
@@ -230,5 +234,45 @@ describe('startNotifications', () => {
     expect(result).toBeUndefined();
     expect(consoleSpy).toHaveBeenCalledWith('notify failed:', expect.any(Error));
     consoleSpy.mockRestore();
+  });
+
+  it('routes a click to the page handler when the notification carries a notifyId', async () => {
+    const server = makeFakeServer();
+    connectNotificationServerMock.mockResolvedValue(server);
+    const deps = makeDeps();
+    const n = await startNotifications(deps);
+    n.registerService('slack');
+    await n.handle('slack', { title: 'Ann', body: 'hi', notifyId: 7 });
+
+    server.fireAction(1);
+    expect(deps.focusCalls).toEqual(['slack']);
+    expect(deps.clickCalls).toEqual([['slack', 7]]);
+    expect(deps.navigateCalls).toEqual([]);
+  });
+
+  it('still navigates by href when there is no notifyId (Messenger/Telegram)', async () => {
+    const server = makeFakeServer();
+    connectNotificationServerMock.mockResolvedValue(server);
+    const deps = makeDeps();
+    const n = await startNotifications(deps);
+    n.registerService('messenger');
+    await n.handle('messenger', { title: 'Ann', body: 'hi', href: '/t/123' });
+
+    server.fireAction(1);
+    expect(deps.navigateCalls).toEqual([['messenger', '/t/123']]);
+    expect(deps.clickCalls).toEqual([]);
+  });
+
+  it('prefers the notifyId when both are somehow present', async () => {
+    const server = makeFakeServer();
+    connectNotificationServerMock.mockResolvedValue(server);
+    const deps = makeDeps();
+    const n = await startNotifications(deps);
+    n.registerService('slack');
+    await n.handle('slack', { title: 'Ann', body: 'hi', href: '/x', notifyId: 3 });
+
+    server.fireAction(1);
+    expect(deps.clickCalls).toEqual([['slack', 3]]);
+    expect(deps.navigateCalls).toEqual([]);
   });
 });

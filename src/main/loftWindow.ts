@@ -268,6 +268,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
         pushDnd: (v) => sv.pushDnd(v),
         pushHidden: (v) => sv.pushHidden(v),
         navigate: (u) => sv.navigate(u),
+        notifyClick: (n) => sv.notifyClick(n),
         loadUrl: (u) => sv.loadUrl(u),
         reload: () => sv.reload(),
         clearAndReload: () => sv.clearAndReload(),

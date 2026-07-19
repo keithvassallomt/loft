@@ -10,6 +10,9 @@ export interface NotifyPayload {
   body: string;
   icon?: string;
   href?: string;
+  /** Token identifying the page-side Notification object, so its own click handler can be
+   *  replayed. Absent for the DOM-scraped services, which route by href instead. */
+  notifyId?: number;
 }
 
 export interface NotificationsDeps {
@@ -18,6 +21,8 @@ export interface NotificationsDeps {
   sessionFetch(id: string, url: string): Promise<{ ok: boolean; status: number; arrayBuffer(): Promise<ArrayBuffer> }>;
   focusService(id: string): void;
   navigate(id: string, url: string): void;
+  /** Replay the click into the page's own notification handler. */
+  click(id: string, notifyId: number): void;
   pushDnd(id: string, effectiveDnd: boolean): void;
   pushHidden(id: string, hidden: boolean): void;
 }
@@ -62,13 +67,16 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
     console.error('Failed to connect to org.freedesktop.Notifications; notifications disabled:', err);
   }
 
-  const pending = new Map<number, { id: string; href?: string }>();
+  const pending = new Map<number, { id: string; href?: string; notifyId?: number }>();
   server?.onActionDefault((notifId) => {
     const m = pending.get(notifId);
     if (!m) return;
     pending.delete(notifId);
     deps.focusService(m.id);
-    if (m.href) deps.navigate(m.id, m.href);
+    // Focus first: an app's own handler commonly calls window.focus() and should not race
+    // ours. A notifyId means the page owns the routing; href is the DOM-scrape path.
+    if (m.notifyId !== undefined) deps.click(m.id, m.notifyId);
+    else if (m.href) deps.navigate(m.id, m.href);
   });
 
   const pushDndToAll = (): void => {
@@ -136,7 +144,7 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
           body: p.body,
           imagePath,
         });
-        pending.set(notifId, { id, href: p.href });
+        pending.set(notifId, { id, href: p.href, notifyId: p.notifyId });
       } catch (err) {
         console.error('notify failed:', err);
       }
