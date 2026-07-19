@@ -60,7 +60,8 @@ describe('railSlotIndex', () => {
   });
 
   it('treats a point exactly on a midpoint as belonging to the lower slot', () => {
-    // 67 is exactly the first icon's midpoint: not yet past it, so still slot 0.
+    // 67 is exactly the first icon's midpoint. The test is `clientY < top + height/2`, so a
+    // point ON the midpoint is not "above" it — it belongs to the slot below. 66 still is.
     expect(railSlotIndex(67, SLOTS)).toBe(1);
     expect(railSlotIndex(66, SLOTS)).toBe(0);
   });
