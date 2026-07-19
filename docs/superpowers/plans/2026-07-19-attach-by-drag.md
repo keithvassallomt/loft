@@ -741,7 +741,20 @@ function beginDrag(): void {
 function endDrag(): void {
   dragging = false;
   showSlot(-1);
+  // Apply whatever we refused to render mid-gesture.
+  if (pendingState) {
+    const s = pendingState;
+    pendingState = null;
+    render(s);
+  }
 }
+```
+
+Also declare, beside `dragging`:
+
+```ts
+/** A rail:state that arrived mid-drag; applied once the gesture ends (see render). */
+let pendingState: RailState | null = null;
 ```
 
 **(b)** Replace the whole `if (!item.sleeping && !item.detached) { ... } else { ... }` block in `serviceButton` with the version below. Every icon is now draggable — position belongs to the service list, not to load state — and main decides what the gesture meant:
@@ -816,10 +829,17 @@ root.addEventListener('drop', (e) => {
 window.loftRail.onDropSlot(showSlot);
 ```
 
-**(d)** In `render`, re-measure if a re-render lands mid-drag (a badge arriving would otherwise leave main working from stale geometry). Replace the body of `render` with:
+**(d)** Defer re-renders that land mid-drag. `replaceChildren` destroys and recreates every icon button — including the one holding pointer capture — and the replacement node never receives the `pointerup`, orphaning the gesture. Replace the body of `render` with:
 
 ```ts
 function render(state: RailState): void {
+  // Never re-render mid-drag. replaceChildren would destroy the very button holding pointer
+  // capture, and the replacement node never receives the pointerup — orphaning the gesture:
+  // `dragging` stuck true, dragEnd never sent, the indicator stranded, and every later hover
+  // reporting movement. A badge landing a second late is invisible next to that. Deferred
+  // state is flushed by endDrag(). This also makes the drag's measured geometry stay valid
+  // for its whole duration, which is why no mid-drag re-measure is needed.
+  if (dragging) { pendingState = state; return; }
   const divider = document.createElement('div');
   divider.className = 'divider';
   divider.setAttribute('aria-hidden', 'true');
@@ -827,9 +847,6 @@ function render(state: RailState): void {
     homeButton(state.managerActive),
     ...(state.items.length ? [divider, ...state.items.map(serviceButton)] : []),
   );
-  // A re-render mid-drag (e.g. a badge arrives) moves the icons under the cursor; main's
-  // cached geometry would be stale, so re-measure and re-send.
-  if (dragging) { slots = measure(); window.loftRail.dragBegin(slots); }
 }
 ```
 
