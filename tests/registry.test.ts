@@ -34,4 +34,44 @@ describe('service registry', () => {
     const wa = getService('whatsapp')!;
     expect(effectiveUrl(wa, 'https://evil.example/')).toBe(wa.url);
   });
+
+  it('adds a missing scheme rather than handing loadURL something invalid', () => {
+    // The settings field's placeholder is a bare host, so this is what users type.
+    const el = getService('element')!;
+    expect(effectiveUrl(el, 'chat.example.org')).toBe('https://chat.example.org/');
+  });
+
+  it('lands Talk in the Talk app, not the NextCloud dashboard', () => {
+    // Talk is an app INSIDE NextCloud; the server root is the dashboard. Entering the
+    // server (which is what the field asks for) must still open Talk.
+    const talk = getService('talk')!;
+    expect(effectiveUrl(talk, 'https://cloud.example.com')).toBe('https://cloud.example.com/apps/spreed/');
+    expect(effectiveUrl(talk, 'https://cloud.example.com/')).toBe('https://cloud.example.com/apps/spreed/');
+    expect(effectiveUrl(talk, 'cloud.example.com')).toBe('https://cloud.example.com/apps/spreed/');
+  });
+
+  it('respects a NextCloud installed in a subdirectory', () => {
+    const talk = getService('talk')!;
+    expect(effectiveUrl(talk, 'https://example.com/nextcloud'))
+      .toBe('https://example.com/nextcloud/apps/spreed/');
+  });
+
+  it('does not double-append when the user already gave the Talk path', () => {
+    const talk = getService('talk')!;
+    expect(effectiveUrl(talk, 'https://cloud.example.com/apps/spreed/'))
+      .toBe('https://cloud.example.com/apps/spreed/');
+    expect(effectiveUrl(talk, 'https://cloud.example.com/apps/spreed'))
+      .toBe('https://cloud.example.com/apps/spreed');
+  });
+
+  it('leaves a self-hosted service with no app path alone', () => {
+    // Element Web's own root IS the app, so nothing should be appended to it.
+    const el = getService('element')!;
+    expect(effectiveUrl(el, 'https://chat.example.org/some/path')).toBe('https://chat.example.org/some/path');
+  });
+
+  it('falls back to the raw input if it cannot be parsed as a URL', () => {
+    const talk = getService('talk')!;
+    expect(effectiveUrl(talk, 'not a url')).toBe('not a url');
+  });
 });
