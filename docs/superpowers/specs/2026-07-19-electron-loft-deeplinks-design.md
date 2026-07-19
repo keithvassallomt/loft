@@ -1,6 +1,8 @@
 # Electron Loft — Per-service deep links: let the app route itself
 
-**Status:** design approved (2026-07-19), pending implementation plan.
+**Status:** implemented (2026-07-19). Plan: `docs/superpowers/plans/2026-07-19-deeplinks.md`.
+
+> **Amended after the final review.** Three defects found in the built feature changed two decisions below: notification ids are now scoped by a per-page-life **epoch** (they restart at 1 on every document load, so without it a click on a pre-reload banner routed to the WRONG conversation), and `close()` deliberately does **not** drop the entry. Both are described in place.
 
 Clicking a notification should land you in the conversation it came from. Today that works for Messenger and Telegram only. This makes it work for **WhatsApp, Slack, Element and NextCloud Talk** through one mechanism: invoke the web app's *own* notification click handler and let it route itself.
 
@@ -66,7 +68,13 @@ This yields exactly one invocation and prefers the standard path. **If WhatsApp'
 
 ### Bounded retention
 
-Retained instances are capped at the **50** most recent per view, evicted oldest-first, and dropped when the page calls `close()`. A service view lives for the whole session, so unbounded retention would be a slow leak.
+Retained instances are capped at the **50** most recent per view, evicted oldest-first. A service view lives for the whole session, so unbounded retention would be a slow leak. Main's `pending` map is capped the same way, at **200**.
+
+`close()` deliberately does **not** drop the entry. Our desktop banner outlives the page's object — it is posted with no expiry and persists in the notification list — and apps routinely auto-close their `Notification` seconds after showing it, or clear everything on `visibilitychange`, which our own focus-before-click ordering fires on the same FIFO IPC pipe. Evicting on close would make the click that immediately follows find nothing. The banner is ours, not the page's; the cap bounds lifetime instead.
+
+### Ids are scoped to a page life
+
+`notifyId` restarts at 1 on every document load, because the preload re-runs — while main's `pending` map is process-lifetime and pruned only on click. A banner posted before a reload would therefore collide with a new notification's id and replay the wrong handler. Each page life mints an **epoch**, carried out with the notification and required back as a parameter of `click(notifyId, epoch)`. Making it a required parameter rather than a separate check is the point: it cannot be forgotten at a call site. A mismatched epoch is inert — the same outcome as clicking an evicted notification.
 
 ## Non-goals
 
@@ -79,18 +87,18 @@ Retained instances are capped at the **50** most recent per view, evicted oldest
 
 | Unit | Change |
 |---|---|
-| `src/preload/notify/override.ts` | Return a retained instance; capture `onclick`, `click` listeners and `options.onClick`; expose `click(notifyId)` and `forget(notifyId)`. Keeps `Notification.prototype` and the `permission`/`requestPermission` shims exactly as they are. |
+| `src/preload/notify/override.ts` | Return a retained instance; capture `onclick`, `click` listeners and `options.onClick`; shim `onshow`/`onclose`/`onerror` so assigning them cannot throw and abort the app's setup; expose `click(notifyId, epoch)`. Keeps `Notification.prototype` and the `permission`/`requestPermission` shims exactly as they are. |
 | `src/preload/notify/notifyRegistry.ts` **(new, pure)** | The retention map: `remember`, `take`, eviction at 50. Pure and unit-testable, so the leak-prevention rule is covered by a test rather than by hope. |
 | `src/preload/notify/bridge.ts` | Assign `notifyId`, send it with `service:notify`, handle `service:notify-click` by invoking the retained handlers. |
 | `src/main/notifications/index.ts` | `pending` records carry `notifyId`; `ActionInvoked` routes to a new `click(serviceId, notifyId)` dep when present, else today's `navigate`. |
-| `src/main/index.ts` | Wire `click` to `host.notifyClick(notifyId)`; pass `notifyId` through from `service:notify`. |
-| `src/main/serviceView.ts` | `notifyClick(id)` → `safeSend('service:notify-click', id)`, beside the existing `navigate`. |
+| `src/main/index.ts` | Wire `click` to `host.notifyClick(notifyId, epoch)`; pass both through from `service:notify`. |
+| `src/main/serviceView.ts` | `notifyClick(notifyId, epoch)` → `safeSend('service:notify-click', { notifyId, epoch })`, beside the existing `navigate`. |
 
 ## Data flow
 
-**Create** — page calls `new Notification(...)` → override captures the instance and any handler, `notifyRegistry.remember()` returns a `notifyId` → `service:notify { title, body, icon, href: '', notifyId }` → main shows the desktop notification and records `pending[dbusId] = { id, href, notifyId }`.
+**Create** — page calls `new Notification(...)` → override captures the instance and any handler, `notifyRegistry.remember()` returns a `notifyId` → `service:notify { title, body, icon, href: '', notifyId, epoch }` → main shows the desktop notification and records `pending[dbusId] = { id, href, notifyId, epoch }`.
 
-**Click** — `ActionInvoked(dbusId)` → main focuses the service window (existing behaviour) → `notifyId` present ⇒ `service:notify-click { notifyId }` → preload takes the retained entry and invokes its handlers → **the app navigates itself**.
+**Click** — `ActionInvoked(dbusId)` → main focuses the service window (existing behaviour) → `notifyId` present ⇒ `service:notify-click { notifyId, epoch }` → preload takes the retained entry and invokes its handlers → **the app navigates itself**.
 
 Messenger and Telegram are unchanged: no `notifyId`, an `href`, today's `service:navigate`.
 
