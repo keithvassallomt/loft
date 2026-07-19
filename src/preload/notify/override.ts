@@ -1,10 +1,20 @@
 import { createNotifyRegistry } from './notifyRegistry';
 
-export interface OverrideNotice { title: string; body: string; icon: string; tag: string; notifyId: number }
+export interface OverrideNotice {
+  title: string; body: string; icon: string; tag: string;
+  notifyId: number;
+  /** Identifies the page life that minted `notifyId` (see `click`). */
+  epoch: string;
+}
 export interface OverrideHandle {
   setHidden(hidden: boolean): void;
-  /** Invoke the page's own click handler for a notification we relayed. */
-  click(notifyId: number): void;
+  /**
+   * Invoke the page's own click handler for a notification we relayed. `epoch` MUST match
+   * the page life that minted `notifyId`, or the click is ignored: ids restart at 1 on every
+   * document load, while main's pending map is process-lifetime, so a banner posted before a
+   * reload would otherwise replay a NEWER notification's handler and open the wrong chat.
+   */
+  click(notifyId: number, epoch: string): void;
 }
 
 /** What we hold on to per notification so its click can be replayed into the page. */
@@ -32,16 +42,20 @@ export function installNotificationOverride(
     // A no-op click, not the real one: `click` is still in its TDZ here, and with no stored
     // handle there is no registry to replay into anyway. Must satisfy OverrideHandle so a
     // caller in this branch cannot TypeError.
-    return (win.__loft_notify_handle as OverrideHandle) ?? { setHidden, click: () => {} };
+    return (win.__loft_notify_handle as OverrideHandle) ?? { setHidden, click: (): void => {} };
   }
   win.__loft_notify_installed = true;
 
   const registry = createNotifyRegistry<Captured>();
 
+  // One value per page life. The preload re-runs on every document load, so the registry's
+  // ids restart — this is what makes a pre-reload id fail to match instead of colliding.
+  const epoch = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
   const relay = (title: unknown, options: any, notifyId: number): void =>
     onNotify({
       title: String(title ?? ''), body: options?.body ?? '',
-      icon: options?.icon ?? '', tag: options?.tag ?? '', notifyId,
+      icon: options?.icon ?? '', tag: options?.tag ?? '', notifyId, epoch,
     });
 
   const Orig = win.Notification;
@@ -63,6 +77,19 @@ export function installNotificationOverride(
         set(fn: unknown) { captured.onclick = fn; },
       });
     } catch { /* ignore */ }
+    // Same hazard as onclick: these hit Notification.prototype's real setters on a
+    // slot-less object and throw "Illegal invocation". An app that sets one BEFORE its
+    // onclick would never register a click handler at all. Accept and ignore them.
+    for (const prop of ['onshow', 'onclose', 'onerror']) {
+      let stored: unknown;
+      try {
+        Object.defineProperty(self, prop, {
+          configurable: true,
+          get() { return stored; },
+          set(v: unknown) { stored = v; },
+        });
+      } catch { /* ignore */ }
+    }
     self.addEventListener = (type: string, fn: unknown): void => {
       if (type === 'click' && typeof fn === 'function') captured.listeners.push(fn);
     };
@@ -71,7 +98,12 @@ export function installNotificationOverride(
       const i = captured.listeners.indexOf(fn);
       if (i >= 0) captured.listeners.splice(i, 1);
     };
-    self.close = (): void => { registry.forget(notifyId); };
+    // Deliberately NOT registry.forget(). Our desktop banner outlives the page's object —
+    // it is posted with no expiry — and apps routinely close their Notification seconds
+    // after showing it, or clear everything on visibilitychange, which our own
+    // focus-before-click ordering fires. Evicting here would make the click that follows
+    // find nothing. The registry's cap bounds lifetime instead.
+    self.close = (): void => { /* no-op: the banner is ours, not the page's */ };
     return self;
   }
 
@@ -81,15 +113,24 @@ export function installNotificationOverride(
    * no internal EventTarget slots and dispatching throws "Illegal invocation" — the same
    * error Slack already provokes against the old dud object.
    */
-  const click = (notifyId: number): void => {
+  const click = (notifyId: number, clickEpoch: string): void => {
+    // From a previous page life: its ids have been reused by this one, so acting would
+    // misroute. Doing nothing matches what a click on an evicted notification does.
+    if (clickEpoch !== epoch) return;
     const c = registry.take(notifyId);
     if (!c) return;
     const event = {
       type: 'click',
       target: c.instance,
       currentTarget: c.instance,
+      bubbles: false,
+      cancelable: false,
+      defaultPrevented: false,
+      isTrusted: false,
+      composedPath: (): unknown[] => [],
       preventDefault(): void { /* apps call these; they must not throw */ },
       stopPropagation(): void { /* ditto */ },
+      stopImmediatePropagation(): void { /* ditto */ },
     };
     const call = (fn: unknown): void => {
       if (typeof fn !== 'function') return;

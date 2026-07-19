@@ -39,7 +39,7 @@ export interface ServiceHost {
   /** Ask the page to navigate to a conversation (notification click). */
   navigate(url: string): void;
   /** Replay a notification click into the page's own handler (notification click). */
-  notifyClick(notifyId: number): void;
+  notifyClick(notifyId: number, epoch: string): void;
   /** Navigate, hiding any stale recovery overlay and re-arming stuck detection. */
   loadUrl(url: string): void;
   /** Reload and re-arm stuck detection. */

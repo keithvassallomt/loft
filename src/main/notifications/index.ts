@@ -13,6 +13,8 @@ export interface NotifyPayload {
   /** Token identifying the page-side Notification object, so its own click handler can be
    *  replayed. Absent for the DOM-scraped services, which route by href instead. */
   notifyId?: number;
+  /** The page life that minted `notifyId`; sent back so a pre-reload id cannot misroute. */
+  epoch?: string;
 }
 
 export interface NotificationsDeps {
@@ -22,7 +24,7 @@ export interface NotificationsDeps {
   focusService(id: string): void;
   navigate(id: string, url: string): void;
   /** Replay the click into the page's own notification handler. */
-  click(id: string, notifyId: number): void;
+  click(id: string, notifyId: number, epoch: string): void;
   pushDnd(id: string, effectiveDnd: boolean): void;
   pushHidden(id: string, hidden: boolean): void;
 }
@@ -67,7 +69,11 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
     console.error('Failed to connect to org.freedesktop.Notifications; notifications disabled:', err);
   }
 
-  const pending = new Map<number, { id: string; href?: string; notifyId?: number }>();
+  // Clicking a banner older than this does nothing rather than routing — the same trade the
+  // page-side registry makes. Without a cap this grows for the whole process lifetime.
+  const PENDING_CAP = 200;
+
+  const pending = new Map<number, { id: string; href?: string; notifyId?: number; epoch?: string }>();
   server?.onActionDefault((notifId) => {
     const m = pending.get(notifId);
     if (!m) return;
@@ -75,7 +81,7 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
     deps.focusService(m.id);
     // Focus first: an app's own handler commonly calls window.focus() and should not race
     // ours. A notifyId means the page owns the routing; href is the DOM-scrape path.
-    if (m.notifyId !== undefined) deps.click(m.id, m.notifyId);
+    if (m.notifyId !== undefined && m.epoch !== undefined) deps.click(m.id, m.notifyId, m.epoch);
     else if (m.href) deps.navigate(m.id, m.href);
   });
 
@@ -144,7 +150,13 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
           body: p.body,
           imagePath,
         });
-        pending.set(notifId, { id, href: p.href, notifyId: p.notifyId });
+        pending.set(notifId, { id, href: p.href, notifyId: p.notifyId, epoch: p.epoch });
+        // Map iterates in insertion order, so the first key is the oldest.
+        while (pending.size > PENDING_CAP) {
+          const oldest: number | undefined = pending.keys().next().value;
+          if (oldest === undefined) break;
+          pending.delete(oldest);
+        }
       } catch (err) {
         console.error('notify failed:', err);
       }

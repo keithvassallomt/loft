@@ -42,20 +42,20 @@ function makeDeps(): NotificationsDeps & {
   pushHiddenCalls: Array<[string, boolean]>;
   focusCalls: string[];
   navigateCalls: Array<[string, string]>;
-  clickCalls: Array<[string, number]>;
+  clickCalls: Array<[string, number, string]>;
 } {
   const pushDndCalls: Array<[string, boolean]> = [];
   const pushHiddenCalls: Array<[string, boolean]> = [];
   const focusCalls: string[] = [];
   const navigateCalls: Array<[string, string]> = [];
-  const clickCalls: Array<[string, number]> = [];
+  const clickCalls: Array<[string, number, string]> = [];
   return {
     displayName: (id) => id,
     serviceIconPath: (id) => `/icons/${id}.png`,
     sessionFetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(0) }),
     focusService: (id) => focusCalls.push(id),
     navigate: (id, url) => navigateCalls.push([id, url]),
-    click: (id, notifyId) => clickCalls.push([id, notifyId]),
+    click: (id, notifyId, epoch) => clickCalls.push([id, notifyId, epoch]),
     pushDnd: (id, v) => pushDndCalls.push([id, v]),
     pushHidden: (id, hidden) => pushHiddenCalls.push([id, hidden]),
     pushDndCalls,
@@ -242,11 +242,11 @@ describe('startNotifications', () => {
     const deps = makeDeps();
     const n = await startNotifications(deps);
     n.registerService('slack');
-    await n.handle('slack', { title: 'Ann', body: 'hi', notifyId: 7 });
+    await n.handle('slack', { title: 'Ann', body: 'hi', notifyId: 7, epoch: 'e1' });
 
     server.fireAction(1);
     expect(deps.focusCalls).toEqual(['slack']);
-    expect(deps.clickCalls).toEqual([['slack', 7]]);
+    expect(deps.clickCalls).toEqual([['slack', 7, 'e1']]);
     expect(deps.navigateCalls).toEqual([]);
   });
 
@@ -269,10 +269,24 @@ describe('startNotifications', () => {
     const deps = makeDeps();
     const n = await startNotifications(deps);
     n.registerService('slack');
-    await n.handle('slack', { title: 'Ann', body: 'hi', href: '/x', notifyId: 3 });
+    await n.handle('slack', { title: 'Ann', body: 'hi', href: '/x', notifyId: 3, epoch: 'e1' });
 
     server.fireAction(1);
-    expect(deps.clickCalls).toEqual([['slack', 3]]);
+    expect(deps.clickCalls).toEqual([['slack', 3, 'e1']]);
+    expect(deps.navigateCalls).toEqual([]);
+  });
+
+  it('focuses only when the notification carries neither a notifyId nor an href', async () => {
+    const server = makeFakeServer();
+    connectNotificationServerMock.mockResolvedValue(server);
+    const deps = makeDeps();
+    const n = await startNotifications(deps);
+    n.registerService('slack');
+    await n.handle('slack', { title: 'Ann', body: 'hi' });
+
+    server.fireAction(1);
+    expect(deps.focusCalls).toEqual(['slack']);
+    expect(deps.clickCalls).toEqual([]);
     expect(deps.navigateCalls).toEqual([]);
   });
 });

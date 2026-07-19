@@ -38,7 +38,7 @@ describe('installNotificationOverride', () => {
 
     new win.Notification('Ann', { body: 'hi', icon: 'https://x/a.png', tag: 't1' });
     expect(onNotify).toHaveBeenCalledWith(
-      { title: 'Ann', body: 'hi', icon: 'https://x/a.png', tag: 't1', notifyId: expect.any(Number) },
+      { title: 'Ann', body: 'hi', icon: 'https://x/a.png', tag: 't1', notifyId: expect.any(Number), epoch: expect.any(String) },
     );
   });
 
@@ -48,7 +48,7 @@ describe('installNotificationOverride', () => {
     installNotificationOverride(win, doc, onNotify);
     win.ServiceWorkerRegistration.prototype.showNotification('Grp', { body: 'yo' });
     expect(onNotify).toHaveBeenCalledWith(
-      { title: 'Grp', body: 'yo', icon: '', tag: '', notifyId: expect.any(Number) },
+      { title: 'Grp', body: 'yo', icon: '', tag: '', notifyId: expect.any(Number), epoch: expect.any(String) },
     );
   });
 
@@ -67,6 +67,9 @@ describe('installNotificationOverride', () => {
   const lastNotifyId = (onNotify: { mock: { calls: unknown[][] } }): number =>
     (onNotify.mock.calls[onNotify.mock.calls.length - 1][0] as { notifyId: number }).notifyId;
 
+  const lastEpoch = (onNotify: { mock: { calls: unknown[][] } }): string =>
+    (onNotify.mock.calls[onNotify.mock.calls.length - 1][0] as { epoch: string }).epoch;
+
   it('invokes an onclick the page assigned after construction', () => {
     const { win, doc } = fakeEnv();
     const onNotify = vi.fn();
@@ -74,7 +77,7 @@ describe('installNotificationOverride', () => {
     const n = new win.Notification('Ann', { body: 'hi' });
     const clicked = vi.fn();
     n.onclick = clicked;
-    h.click(lastNotifyId(onNotify));
+    h.click(lastNotifyId(onNotify), lastEpoch(onNotify));
     expect(clicked).toHaveBeenCalledTimes(1);
   });
 
@@ -98,7 +101,7 @@ describe('installNotificationOverride', () => {
     const clicked = vi.fn();
     n.addEventListener('click', clicked);
     n.addEventListener('close', vi.fn()); // a non-click listener must not be invoked
-    h.click(lastNotifyId(onNotify));
+    h.click(lastNotifyId(onNotify), lastEpoch(onNotify));
     expect(clicked).toHaveBeenCalledTimes(1);
   });
 
@@ -109,7 +112,7 @@ describe('installNotificationOverride', () => {
     const h = installNotificationOverride(win, doc, onNotify);
     const optionClick = vi.fn();
     new win.Notification('Ann', { body: 'hi', onClick: optionClick });
-    h.click(lastNotifyId(onNotify));
+    h.click(lastNotifyId(onNotify), lastEpoch(onNotify));
     expect(optionClick).toHaveBeenCalledTimes(1);
   });
 
@@ -122,7 +125,7 @@ describe('installNotificationOverride', () => {
     const listener = vi.fn();
     const n = new win.Notification('Ann', { body: 'hi', onClick: optionClick });
     n.addEventListener('click', listener);
-    h.click(lastNotifyId(onNotify));
+    h.click(lastNotifyId(onNotify), lastEpoch(onNotify));
     expect(listener).toHaveBeenCalledTimes(1);
     expect(optionClick).not.toHaveBeenCalled();
   });
@@ -138,7 +141,7 @@ describe('installNotificationOverride', () => {
       e.stopPropagation();
       seen = e;
     };
-    expect(() => h.click(lastNotifyId(onNotify))).not.toThrow();
+    expect(() => h.click(lastNotifyId(onNotify), lastEpoch(onNotify))).not.toThrow();
     expect(seen.type).toBe('click');
   });
 
@@ -150,7 +153,7 @@ describe('installNotificationOverride', () => {
     n.onclick = () => { throw new Error('boom'); };
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      expect(() => h.click(lastNotifyId(onNotify))).not.toThrow();
+      expect(() => h.click(lastNotifyId(onNotify), lastEpoch(onNotify))).not.toThrow();
       // Swallowing silently would hide a real page bug from anyone debugging it.
       expect(errors).toHaveBeenCalled();
     } finally {
@@ -166,13 +169,28 @@ describe('installNotificationOverride', () => {
     const clicked = vi.fn();
     n.onclick = clicked;
     const id = lastNotifyId(onNotify);
-    h.click(id);
-    h.click(id);       // the entry was taken by the first click
-    h.click(123456);   // never issued
+    const ep = lastEpoch(onNotify);
+    h.click(id, ep);
+    h.click(id, ep);       // the entry was taken by the first click
+    h.click(123456, ep);   // never issued
     expect(clicked).toHaveBeenCalledTimes(1);
   });
 
-  it('forgets a notification the page closed', () => {
+  it('ignores a click whose epoch is from a previous page life', () => {
+    // The registry restarts at 1 on every document load, so a pre-reload id would otherwise
+    // collide with a new notification's and open the WRONG conversation.
+    const { win, doc } = fakeEnv();
+    const onNotify = vi.fn();
+    const h = installNotificationOverride(win, doc, onNotify);
+    const n = new win.Notification('Ann', { body: 'hi' });
+    const clicked = vi.fn();
+    n.onclick = clicked;
+    h.click(lastNotifyId(onNotify), 'some-older-page-life');
+    expect(clicked).not.toHaveBeenCalled();
+  });
+
+  it('still routes a click after the page closed the notification', () => {
+    // Our banner outlives the page's object, and apps auto-close theirs routinely.
     const { win, doc } = fakeEnv();
     const onNotify = vi.fn();
     const h = installNotificationOverride(win, doc, onNotify);
@@ -180,7 +198,37 @@ describe('installNotificationOverride', () => {
     const clicked = vi.fn();
     n.onclick = clicked;
     n.close();
-    h.click(lastNotifyId(onNotify));
-    expect(clicked).not.toHaveBeenCalled();
+    h.click(lastNotifyId(onNotify), lastEpoch(onNotify));
+    expect(clicked).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts onshow/onclose/onerror so they cannot abort the app\'s setup', () => {
+    // An app setting onshow BEFORE onclick would otherwise throw and never register a
+    // click handler at all.
+    const { win, doc } = fakeEnv();
+    const onNotify = vi.fn();
+    const h = installNotificationOverride(win, doc, onNotify);
+    const n = new win.Notification('Ann', { body: 'hi' });
+    const clicked = vi.fn();
+    expect(() => {
+      n.onshow = () => {};
+      n.onclose = () => {};
+      n.onerror = () => {};
+      n.onclick = clicked;
+    }).not.toThrow();
+    h.click(lastNotifyId(onNotify), lastEpoch(onNotify));
+    expect(clicked).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives handlers an event whose propagation methods are all safe to call', () => {
+    const { win, doc } = fakeEnv();
+    const onNotify = vi.fn();
+    const h = installNotificationOverride(win, doc, onNotify);
+    const n = new win.Notification('Ann', { body: 'hi' });
+    n.onclick = (e: { stopImmediatePropagation(): void; composedPath(): unknown[] }) => {
+      e.stopImmediatePropagation();
+      e.composedPath();
+    };
+    expect(() => h.click(lastNotifyId(onNotify), lastEpoch(onNotify))).not.toThrow();
   });
 });

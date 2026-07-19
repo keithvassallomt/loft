@@ -44,7 +44,7 @@ export interface ServiceView {
   /** Ask the page to navigate to a conversation (notification click). */
   navigate(url: string): void;
   /** Replay a notification click into the page's own handler. */
-  notifyClick(notifyId: number): void;
+  notifyClick(notifyId: number, epoch: string): void;
   /** Navigate, hiding any stale recovery overlay and re-arming stuck detection. */
   loadUrl(url: string): void;
   /** Reload and re-arm stuck detection. */
@@ -322,7 +322,7 @@ export function createServiceView(def: ServiceDef, cfg: LoftConfig): ServiceView
     pushDnd: (enabled) => safeSend(serviceView, 'service:dnd', enabled),
     pushHidden: (hidden) => safeSend(serviceView, 'service:visibility', hidden),
     navigate: (url) => safeSend(serviceView, 'service:navigate', url),
-    notifyClick: (notifyId) => safeSend(serviceView, 'service:notify-click', notifyId),
+    notifyClick: (notifyId, epoch) => safeSend(serviceView, 'service:notify-click', { notifyId, epoch }),
     loadUrl,
     reload: () => {
       hideRecovery();

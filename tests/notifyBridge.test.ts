@@ -124,13 +124,14 @@ describe('startNotifyBridge routing', () => {
     expect(doc.visibilityState).toBe('visible');
   });
 
-  it('sends the notifyId out with a relayed notification', () => {
+  it('sends the notifyId and epoch out with a relayed notification', () => {
     const { win, doc, ipc } = fakeEnv();
     startNotifyBridge('slack', { ipc, win, doc });
     new win.Notification('Ann', { body: 'hi' });
     const sent = ipc.send.mock.calls.find((c) => c[0] === 'service:notify');
     expect(sent).toBeTruthy();
     expect((sent![1] as { notifyId: number }).notifyId).toEqual(expect.any(Number));
+    expect((sent![1] as { epoch: string }).epoch).toEqual(expect.any(String));
   });
 
   it('routes service:notify-click into the page handler', () => {
@@ -140,16 +141,17 @@ describe('startNotifyBridge routing', () => {
     const clicked = vi.fn();
     n.onclick = clicked;
     const sent = ipc.send.mock.calls.find((c) => c[0] === 'service:notify')!;
-    const { notifyId } = sent[1] as { notifyId: number };
-    handlers['service:notify-click']({}, notifyId);
+    const { notifyId, epoch } = sent[1] as { notifyId: number; epoch: string };
+    handlers['service:notify-click']({}, { notifyId, epoch });
     expect(clicked).toHaveBeenCalledTimes(1);
   });
 
   it('treats a malformed service:notify-click as inert — no throw, no handler fired', () => {
     // What this actually pins down: a bad payload from main is harmless. It does NOT prove
-    // the `typeof notifyId === 'number'` guard does runtime work — without it the id would
-    // just miss in the registry's Map and still fire nothing. The guard earns its place by
-    // narrowing `unknown` to `number` for the call site, which no runtime test can observe.
+    // the `typeof notifyId === 'number' && typeof epoch === 'string'` guard does runtime
+    // work — without it the id would just miss in the registry's Map and still fire nothing.
+    // The guard earns its place by narrowing `unknown` to the expected shape for the call
+    // site, which no runtime test can observe.
     const { win, doc, ipc, handlers } = fakeEnv();
     startNotifyBridge('slack', { ipc, win, doc });
     const n = new win.Notification('Ann', { body: 'hi' });
@@ -157,6 +159,8 @@ describe('startNotifyBridge routing', () => {
     n.onclick = clicked;
     expect(() => handlers['service:notify-click']({}, 'nope')).not.toThrow();
     expect(() => handlers['service:notify-click']({}, undefined)).not.toThrow();
+    expect(() => handlers['service:notify-click']({}, { notifyId: 'nope', epoch: 'x' })).not.toThrow();
+    expect(() => handlers['service:notify-click']({}, { notifyId: 1 })).not.toThrow();
     expect(clicked).not.toHaveBeenCalled();
   });
 });

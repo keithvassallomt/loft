@@ -700,10 +700,10 @@ if (!app.requestSingleInstanceLock()) {
     tray?.setBadge(sw.def.id, payload.count);
   });
 
-  ipcMain.on('service:notify', (e, p?: { title?: string; body?: string; icon?: string; href?: string; notifyId?: number }) => {
+  ipcMain.on('service:notify', (e, p?: { title?: string; body?: string; icon?: string; href?: string; notifyId?: number; epoch?: string }) => {
     const sw = findBySenderId(e.sender.id);
     if (!sw || !p || typeof p.title !== 'string' || typeof p.body !== 'string') return;
-    void notifications?.handle(sw.def.id, { title: p.title, body: p.body, icon: p.icon, href: p.href, notifyId: p.notifyId });
+    void notifications?.handle(sw.def.id, { title: p.title, body: p.body, icon: p.icon, href: p.href, notifyId: p.notifyId, epoch: p.epoch });
   });
 
   app.whenReady().then(async () => {
@@ -789,7 +789,7 @@ if (!app.requestSingleInstanceLock()) {
         // notification would then spawn a second, detached window for it.
         focusService: (id) => { const d = getService(id); if (d) showService(d); },
         navigate: (id, url) => hostOf(id)?.navigate(url),
-        click: (id, notifyId) => hostOf(id)?.notifyClick(notifyId),
+        click: (id, notifyId, epoch) => hostOf(id)?.notifyClick(notifyId, epoch),
         pushDnd: (id, v) => hostOf(id)?.pushDnd(v),
         pushHidden: (id, hidden) => hostOf(id)?.pushHidden(hidden),
       });

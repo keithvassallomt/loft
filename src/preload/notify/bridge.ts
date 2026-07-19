@@ -67,7 +67,9 @@ export function startNotifyBridge(serviceId: string, deps: BridgeDeps): void {
     }
     // notifyId, not href: these services give no conversation id, so the click is routed by
     // replaying it into the app's own handler rather than by navigating to a URL.
-    ipc.send('service:notify', { title: n.title, body: n.body, icon, href: '', notifyId: n.notifyId });
+    ipc.send('service:notify', {
+      title: n.title, body: n.body, icon, href: '', notifyId: n.notifyId, epoch: n.epoch,
+    });
   }
 
   if (serviceId === 'slack') startSlackAvatarScanner(doc);
@@ -110,9 +112,13 @@ export function startNotifyBridge(serviceId: string, deps: BridgeDeps): void {
     }
   });
 
-  // Main clicked one of our banners: hand it back to the page's own handler.
-  ipc.on('service:notify-click', (_e: unknown, notifyId?: unknown) => {
-    if (typeof notifyId === 'number') overrideHandle.click(notifyId);
+  // Main clicked one of our banners: hand it back to the page's own handler. The epoch must
+  // match this page life — see OverrideHandle.click.
+  ipc.on('service:notify-click', (_e: unknown, m?: unknown) => {
+    const p = m as { notifyId?: unknown; epoch?: unknown } | undefined;
+    if (typeof p?.notifyId === 'number' && typeof p?.epoch === 'string') {
+      overrideHandle.click(p.notifyId, p.epoch);
+    }
   });
 }
 

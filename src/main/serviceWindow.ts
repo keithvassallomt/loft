@@ -158,7 +158,7 @@ export function createServiceWindow(
     pushDnd: (enabled: boolean) => sv.pushDnd(enabled),
     pushHidden: (hidden: boolean) => sv.pushHidden(hidden),
     navigate: (url: string) => sv.navigate(url),
-    notifyClick: (notifyId: number) => sv.notifyClick(notifyId),
+    notifyClick: (notifyId: number, epoch: string) => sv.notifyClick(notifyId, epoch),
     loadUrl: (url: string) => sv.loadUrl(url),
     reload: () => sv.reload(),
     clearAndReload: () => sv.clearAndReload(),
