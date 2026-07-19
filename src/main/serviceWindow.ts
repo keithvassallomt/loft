@@ -80,6 +80,15 @@ export function createServiceWindow(
   window.contentView.addChildView(titlebar);
   const [w0, h0] = window.getContentSize();
   sv.mount(window, computeLayout(w0, h0).content); // above the titlebar, as before
+  // This window hosts exactly ONE service, so its view is by definition the drawn one — say so
+  // rather than inheriting whatever the previous host left behind. A view moved in from the Loft
+  // window carries that window's TAB state: loftWindow.attach() sets visible=false and only
+  // select() sets it back, so a service that was loaded but never switched to arrives hidden,
+  // and mount() faithfully re-asserts that (serviceView.ts) — leaving this window drawing
+  // nothing but its titlebar over an unpainted content rect. Fresh views default to visible, so
+  // this only ever mattered for the moved-in case. Unconditional: `minimized` hides the WINDOW,
+  // never the view inside it.
+  sv.setVisible(true);
   relayout();
   window.on('resize', relayout);
 
