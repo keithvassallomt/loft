@@ -78,6 +78,18 @@ describe('installNotificationOverride', () => {
     expect(clicked).toHaveBeenCalledTimes(1);
   });
 
+  it('reads back the onclick the page assigned', () => {
+    // The accessor stores into the captured record; reading must return the same function,
+    // because apps commonly check or re-wrap their own handler.
+    const { win, doc } = fakeEnv();
+    const onNotify = vi.fn();
+    installNotificationOverride(win, doc, onNotify);
+    const n = new win.Notification('Ann', { body: 'hi' });
+    const clicked = vi.fn();
+    n.onclick = clicked;
+    expect(n.onclick).toBe(clicked);
+  });
+
   it('invokes click listeners added with addEventListener', () => {
     const { win, doc } = fakeEnv();
     const onNotify = vi.fn();
@@ -130,13 +142,20 @@ describe('installNotificationOverride', () => {
     expect(seen.type).toBe('click');
   });
 
-  it('contains a handler that throws', () => {
+  it('contains a handler that throws, and logs it', () => {
     const { win, doc } = fakeEnv();
     const onNotify = vi.fn();
     const h = installNotificationOverride(win, doc, onNotify);
     const n = new win.Notification('Ann', { body: 'hi' });
     n.onclick = () => { throw new Error('boom'); };
-    expect(() => h.click(lastNotifyId(onNotify))).not.toThrow();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(() => h.click(lastNotifyId(onNotify))).not.toThrow();
+      // Swallowing silently would hide a real page bug from anyone debugging it.
+      expect(errors).toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it('does nothing for an unknown id, and only fires a handler once', () => {

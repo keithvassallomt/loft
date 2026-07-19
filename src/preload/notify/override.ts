@@ -29,7 +29,10 @@ export function installNotificationOverride(
   };
 
   if (win.__loft_notify_installed) {
-    return (win.__loft_notify_handle as OverrideHandle) ?? { setHidden };
+    // A no-op click, not the real one: `click` is still in its TDZ here, and with no stored
+    // handle there is no registry to replay into anyway. Must satisfy OverrideHandle so a
+    // caller in this branch cannot TypeError.
+    return (win.__loft_notify_handle as OverrideHandle) ?? { setHidden, click: () => {} };
   }
   win.__loft_notify_installed = true;
 
