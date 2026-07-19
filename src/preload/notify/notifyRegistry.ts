@@ -33,8 +33,11 @@ export function createNotifyRegistry<T>(cap = 50): NotifyRegistry<T> {
       return id;
     },
     take(id) {
+      // has(), not a value check: T is unconstrained, so `undefined` can be a legitimate
+      // stored value and must still be removed. Gating on the value would leave it behind.
+      if (!entries.has(id)) return undefined;
       const v = entries.get(id);
-      if (v !== undefined) entries.delete(id);
+      entries.delete(id);
       return v;
     },
     forget(id) { entries.delete(id); },

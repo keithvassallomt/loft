@@ -23,6 +23,15 @@ describe('createNotifyRegistry', () => {
     expect(r.take(9999)).toBeUndefined();
   });
 
+  it('removes an entry even when the stored value is legitimately undefined', () => {
+    const r = createNotifyRegistry<string | undefined>();
+    const id = r.remember(undefined);
+    expect(r.take(id)).toBeUndefined();
+    // The point: it really went, rather than merely returning undefined while still stored.
+    expect(r.size()).toBe(0);
+    expect(r.take(id)).toBeUndefined();
+  });
+
   it('forget drops an entry without retrieving it', () => {
     const r = createNotifyRegistry<string>();
     const id = r.remember('x');
