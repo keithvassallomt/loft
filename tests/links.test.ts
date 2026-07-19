@@ -76,6 +76,18 @@ describe('classifyNavigation (will-navigate / in-place)', () => {
     expect(classifyNavigation('messenger', cur, 'https://www.facebook.com/someuser/posts/9')).toBe('external');
     expect(classifyNavigation('messenger', cur, 'https://youtube.com/x')).toBe('external');
   });
+  it('keeps every leg of Element\'s cross-origin login chain in-app', () => {
+    // Element logs in by redirecting the TOP-LEVEL view: app.element.io -> the homeserver's
+    // SSO endpoint -> possibly an identity provider -> back with a login token. Homeservers
+    // and IdPs are arbitrary, so there is nothing to allow-list; sending any leg to the
+    // browser strands the flow there and the callback can never return to Loft.
+    const app = 'https://app.element.io/';
+    expect(classifyNavigation('element', app, 'https://matrix.example.org/_matrix/client/v3/login/sso/redirect')).toBe('in-app');
+    expect(classifyNavigation('element', app, 'https://keycloak.example.org/realms/x/protocol/openid-connect/auth')).toBe('in-app');
+    expect(classifyNavigation('element', 'https://keycloak.example.org/x', `${app}#/login_token=abc`)).toBe('in-app');
+    // Self-hosted Element behaves the same way.
+    expect(classifyNavigation('element', 'https://chat.example.org/', 'https://sso.example.org/auth')).toBe('in-app');
+  });
   it('never hijacks an unparseable target', () => {
     expect(classifyNavigation('messenger', 'https://www.facebook.com/messages', 'javascript:void 0')).toBe('in-app');
     expect(classifyNavigation('whatsapp', 'https://web.whatsapp.com/', 'not a url')).toBe('in-app');

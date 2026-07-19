@@ -57,9 +57,20 @@ export function messengerKeepsInApp(targetUrl: string): boolean {
 /**
  * A top-level navigation of the service view (will-navigate). Cross-origin leaves;
  * same-origin stays — except Messenger, which additionally must leave when it exits
- * the messaging app (that's Bug 1: a Facebook link replacing the Messenger view).
+ * the messaging app (that's Bug 1: a Facebook link replacing the Messenger view), and
+ * except Element, whose login is inherently cross-origin (see below).
  */
 export function classifyNavigation(serviceId: string, currentUrl: string, targetUrl: string): LinkAction {
+  // Element logs in by redirecting the TOP-LEVEL view through a cross-origin chain:
+  // app.element.io -> the homeserver's SSO endpoint -> often an identity provider -> back
+  // with a login token. Homeservers and IdPs are arbitrary, so unlike Messenger's auth
+  // paths there is nothing to allow-list. Sending any leg to the browser strands the whole
+  // flow there — the user logs in outside Loft and the callback can never come back.
+  //
+  // Costless, because a top-level navigation is not how Element opens a link the user
+  // clicked: those are target=_blank / window.open, which classifyWindowOpen still sends
+  // to the browser. A cross-origin *navigation* here is essentially always auth.
+  if (serviceId === 'element') return 'in-app';
   if (!isSameOrigin(currentUrl, targetUrl)) return 'external';
   if (serviceId === 'messenger') return messengerKeepsInApp(targetUrl) ? 'in-app' : 'external';
   return 'in-app';
