@@ -26,13 +26,18 @@
   <Modal
     title={`Add ${svc.displayName}`}
     confirmLabel="Add"
-    confirmDisabled={urlDraft.trim() === ''}
+    confirmDisabled={svc.serverRequired && urlDraft.trim() === ''}
     onConfirm={confirmAdd}
     onCancel={() => (showUrlModal = false)}
   >
     <label class="field">
-      <span>Server URL</span>
+      <span>Server URL{svc.serverRequired ? '' : ' (optional)'}</span>
       <input bind:value={urlDraft} placeholder="cloud.example.com" />
+      <!-- A service with a real default (Element) must be addable in one click; only a
+           service with no central instance (Talk) can insist on a server. -->
+      {#if !svc.serverRequired}
+        <small class="hint">Leave blank to use {svc.defaultUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')}</small>
+      {/if}
     </label>
   </Modal>
 {/if}
@@ -44,4 +49,5 @@
   .pill { border: 0; border-radius: 999px; padding: 5px 16px; background: var(--accent); color: #fff; cursor: pointer; font: inherit; }
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field input { padding: 8px; border-radius: 8px; border: 1px solid var(--divider); background: var(--bg); color: var(--fg); }
+  .field .hint { opacity: 0.6; font-size: 0.85em; }
 </style>

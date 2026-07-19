@@ -35,8 +35,11 @@
 
   {#if svc.selfHosted}
     <label class="field">
-      <span>Server URL</span>
+      <span>Server URL{svc.serverRequired ? '' : ' (optional)'}</span>
       <input bind:value={urlDraft} placeholder="cloud.example.com" onchange={() => set({ customUrl: urlDraft.trim() })} />
+      {#if !svc.serverRequired}
+        <small class="hint">Leave blank to use {svc.defaultUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')}</small>
+      {/if}
     </label>
   {/if}
 

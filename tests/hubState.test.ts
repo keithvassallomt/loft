@@ -21,6 +21,17 @@ describe('buildHubState', () => {
     expect(s.services).toHaveLength(SERVICES.length);
   });
 
+  it('tells the hub whether a server is required and what the default is', () => {
+    // The Add tile needs both: whether to block the Add button on an empty field, and the
+    // real default URL to name in its hint rather than hardcoding one in the renderer.
+    const s = buildHubState({ ...base, config: { services: {} } });
+    const el = s.services.find((x) => x.id === 'element')!;
+    const talk = s.services.find((x) => x.id === 'talk')!;
+    expect(el.serverRequired).toBe(false);
+    expect(el.defaultUrl).toBe('https://app.element.io/');
+    expect(talk.serverRequired).toBe(true);
+  });
+
   it('reports the true badge even when the indicator is disabled', () => {
     const config: LoftConfig = { services: { whatsapp: { badgesEnabled: false } } };
     const s = buildHubState({ ...base, config, badge: (id) => (id === 'whatsapp' ? 5 : 0) });

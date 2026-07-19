@@ -17,6 +17,14 @@ export interface ServiceDef {
    * appPath — a self-hosted Element Web's own root IS the app.
    */
   appPath?: string;
+  /**
+   * A server address is mandatory, because this service has no usable default. Talk only:
+   * its `url` above is a placeholder, since there is no central NextCloud. `selfHosted`
+   * says a service CAN point at your own server; this says it MUST. Element is selfHosted
+   * but not serverRequired — it ships a real default (app.element.io), and most people
+   * will use it.
+   */
+  serverRequired?: boolean;
 }
 
 export const SERVICES: readonly ServiceDef[] = [
@@ -25,7 +33,7 @@ export const SERVICES: readonly ServiceDef[] = [
   { id: 'slack', displayName: 'Slack', url: 'https://app.slack.com/client/', selfHosted: false, origins: ['https://app.slack.com'], clearCachesOnStart: true },
   { id: 'telegram', displayName: 'Telegram', url: 'https://web.telegram.org/a/', selfHosted: false, origins: ['https://web.telegram.org'] },
   { id: 'element', displayName: 'Element', url: 'https://app.element.io/', selfHosted: true, origins: ['https://app.element.io'] },
-  { id: 'talk', displayName: 'NextCloud Talk', url: 'https://example.invalid/', selfHosted: true, origins: [], appPath: '/apps/spreed/' },
+  { id: 'talk', displayName: 'NextCloud Talk', url: 'https://example.invalid/', selfHosted: true, origins: [], appPath: '/apps/spreed/', serverRequired: true },
 ];
 
 export function listServices(): readonly ServiceDef[] {

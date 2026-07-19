@@ -20,6 +20,8 @@ export function buildHubState(deps: HubStateDeps): HubState {
       id: def.id,
       displayName: def.displayName,
       selfHosted: def.selfHosted,
+      serverRequired: def.serverRequired === true,
+      defaultUrl: def.url,
       installed: c !== undefined,
       running: deps.running(def.id),
       visible: deps.visible(def.id),

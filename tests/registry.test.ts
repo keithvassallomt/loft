@@ -70,6 +70,14 @@ describe('service registry', () => {
     expect(effectiveUrl(el, 'https://chat.example.org/some/path')).toBe('https://chat.example.org/some/path');
   });
 
+  it('requires a server only for a service with no usable default', () => {
+    // Talk's registry url is a placeholder, so a server is mandatory. Element ships a real
+    // default (app.element.io), so pointing it at your own server is optional.
+    expect(getService('talk')!.serverRequired).toBe(true);
+    expect(getService('element')!.serverRequired).toBeUndefined();
+    expect(effectiveUrl(getService('element')!, undefined)).toBe('https://app.element.io/');
+  });
+
   it('falls back to the raw input if it cannot be parsed as a URL', () => {
     const talk = getService('talk')!;
     expect(effectiveUrl(talk, 'not a url')).toBe('not a url');
