@@ -31,9 +31,13 @@
       {#if nav.configure.length > 0}
         <p class="sec">Configure</p>
         {#each nav.configure as c (c.id)}
-          <button class="n" class:on={isService(view) && view.service === c.id}
+          <button class="n svc" class:on={isService(view) && view.service === c.id}
                   aria-current={isService(view) && view.service === c.id ? 'page' : undefined}
-                  onclick={() => (selection = { service: c.id })}>{c.displayName}</button>
+                  onclick={() => (selection = { service: c.id })}>
+            <img class="ico" src={`loft://icon/${c.id}`} alt=""
+                 onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
+            <span>{c.displayName}</span>
+          </button>
         {/each}
       {/if}
 
@@ -72,6 +76,11 @@
   }
   .side .n:hover { background: var(--card); }
   .side .n.on { background: var(--accent); color: #fff; }
+  .side .n.svc { display: flex; align-items: center; gap: 8px; }
+  /* display:none rather than AvailableTile's visibility:hidden — a tile centres a
+     fixed-size icon, but this is a row, so a missing icon should collapse rather than
+     leave the label indented. */
+  .side .ico { width: 18px; height: 18px; border-radius: 4px; flex: none; }
   .side .sec {
     font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.05em;
     opacity: 0.5; margin: 12px 10px 2px;

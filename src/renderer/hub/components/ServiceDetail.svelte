@@ -27,7 +27,11 @@
 </script>
 
 {#if svc}
-  <h2>{svc.displayName}</h2>
+  <h2>
+    <img class="ico" src={`loft://icon/${id}`} alt=""
+         onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
+    {svc.displayName}
+  </h2>
 
   {#if svc.selfHosted}
     <label class="field">
@@ -82,7 +86,8 @@
 {/if}
 
 <style>
-  h2 { margin: 8px 0 16px; }
+  h2 { margin: 8px 0 16px; display: flex; align-items: center; gap: 10px; }
+  h2 .ico { width: 28px; height: 28px; border-radius: 6px; }
   .field { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; }
   .field input { padding: 8px; border-radius: 8px; border: 1px solid var(--divider); background: var(--bg); color: var(--fg); }
   .toggle { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
