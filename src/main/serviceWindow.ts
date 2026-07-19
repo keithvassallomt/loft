@@ -64,7 +64,9 @@ export function createServiceWindow(
   });
   titlebar.webContents.on('did-finish-load', () => {
     safeSend(titlebar, 'titlebar:set-service', def.displayName);
-    safeSend(titlebar, 'titlebar:set-attachable', true);
+    // The id, not a bare flag: the renderer needs it as the drag payload so the rail
+    // knows which service was dropped (dataTransfer is unreadable until 'drop').
+    safeSend(titlebar, 'titlebar:set-attachable', def.id);
   });
   titlebar.webContents.loadFile(join(__dirname, '../renderer/titlebar/index.html'));
 

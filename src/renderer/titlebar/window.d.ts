@@ -6,6 +6,6 @@ interface Window {
     reload(): void;
     onSetService(cb: (name: string) => void): void;
     attach(): void;
-    onSetAttachable(cb: (on: boolean) => void): void;
+    onSetAttachable(cb: (id: string | null) => void): void;
   };
 }
