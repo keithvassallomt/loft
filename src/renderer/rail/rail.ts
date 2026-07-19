@@ -60,10 +60,22 @@ function serviceButton(item: RailItem): HTMLButtonElement {
   b.setAttribute('aria-label', item.displayName);
   if (item.active) b.setAttribute('aria-current', 'page');
 
-  const g = document.createElement('span');
-  g.className = 'glyph';
-  g.textContent = initials(item.displayName);
-  b.append(g);
+  // The real service logo, served by the loft://icon/<id> protocol registered in main; the
+  // rail's CSP already allows `img-src loft:`. If the icon is missing the image errors, and
+  // we restore the initials placeholder rather than leaving an empty chip. prepend, not
+  // append: the badge and the ⧉/🌙 marks are appended after this and must stay on top.
+  const img = document.createElement('img');
+  img.className = 'icon';
+  img.src = `loft://icon/${item.id}`;
+  img.alt = '';
+  img.addEventListener('error', () => {
+    img.remove();
+    const g = document.createElement('span');
+    g.className = 'glyph';
+    g.textContent = initials(item.displayName);
+    b.prepend(g);
+  });
+  b.append(img);
 
   if (item.badge > 0) {
     const n = document.createElement('span');
