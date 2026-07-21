@@ -221,11 +221,21 @@ the naive version shipped:
   deeply nested or cyclic input throws `RangeError` instead of returning `null`. Relying
   on `loadConfig`'s outer `try/catch` to absorb that is not equivalent: it discards the
   *whole* config — services, tray backend, window bounds, rail order — so a corrupt grid
-  costs far more than the arrangement. The cap also makes the function safe to call from
-  a future site that has no such catch; renderer-submitted arrangements arriving over IPC
-  travel by structured clone, where cycles are genuinely reachable. 64 is far above any
-  real grid (the minimum cell size refuses splits past about 10 levels) and far below the
-  stack limit.
+  costs far more than the arrangement. 64 is far above any real grid (the minimum cell
+  size refuses splits past about ten levels) and far below the stack limit.
+
+  **The cap bounds depth, not total work, and that distinction is load-bearing.** A
+  review built a *shared-reference* graph — every level's `a` and `b` pointing at the
+  same child object, a DAG with no self-reference, so nothing the cycle reasoning catches
+  — and reached roughly 33.5 million calls at depth 24, then an uncatchable V8
+  out-of-memory abort by depth 25. That is strictly worse than the `RangeError` the cap
+  exists to prevent, and it happens comfortably inside the depth budget. It is
+  unreachable today because the only caller is `loadConfig` on `JSON.parse` output, and
+  JSON cannot express aliased references. Structured clone can. **So if a later task
+  hands this validator a renderer-submitted arrangement over IPC, the depth cap alone is
+  not enough — that caller must bound its own input.** The validator is deliberately not
+  hardened for a caller that does not exist yet; a node-visit counter without a real
+  consumer would be speculative work.
 - **An out-of-range `ratio` is clamped, not rejected.** The loader admits `(0,1)` but
   `gridTree` clamps interactive resizes to 0.05–0.95, so a hand-edited `0.001` would
   otherwise load into a split the app's own logic could never produce. Clamping reads the
