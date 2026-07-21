@@ -53,6 +53,7 @@ function serviceIconData(id: string): number[] | null {
  * and dispatch to `onEvent(actionId)`.
  *
  * Layout:
+ *   Show Window                       (show-window)
  *   ☑ Do Not Disturb                  (global:dnd)
  *   ──────────
  *   <Service> [•] ▸                   (submenu, one per running service)
@@ -226,6 +227,12 @@ function buildTree(
   });
 
   const children: MenuNode[] = [];
+
+  // Show the Loft window as it was left. Deliberately not 'settings' — that routes to
+  // onShowHub, which switches to the manager first (see tray/index.ts).
+  children.push(item('Show Window', 'show-window', {
+    'icon-name': V('s', 'window-symbolic'),
+  }));
 
   // Global DND toggle.
   children.push(

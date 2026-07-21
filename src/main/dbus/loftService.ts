@@ -17,6 +17,8 @@ export interface LoftServiceDeps {
   quitApp(): void;
   /** Open/focus the hub window (the GNOME-panel "Loft Settings…" item calls this). */
   showHub(): void;
+  /** Show the Loft window without switching to the manager. */
+  showWindow(): void;
   /** Toggle global DND (the GNOME-panel "Do Not Disturb" switch calls this). */
   setGlobalDnd(enabled: boolean): void;
 }
@@ -51,6 +53,7 @@ class LoftRootObject extends Interface {
   constructor(private deps: LoftServiceDeps) { super(BUS); }
   Quit(): void { this.deps.quitApp(); }
   ShowHub(): void { this.deps.showHub(); }
+  ShowWindow(): void { this.deps.showWindow(); }
   SetGlobalDnd(enabled: boolean): void { this.deps.setGlobalDnd(enabled); }
 }
 LoftRootObject.configureMembers({
@@ -58,6 +61,7 @@ LoftRootObject.configureMembers({
   methods: {
     Quit: { inSignature: '', outSignature: '' },
     ShowHub: { inSignature: '', outSignature: '' },
+    ShowWindow: { inSignature: '', outSignature: '' },
     SetGlobalDnd: { inSignature: 'b', outSignature: '' },
   },
   signals: {},

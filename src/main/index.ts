@@ -753,6 +753,7 @@ if (!app.requestSingleInstanceLock()) {
         onQuitService: (id) => quitService(id),
         onToggleDnd: (id, enabled) => { setServiceDnd(id, enabled); tray?.setDnd(id, enabled); notifications?.setServiceDnd(id, enabled); },
         onToggleGlobalDnd: (enabled) => { setGlobalDnd(enabled); notifications?.setGlobalDnd(enabled); },
+        onShowWindow: () => { loft?.open(); focusExternal(LOFT_WINDOW_KEY); },
         // "Settings…" = show the manager tab, not a window of its own — same as the rail
         // menu's Settings… and the D-Bus ShowHub().
         onShowHub: () => { loft?.showManager(); loft?.open(); focusExternal(LOFT_WINDOW_KEY); },
@@ -971,6 +972,10 @@ if (!app.requestSingleInstanceLock()) {
         },
         quitApp: () => { quitting = true; app.quit(); },
         showHub: () => { loft?.showManager(); loft?.open(); focusExternal(LOFT_WINDOW_KEY); },
+        // No showManager(): the window comes back on whatever tab it was on, which is the
+        // whole difference from ShowHub. focusExternal is required — a plain open() is
+        // subject to Wayland's focus-stealing prevention.
+        showWindow: () => { loft?.open(); focusExternal(LOFT_WINDOW_KEY); },
         setGlobalDnd: (enabled) => { setGlobalDnd(enabled); notifications?.setGlobalDnd(enabled); },
       };
       await startLoftDbusService(loftDeps);

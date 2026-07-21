@@ -26,6 +26,8 @@ export interface TrayDeps {
   onToggleDnd(id: string, enabled: boolean): void;
   /** Toggle global DND (persist + reflect). */
   onToggleGlobalDnd(enabled: boolean): void;
+  /** Show the Loft window without changing which tab it is on. */
+  onShowWindow(): void;
   /** Open/focus the hub / settings (Stage 4). */
   onShowHub(): void;
   /** Quit the whole app. */
@@ -72,6 +74,7 @@ export async function startTray(deps: TrayDeps): Promise<Tray> {
   };
 
   menu.onEvent = (actionId: string): void => {
+    if (actionId === 'show-window') return deps.onShowWindow();
     if (actionId === 'global:dnd') return deps.onToggleGlobalDnd(!model.menuModel().globalDnd);
     if (actionId === 'hub' || actionId === 'settings') return deps.onShowHub();
     if (actionId === 'quit') return deps.onQuit();

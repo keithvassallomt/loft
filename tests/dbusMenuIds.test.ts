@@ -51,4 +51,32 @@ describe('DbusMenu item ids', () => {
     const ids = currentIds(menu);
     expect(new Set(ids).size).toBe(ids.length);
   });
+
+  it('offers Show Window above the global DND toggle', () => {
+    // Position is the whole point of the entry: it must be the first thing in the menu,
+    // before Do Not Disturb, not appended near Settings.
+    const menu = new DbusMenu();
+    menu.setModel(running());
+    const [, layout] = menu.GetLayout(0, -1, []);
+    const [, , children] = layout as LayoutNode;
+    const labels = children.map(
+      (v) => ((v.value as LayoutNode)[1]['label']?.value as string) ?? '',
+    );
+    expect(labels[0]).toBe('Show Window');
+    expect(labels[1]).toBe('Do Not Disturb');
+  });
+
+  it('dispatches the Show Window click under its own action id', () => {
+    // Not 'hub'/'settings': tray/index.ts already routes both of those to onShowHub, which
+    // switches to the manager — the exact thing this entry must not do.
+    const menu = new DbusMenu();
+    menu.setModel(running());
+    const seen: string[] = [];
+    menu.onEvent = (actionId: string): void => { seen.push(actionId); };
+    const [, layout] = menu.GetLayout(0, -1, []);
+    const [, , children] = layout as LayoutNode;
+    const showWindowId = (children[0].value as LayoutNode)[0];
+    menu.Event(showWindowId, 'clicked', new dbus.Variant('s', ''), 0);
+    expect(seen).toEqual(['show-window']);
+  });
 });
