@@ -849,12 +849,21 @@ export default class LoftShellHelper extends Extension {
         menu.removeAll();
 
         // Layout, matching the SNI backend's menu (src/main/tray/dbusMenu.ts)
+        //   Show Window
         //   Do Not Disturb
         //   \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         //   <service rows>            (running only \u2014 the app pushes no others,
         //   \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500                 so there's no launch section as SNI has)
         //   Loft Settings\u2026
         //   Quit Loft
+        // Show the Loft window as it was left. Deliberately NOT 'ShowHub' — that switches
+        // to the manager first, so it could never bring you back to the tab you were on.
+        const showWindowItem = new PopupMenu.PopupMenuItem('Show Window');
+        showWindowItem.connect('activate', () => {
+            this._callLoftRootMethod('ShowWindow');
+        });
+        menu.addMenuItem(showWindowItem);
+
         const globalDndItem = new PopupMenu.PopupSwitchMenuItem(
             'Do Not Disturb', this._combinedGlobalDnd
         );
