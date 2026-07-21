@@ -214,6 +214,24 @@ Per the established rule that unknown keys are dropped and the file is hand-edit
 malformed collapses to `null` rather than throwing — a corrupt grid must cost you your
 arrangement, never your ability to start Loft.
 
+Two details make that guarantee real rather than aspirational, both found by review after
+the naive version shipped:
+
+- **A depth cap (64), enforced by the validator itself.** Unbounded recursion over a
+  deeply nested or cyclic input throws `RangeError` instead of returning `null`. Relying
+  on `loadConfig`'s outer `try/catch` to absorb that is not equivalent: it discards the
+  *whole* config — services, tray backend, window bounds, rail order — so a corrupt grid
+  costs far more than the arrangement. The cap also makes the function safe to call from
+  a future site that has no such catch; renderer-submitted arrangements arriving over IPC
+  travel by structured clone, where cycles are genuinely reachable. 64 is far above any
+  real grid (the minimum cell size refuses splits past about 10 levels) and far below the
+  stack limit.
+- **An out-of-range `ratio` is clamped, not rejected.** The loader admits `(0,1)` but
+  `gridTree` clamps interactive resizes to 0.05–0.95, so a hand-edited `0.001` would
+  otherwise load into a split the app's own logic could never produce. Clamping reads the
+  user's intent — make this pane small — instead of discarding it. `0`, `1`, and
+  non-finite values stay rejected outright: those are structurally invalid, not extreme.
+
 No `migrate.ts` step and no `CONFIG_VERSION` bump: absent means empty, which is the
 correct state for every existing install.
 
