@@ -134,8 +134,10 @@ the newcomer as child `a`, `right` and `bottom` as child `b`.
 | `insert(tree, service, target: string, edge: Edge)` | Replace the leaf holding `target` with a split whose children are that leaf and a new leaf for `service`, ordered by `edge`, `ratio: 0.5`. On a `null` tree, `service` becomes the root leaf and `target`/`edge` are ignored. |
 | `remove(tree, service)` | Replace the leaf's parent split with the sibling subtree. Removing the root leaf yields `null`. Absent service ⇒ tree returned unchanged. |
 | `move(tree, service, target: string, edge: Edge)` | `remove` then `insert`. A no-op if `target === service`. `target` still exists after the removal in every case — a collapse never deletes a leaf other than the removed one. |
-| `resize(tree, path: Path, ratio)` | Set that split's ratio, clamped so both children stay above the minimum. A path that is absent or names a leaf returns the tree unchanged. |
+| `resize(tree, path: Path, ratio)` | Set that split's ratio. A path that is absent or names a leaf returns the tree unchanged. Clamping is split in two: `gridTree` applies only structural bounds (0.05–0.95), because it has no idea how big the split is; `gridLayout.clampRatio(dir, axisPx, ratio)` applies the pixel minimum. The interaction handler composes them. |
+| `autoPlace(tree, service, rectOf)` | Where `＋` puts a service: split the largest leaf, choosing the axis from its aspect so the result stays roughly square. The only auto-placement in the design — a drag always aims (§5, D5). |
 | `services(tree)` | The leaf services, in tree order. |
+| `findPath(tree, service)` | The `Path` to a leaf, or undefined. |
 | `prune(tree, valid: Set<string>)` | Drop leaves whose service is not in `valid`, collapsing as it goes. Used on load. |
 
 ### Geometry (pure, in `src/main/gridLayout.ts`)
