@@ -97,6 +97,27 @@ describe('move', () => {
     const tree = insert(leaf('whatsapp'), 'slack', 'whatsapp', 'right');
     expect(move(tree, 'slack', 'slack', 'left')).toBe(tree);
   });
+
+  it('returns the tree unchanged, by identity, when the target is absent', () => {
+    // Regression for a silent-data-loss bug: move() used to remove() then insert()
+    // unconditionally, so an absent target made remove() drop the service and insert()
+    // have nowhere to put it back — the leaf vanished with no error. Assert both that the
+    // tree comes back unchanged AND that the moved service is still in it.
+    const tree = insert(leaf('whatsapp'), 'slack', 'whatsapp', 'right');
+    const result = move(tree, 'slack', 'element', 'left');
+    expect(result).toBe(tree);
+    expect(services(result)).toContain('slack');
+  });
+
+  it('treats moving an absent service onto a present target as an insert', () => {
+    // Deliberate, not an accident: move doesn't require `service` to already be in the
+    // tree, so this falls through to insert's behaviour. Pinned with toEqual so a future
+    // change to that behaviour is a conscious decision, not a silent regression.
+    const tree = leaf('whatsapp');
+    expect(move(tree, 'slack', 'whatsapp', 'right')).toEqual({
+      kind: 'split', dir: 'row', ratio: 0.5, a: leaf('whatsapp'), b: leaf('slack'),
+    });
+  });
 });
 
 describe('resize', () => {
