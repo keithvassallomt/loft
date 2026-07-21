@@ -138,6 +138,31 @@ function homeButton(active: boolean): HTMLButtonElement {
   return b;
 }
 
+function gridButton(active: boolean, count: number): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.className = 'grid';
+  b.classList.toggle('active', active);
+  b.title = 'Grid';
+  b.setAttribute('aria-label', 'Grid view');
+  if (active) b.setAttribute('aria-current', 'page');
+  const g = document.createElement('span');
+  g.className = 'glyph';
+  g.setAttribute('aria-hidden', 'true');
+  g.textContent = '▦';
+  b.append(g);
+  if (count > 0) {
+    const n = document.createElement('span');
+    n.className = 'count';
+    n.textContent = String(count);
+    b.append(n);
+  }
+  // Pinned: no pointerdown/drag handlers. The Grid entry is not reorderable and not
+  // removable, so it takes a plain click — unlike a service icon, whose click IS a
+  // zero-distance drag resolved by main.
+  b.addEventListener('click', () => window.loftRail.showGrid());
+  return b;
+}
+
 function render(state: RailState): void {
   // Never re-render mid-drag. replaceChildren would destroy the very button holding pointer
   // capture, and the replacement node never receives the pointerup — orphaning the gesture:
@@ -151,6 +176,7 @@ function render(state: RailState): void {
   divider.setAttribute('aria-hidden', 'true');
   root.replaceChildren(
     homeButton(state.managerActive),
+    gridButton(state.gridActive, state.gridCount),
     ...(state.items.length ? [divider, ...state.items.map(serviceButton)] : []),
   );
 }

@@ -1,5 +1,6 @@
 import type { LoftConfig } from './config';
 import type { ServiceDef } from './registry';
+import { GRID_ID, services as gridServices, type GridNode } from './gridTree';
 
 /** One entry in the Loft window's service rail. */
 export interface RailItem {
@@ -16,11 +17,16 @@ export interface RailItem {
   active: boolean;
 }
 
-/** The rail renderer's full state: the service items plus whether the manager tab is the
- *  active selection, so the rail's Loft "home" button can render as current. */
+/** The rail renderer's full state: the service items, plus which of the two pinned
+ *  entries — the Loft "home" button and the Grid button — is the current selection. */
 export interface RailState {
   items: RailItem[];
   managerActive: boolean;
+  /** The Grid entry is the selection. Mutually exclusive with managerActive and with
+   *  any item's `active`. */
+  gridActive: boolean;
+  /** How many services are in the grid; the entry renders a count when non-zero. */
+  gridCount: number;
 }
 
 export interface RailModelInput {
@@ -76,6 +82,24 @@ export function buildRailModel(i: RailModelInput): RailItem[] {
         active: !detached && i.activeId === d.id,
       };
     });
+}
+
+export interface RailStateInput extends RailModelInput {
+  grid: GridNode | null;
+}
+
+/**
+ * The whole rail state in one call, so the grid's activeness is derived in exactly one
+ * place. GRID_ID is a reserved activeId — it is never a service id, so buildRailModel
+ * naturally marks no item active when the grid is selected.
+ */
+export function buildRailState(i: RailStateInput): RailState {
+  return {
+    items: buildRailModel(i),
+    managerActive: i.activeId === undefined,
+    gridActive: i.activeId === GRID_ID,
+    gridCount: gridServices(i.grid).length,
+  };
 }
 
 /**

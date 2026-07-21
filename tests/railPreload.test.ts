@@ -48,6 +48,13 @@ describe('rail bridge', () => {
     expect(ipc.sent).toEqual([['rail:showManager', undefined]]);
   });
 
+  it('showGrid asks main to open the grid', () => {
+    const ipc = fakeIpc();
+    const b = buildRailBridge(ipc as never);
+    b.showGrid();
+    expect(ipc.sent).toEqual([['rail:showGrid', undefined]]);
+  });
+
   it('unsubscribes so a re-render cannot stack duplicate listeners', () => {
     const ipc = fakeIpc();
     const b = buildRailBridge(ipc as never);

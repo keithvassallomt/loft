@@ -65,3 +65,35 @@ body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
 @media (prefers-color-scheme: dark) {
   #slot { background: #0a84ff; }
 }
+
+.grid {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin: 2px auto 0;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--rail-fg, #9497a1);
+  font-size: 17px;
+  cursor: pointer;
+}
+.grid:hover { background: #ffffff14; }
+.grid.active { background: #ffffff24; color: #fff; }
+.grid .count {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  min-width: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent, #4c8dff);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+}

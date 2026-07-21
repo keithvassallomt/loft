@@ -10,6 +10,8 @@ export interface RailBridge {
   menu(id: string): void;
   /** Open the manager view (the rail's Loft "home" button). */
   showManager(): void;
+  /** Open the grid view (the rail's pinned Grid button). */
+  showGrid(): void;
   /** Report a drag that ended on a service icon; main decides the outcome from the release. */
   dragEnd(id: string, releaseX: number, releaseY: number): void;
   /** Hand main the rail's icon geometry at drag start; it computes insertion indices from it. */
@@ -33,6 +35,7 @@ export function buildRailBridge(ipc: IpcRenderer): RailBridge {
     select: (id) => ipc.send('rail:select', id),
     menu: (id) => ipc.send('rail:menu', id),
     showManager: () => ipc.send('rail:showManager'),
+    showGrid: () => ipc.send('rail:showGrid'),
     dragEnd: (id, releaseX, releaseY) => ipc.send('rail:dragEnd', { id, releaseX, releaseY }),
     dragBegin: (slots) => ipc.send('rail:dragBegin', { slots }),
     dragMove: (clientX, clientY) => ipc.send('rail:dragMove', { clientX, clientY }),

@@ -5,7 +5,7 @@ import { computeLayout, RAIL_WIDTH, type Rect } from './layout';
 import { formatWindowTitle } from './serviceTitle';
 import { createServiceView, type ServiceView } from './serviceView';
 import type { ServiceHost } from './serviceHost';
-import { buildRailModel, nextActiveId, type RailItem } from './railModel';
+import { buildRailModel, buildRailState, nextActiveId, type RailItem } from './railModel';
 
 /** The window's own display name — the key the GNOME helper and KWin match on. */
 export const LOFT_WINDOW_KEY = 'Loft';
@@ -157,7 +157,15 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   });
 
   const refreshRail = (): void =>
-    safeSend(rail, 'rail:state', { items: model(), managerActive: active === undefined });
+    safeSend(rail, 'rail:state', buildRailState({
+      services: deps.services,
+      config: deps.cfg,
+      loaded: (id) => views.has(id) || deps.loadedElsewhere(id),
+      detached: deps.detached,
+      badge: deps.badge,
+      activeId: active,
+      grid: deps.cfg.grid ?? null,
+    }));
 
   const refreshTitlebar = (): void => {
     // set-context tells the titlebar which service it is showing, or null for the manager
