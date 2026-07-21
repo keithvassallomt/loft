@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { TrayBackend } from './trayBackend';
 import { clampZoom } from './zoom';
+import { services as gridServices, type GridNode } from './gridTree';
 
 /** A window's position and size. The Loft window uses this; zoom is per service. */
 export interface Bounds {
@@ -44,6 +45,8 @@ export interface LoftConfig {
   reopenDetached?: boolean;
   /** Rail order by service id. Ids not listed sort after these, in registry order. */
   railOrder?: string[];
+  /** Grid view arrangement (grid-view spec §5/§6). Absent or null means an empty grid. */
+  grid?: GridNode | null;
 }
 
 export function defaultConfig(): LoftConfig {
@@ -108,6 +111,42 @@ export function sanitizeServiceConfig(v: unknown): ServiceConfig {
   return out;
 }
 
+/**
+ * Validate a persisted grid tree. Recursive because a half-valid tree is worse than no
+ * tree: a split with one malformed child would break the "always exactly two children"
+ * invariant every operation in gridTree.ts relies on. Anything malformed collapses to
+ * null rather than throwing — a corrupt grid must cost the user their arrangement, never
+ * their ability to start Loft.
+ */
+export function sanitizeGridNode(v: unknown): GridNode | null {
+  const node = sanitizeGridNodeShape(v);
+  if (!node) return null;
+  // One ServiceView cannot render in two cells, so a duplicate is not a recoverable
+  // typo — there is no correct way to pick which occurrence wins.
+  const ids = gridServices(node);
+  if (new Set(ids).size !== ids.length) return null;
+  return node;
+}
+
+function sanitizeGridNodeShape(v: unknown): GridNode | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const n = v as Record<string, unknown>;
+
+  if (n.kind === 'leaf') {
+    return typeof n.service === 'string' && n.service.length > 0
+      ? { kind: 'leaf', service: n.service }
+      : null;
+  }
+
+  if (n.kind !== 'split') return null;
+  if (n.dir !== 'row' && n.dir !== 'col') return null;
+  if (!isFiniteNumber(n.ratio) || n.ratio <= 0 || n.ratio >= 1) return null;
+  const a = sanitizeGridNodeShape(n.a);
+  const b = sanitizeGridNodeShape(n.b);
+  if (!a || !b) return null;
+  return { kind: 'split', dir: n.dir, ratio: n.ratio, a, b };
+}
+
 export function loadConfig(path: string): LoftConfig {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<LoftConfig>;
@@ -140,6 +179,8 @@ export function loadConfig(path: string): LoftConfig {
     if (Array.isArray(parsed.railOrder)) {
       base.railOrder = parsed.railOrder.filter((x): x is string => typeof x === 'string');
     }
+    const grid = sanitizeGridNode(parsed.grid);
+    if (grid) base.grid = grid;
     return base;
   } catch {
     return defaultConfig();
