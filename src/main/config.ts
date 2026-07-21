@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { TrayBackend } from './trayBackend';
 import { clampZoom } from './zoom';
-import { services as gridServices, type GridNode } from './gridTree';
+import { services as gridServices, RATIO_MIN, RATIO_MAX, type GridNode } from './gridTree';
 
 /** A window's position and size. The Loft window uses this; zoom is per service. */
 export interface Bounds {
@@ -112,14 +112,26 @@ export function sanitizeServiceConfig(v: unknown): ServiceConfig {
 }
 
 /**
+ * Recursion cap for sanitizeGridNodeShape (below). A real grid cannot nest this deep —
+ * gridLayout's minimum cell size refuses splits well before 10 levels — so 64 is generous
+ * headroom for any legitimate arrangement, while still far short of the actual call-stack
+ * limit: past that, a pathological chain or a cyclic node (e.g. `node.b = node`, genuinely
+ * reachable once a tree can arrive over IPC via structured clone, not just hand-edited
+ * JSON) would throw RangeError instead of the null this file promises to return.
+ */
+const MAX_GRID_DEPTH = 64;
+
+/**
  * Validate a persisted grid tree. Recursive because a half-valid tree is worse than no
  * tree: a split with one malformed child would break the "always exactly two children"
  * invariant every operation in gridTree.ts relies on. Anything malformed collapses to
  * null rather than throwing — a corrupt grid must cost the user their arrangement, never
- * their ability to start Loft.
+ * their ability to start Loft. That guarantee is enforced here via MAX_GRID_DEPTH, not
+ * borrowed from loadConfig's try/catch, so the function stays safe to call from any future
+ * site (e.g. a renderer-submitted arrangement over IPC) that doesn't wrap it in its own.
  */
 export function sanitizeGridNode(v: unknown): GridNode | null {
-  const node = sanitizeGridNodeShape(v);
+  const node = sanitizeGridNodeShape(v, 0);
   if (!node) return null;
   // One ServiceView cannot render in two cells, so a duplicate is not a recoverable
   // typo — there is no correct way to pick which occurrence wins.
@@ -128,7 +140,8 @@ export function sanitizeGridNode(v: unknown): GridNode | null {
   return node;
 }
 
-function sanitizeGridNodeShape(v: unknown): GridNode | null {
+function sanitizeGridNodeShape(v: unknown, depth: number): GridNode | null {
+  if (depth > MAX_GRID_DEPTH) return null;
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const n = v as Record<string, unknown>;
 
@@ -141,10 +154,15 @@ function sanitizeGridNodeShape(v: unknown): GridNode | null {
   if (n.kind !== 'split') return null;
   if (n.dir !== 'row' && n.dir !== 'col') return null;
   if (!isFiniteNumber(n.ratio) || n.ratio <= 0 || n.ratio >= 1) return null;
-  const a = sanitizeGridNodeShape(n.a);
-  const b = sanitizeGridNodeShape(n.b);
+  // 0/1/out-of-range/non-finite are structurally invalid — no cell to draw — and are
+  // rejected above. Anything inside (0,1) but outside gridTree's own interactive bounds
+  // is instead a legible intent to make one pane small, so clamp it into the same range
+  // a resize drag would have produced rather than rejecting a merely extreme ratio.
+  const ratio = Math.min(RATIO_MAX, Math.max(RATIO_MIN, n.ratio));
+  const a = sanitizeGridNodeShape(n.a, depth + 1);
+  const b = sanitizeGridNodeShape(n.b, depth + 1);
   if (!a || !b) return null;
-  return { kind: 'split', dir: n.dir, ratio: n.ratio, a, b };
+  return { kind: 'split', dir: n.dir, ratio, a, b };
 }
 
 export function loadConfig(path: string): LoftConfig {

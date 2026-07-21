@@ -30,9 +30,11 @@ export type GridNode =
   | { kind: 'split'; dir: 'row' | 'col'; ratio: number; a: GridNode; b: GridNode };
 
 /** Structural bounds only. The pixel minimum is applied by gridLayout.clampRatio,
- *  which is the layer that knows how big the split actually is. */
-const RATIO_MIN = 0.05;
-const RATIO_MAX = 0.95;
+ *  which is the layer that knows how big the split actually is. Exported so config.ts
+ *  can clamp a persisted ratio into the same range an interactive resize would produce,
+ *  instead of duplicating these numbers there. */
+export const RATIO_MIN = 0.05;
+export const RATIO_MAX = 0.95;
 
 const clampRatioStructural = (r: number): number => {
   if (!Number.isFinite(r)) return 0.5;
