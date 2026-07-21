@@ -32,6 +32,7 @@ const deps = (globalDnd: boolean): TrayDeps => ({
   onQuitService: vi.fn(),
   onToggleDnd: vi.fn(),
   onToggleGlobalDnd: vi.fn(),
+  onShowWindow: vi.fn(),
   onShowHub: vi.fn(),
   onQuit: vi.fn(),
 });
