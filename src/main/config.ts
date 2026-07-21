@@ -127,8 +127,27 @@ const MAX_GRID_DEPTH = 64;
  * invariant every operation in gridTree.ts relies on. Anything malformed collapses to
  * null rather than throwing — a corrupt grid must cost the user their arrangement, never
  * their ability to start Loft. That guarantee is enforced here via MAX_GRID_DEPTH, not
- * borrowed from loadConfig's try/catch, so the function stays safe to call from any future
- * site (e.g. a renderer-submitted arrangement over IPC) that doesn't wrap it in its own.
+ * borrowed from loadConfig's try/catch, which is what makes this safe against the
+ * pathological *depth* and cycles that JSON.parse output — the only input this function
+ * actually sees today — can contain.
+ *
+ * It does not bound total *work*. MAX_GRID_DEPTH caps how deep the recursion can go, not
+ * how many times it's called: a node whose `a` and `b` slots both point at the same child
+ * object is a DAG, not a cycle, so there is no self-reference for the depth cap to catch —
+ * yet this unmemoized traversal revisits that shared child from both branches at every
+ * level, so call count doubles per level and hits roughly 2^depth well inside the depth-64
+ * budget (depth 24 alone is ~33.5M calls). The cap does eventually stop it — but not before
+ * V8 runs out of memory around depth ~25, an uncatchable fatal error, not the RangeError
+ * the cap exists to turn into a catchable null.
+ *
+ * JSON cannot express that aliasing, so it can't reach loadConfig's call into this
+ * function today. But structured clone can — the IPC transport this comment used to invoke
+ * as proof of safety. A future caller handing this function IPC-cloned or otherwise
+ * attacker-controlled data must bound its input itself (e.g. reject aliased/oversized
+ * input before it gets here); the depth cap alone does not make that call site safe. Don't
+ * add a node-visit counter to close this gap until such a caller actually exists — there
+ * isn't one today, and hardening against a hazard nothing can yet trigger is the wrong
+ * trade.
  */
 export function sanitizeGridNode(v: unknown): GridNode | null {
   const node = sanitizeGridNodeShape(v, 0);

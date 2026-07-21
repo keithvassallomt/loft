@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { sanitizeGridNode } from '../src/main/config';
-import type { GridNode } from '../src/main/gridTree';
+import { RATIO_MIN, type GridNode } from '../src/main/gridTree';
 
 const leaf = (service: string) => ({ kind: 'leaf', service });
 
@@ -77,7 +77,7 @@ describe('sanitizeGridNode', () => {
     expect(sanitizeGridNode({
       kind: 'split', dir: 'row', ratio: 0.001, a: leaf('whatsapp'), b: leaf('slack'),
     })).toEqual({
-      kind: 'split', dir: 'row', ratio: 0.05, a: leaf('whatsapp'), b: leaf('slack'),
+      kind: 'split', dir: 'row', ratio: RATIO_MIN, a: leaf('whatsapp'), b: leaf('slack'),
     });
   });
 
