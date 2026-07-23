@@ -316,17 +316,29 @@ function placeService(def: ServiceDef, minimized: boolean): ServiceHost {
 /** Make a service visible wherever it lives, loading it if it is asleep. The single entry
  *  point for "show me X" — CLI, second-instance, tray, hub, D-Bus and notification clicks
  *  all land here, so none of them can spawn a second window for an attached service. */
-function showService(def: ServiceDef): ServiceHost {
+/**
+ * `preferCell: false` means "switch to this service", not "bring it to my attention".
+ *
+ * The two are different intents and only the rail has the second one. D-Bus Show(), the
+ * tray and a notification click are all saying "reveal X" — and a gridded X is already
+ * revealed, so its cell is the honest answer. A rail click is the user choosing what to
+ * look at, and spec D2 is explicit that grid membership and rail selection are independent
+ * facts: clicking a rail icon always shows that service full-size and merely deselects the
+ * grid, whose arrangement is untouched and repopulates when Grid is selected again. Routing
+ * the rail through the cell branch would make removing the cell the only way to see a
+ * gridded service full-size.
+ */
+function showService(def: ServiceDef, opts: { preferCell?: boolean } = {}): ServiceHost {
+  const preferCell = opts.preferCell ?? true;
   // A gridded service already has somewhere to be shown: its cell. Select the grid and make
   // that cell the focused one instead of handing the service the whole content rect — which
-  // would take the other cells off screen to show something that was already on it. Because
-  // every "show me X" comes through here, D-Bus Show(), the tray entry, the rail and a
-  // notification click all land on the cell; the deep-link navigation a click does runs
-  // after this returns, so it still opens the right conversation.
+  // would take the other cells off screen to show something that was already on it. The
+  // deep-link navigation a notification click does runs after this returns, so it still
+  // opens the right conversation.
   //
   // showGrid() wakes a sleeping leaf on the way (placeGridCells → ensureAttached), so this
   // covers "show a gridded service that is not loaded yet" too.
-  if (loft && !isDetached(def.id) && gridServicesOf(config.grid ?? null).includes(def.id)) {
+  if (preferCell && loft && !isDetached(def.id) && gridServicesOf(config.grid ?? null).includes(def.id)) {
     loft.showGrid();
     loft.setFocusedCell(def.id);
     loft.open();
@@ -736,7 +748,13 @@ if (!app.requestSingleInstanceLock()) {
 
   // Rail click = go to that service, loading it where it belongs if it is asleep and
   // raising its own window if it is detached. Right-click = the per-service menu.
-  ipcMain.on('rail:select', (_e, id: string) => { const d = getService(id); if (d) showService(d); });
+  // preferCell: false — a rail click is "switch to this service", so a gridded one goes
+  // full-size and the grid is merely deselected (spec D2). Its arrangement survives and
+  // repopulates when Grid is selected again.
+  ipcMain.on('rail:select', (_e, id: string) => {
+    const d = getService(id);
+    if (d) showService(d, { preferCell: false });
+  });
   ipcMain.on('rail:menu', (_e, id: string) => loft?.popServiceMenu(id));
   ipcMain.on('rail:showManager', () => loft?.showManager());
   ipcMain.on('rail:showGrid', () => { loft?.showGrid(); loft?.open(); });
