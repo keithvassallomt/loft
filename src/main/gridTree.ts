@@ -220,6 +220,31 @@ export function validGridServices(
 }
 
 /**
+ * Is `service` one the user is looking at right now, given what the window has selected? —
+ * the `active` axis of the notification gate (grid-view spec §7.5).
+ *
+ * EVERY cell of a selected grid answers true: they are all on screen at once, so all of them
+ * suppress their banners. A service that is running but holds no cell answers false while the
+ * grid is up, and keeps notifying — it is off screen, whatever the window is doing.
+ *
+ * The focused cell is deliberately not a parameter. Cell focus is a zoom target (§7.4), not
+ * an attention signal; folding it in here would leave two of three cells raising banners for
+ * conversations the user is looking straight at.
+ *
+ * Pure, and here rather than inline in the caller, because this is the rule whose failure is
+ * silent — a wrong answer produces no error and no log, only missing or spurious banners, so
+ * it is the one that has to be pinned by a test.
+ */
+export function isActiveSelection(
+  activeId: string | undefined,
+  tree: GridNode | null,
+  service: string,
+): boolean {
+  if (activeId === GRID_ID) return services(tree).includes(service);
+  return activeId === service;
+}
+
+/**
  * Which cell the titlebar's zoom buttons should act on, given the current focus and the
  * tree (grid-view spec §7.4).
  *

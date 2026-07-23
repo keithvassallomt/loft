@@ -7,7 +7,9 @@ import { createServiceView, type ServiceView } from './serviceView';
 import type { ServiceHost } from './serviceHost';
 import { buildRailModel, buildRailState, nextActiveId, type RailItem } from './railModel';
 import { computeGridLayout, type GridViewState } from './gridLayout';
-import { GRID_ID, remove as removeFromGrid, reseedFocus, services as gridServices } from './gridTree';
+import {
+  GRID_ID, remove as removeFromGrid, reseedFocus, services as gridServices, isActiveSelection,
+} from './gridTree';
 
 /** The window's own display name — the key the GNOME helper and KWin match on. */
 export const LOFT_WINDOW_KEY = 'Loft';
@@ -394,6 +396,17 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   let stackDirty = true;
 
   /**
+   * Which services held a cell at the last placement — kept only to spot the two
+   * TRANSITIONS: a service entering a cell, and a service leaving one.
+   *
+   * Diffed rather than announcing every cell on every pass because placeGridCells runs on
+   * every pointermove of a divider drag. Re-seeding there would be an IPC push per service
+   * per frame telling each page nothing it did not already know, and the same reasoning that
+   * gates restack on stackDirty applies: this function is on the resize hot path.
+   */
+  let placedInGrid = new Set<string>();
+
+  /**
    * Put every gridded service's view in its cell's BODY rect — below that cell's header
    * strip, which the chrome view underneath owns. Non-gridded views are hidden: the grid
    * is the selection, so nothing else is on screen.
@@ -427,6 +440,18 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       }
       // Nothing was added, so nothing moved in the stack — see stackDirty.
       if (stackDirty) { stackDirty = false; restack(); }
+
+      // A view that gains or loses a cell fires no did-finish-load — it is moved and
+      // resized, never reloaded — so everything main pushed into that page (DND, hidden)
+      // and every axis of its notification gate stay exactly as they were on the other side
+      // of the move. That fails SILENTLY: no error, no log, just a service that has quietly
+      // stopped raising banners (grid-view spec §7.5, carried from 09c-2a). Both directions
+      // are reported for that reason — leaving a cell changes the answer as much as
+      // entering one does. Last in this function so a re-seed reads the placement that
+      // actually happened.
+      for (const id of inGrid) if (!placedInGrid.has(id)) deps.onServiceLoad(id);
+      for (const id of placedInGrid) if (!inGrid.has(id)) deps.onServiceLoad(id);
+      placedInGrid = inGrid;
     } finally {
       placingCells = false;
     }
@@ -536,7 +561,12 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
         // Spec §6b: the only way to make an attached service not-visible is to hide its
         // host — and that hides every other attached service too. Documented wart.
         hide: () => window.hide(),
-        isVisible: () => window.isVisible() && active === id,
+        // On screen means the window is up AND this service has the content rect. The grid
+        // is the case where that is not one service: every cell is on screen at once, so
+        // "which services does the selection put on screen" is a rule of its own, and it is
+        // isActiveSelection's — shared with the notification gate's `active` axis rather
+        // than restated here, because the two must never be able to disagree.
+        isVisible: () => window.isVisible() && isActiveSelection(active, deps.cfg.grid ?? null, id),
         setZoom: (d) => { sv.setZoom(d); persist(); },
         setBadge: (c) => api.setBadge(id, c),
         pushDnd: (v) => sv.pushDnd(v),

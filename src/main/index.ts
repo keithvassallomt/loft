@@ -34,7 +34,8 @@ import { railSlotIndex, type RailSlot } from './railSlots';
 import { moveInOrder } from './railOrder';
 import { orderedRailIds } from './railModel';
 import {
-  GRID_ID, services as gridServicesOf, prune, validGridServices, autoPlace, type GridNode,
+  GRID_ID, services as gridServicesOf, prune, validGridServices, autoPlace, isActiveSelection,
+  type GridNode,
 } from './gridTree';
 import { computeGridLayout, splittableSizes, hasSplittableCell } from './gridLayout';
 import { beginGutterDrag, type GutterDrag } from './gutterDrag';
@@ -160,6 +161,24 @@ const isDetached = (id: string): boolean => {
   return wantsOwnWindow(id);
 };
 
+/**
+ * Is the user looking at this service right now? — the `active` axis of the notification
+ * gate, and the one term that a shared host makes non-trivial.
+ *
+ * True for the selected tab, for a service in its own window (nothing to be behind), and for
+ * EVERY cell while the grid is the selection: they are all on screen and the user can see
+ * them all, so all of them suppress (grid-view spec §7.5).
+ *
+ * The FOCUSED cell is deliberately absent. Cell focus is a zoom target, not an attention
+ * signal; folding it in here would leave the other two cells of a three-cell grid raising
+ * banners for conversations the user is looking straight at.
+ */
+const isActiveService = (id: string): boolean => {
+  if (windows.has(id)) return true;
+  if (!loft) return false;
+  return isActiveSelection(loft.activeId(), config.grid ?? null, id);
+};
+
 // The WM key (window title) of the host a service lives in — 'Loft' when attached, its
 // own display name when detached (spec §6a). What focusExternal/hideExternal match on.
 const hostKey = (id: string): string | undefined => {
@@ -260,11 +279,13 @@ function attachService(def: ServiceDef, view?: ServiceView): ServiceHost {
   tray?.setRunning(def.id, true);
   tray?.setVisible(def.id, host.isVisible());
   // One window, N services: the Loft window's focus/visibility handlers only fire on
-  // CHANGES from here on, so seed all three gate axes for this service now. `active` is
-  // whatever the current selection says — attach never selects, so normally false.
-  notifications?.setVisible(def.id, l.window.isVisible());
+  // CHANGES from here on, so seed all three gate axes for this service now. `active` and
+  // `visible` are whatever the current selection says — attach never selects, so normally
+  // false, except on the grid's own wake path (ensureAttached runs with the grid already
+  // selected and this service already a leaf, so it arrives on screen).
+  notifications?.setVisible(def.id, host.isVisible());
   notifications?.setFocused(def.id, l.window.isFocused());
-  notifications?.setActive(def.id, l.activeId() === def.id);
+  notifications?.setActive(def.id, isActiveService(def.id));
   bgStatus?.refresh();
   notifyHub();
   return host;
@@ -296,6 +317,26 @@ function placeService(def: ServiceDef, minimized: boolean): ServiceHost {
  *  point for "show me X" — CLI, second-instance, tray, hub, D-Bus and notification clicks
  *  all land here, so none of them can spawn a second window for an attached service. */
 function showService(def: ServiceDef): ServiceHost {
+  // A gridded service already has somewhere to be shown: its cell. Select the grid and make
+  // that cell the focused one instead of handing the service the whole content rect — which
+  // would take the other cells off screen to show something that was already on it. Because
+  // every "show me X" comes through here, D-Bus Show(), the tray entry, the rail and a
+  // notification click all land on the cell; the deep-link navigation a click does runs
+  // after this returns, so it still opens the right conversation.
+  //
+  // showGrid() wakes a sleeping leaf on the way (placeGridCells → ensureAttached), so this
+  // covers "show a gridded service that is not loaded yet" too.
+  if (loft && !isDetached(def.id) && gridServicesOf(config.grid ?? null).includes(def.id)) {
+    loft.showGrid();
+    loft.setFocusedCell(def.id);
+    loft.open();
+    focusExternal(LOFT_WINDOW_KEY); // bypass focus-stealing prevention (spec §6a)
+    const cell = loft.hostOf(def.id);
+    if (cell) return cell;
+    // ensureAttached declined — the service was uninstalled under a running grid, and the
+    // leaf has not been pruned yet. Fall through and place it properly rather than return a
+    // host that does not exist.
+  }
   const host = hostOf(def.id) ?? placeService(def, false);
   host.show();
   // Bypass focus-stealing prevention on the window it actually lives in (spec §6a).
@@ -561,16 +602,27 @@ const previewKey = (r: Rect | null): string =>
  * fires no window event at all, so without this every background tab keeps looking
  * focused+visible and silently stops notifying (spec §6d — it fails as absence, which is
  * why it is wired explicitly rather than left to the window handlers).
+ *
+ * Every attached service, not just the two ends of the switch: moving into or out of the
+ * grid changes the answer for several at once, so no single id could carry it. The
+ * parameter is therefore unread — isActiveService and ServiceHost.isVisible re-derive it,
+ * which keeps the grid's "every cell is on screen" rule in one place.
  */
-function syncActiveTab(activeId: string | undefined): void {
+function syncActiveTab(_activeId: string | undefined): void {
   for (const id of loft?.ids() ?? []) {
-    notifications?.setActive(id, id === activeId);
-    // The tray's Show/Hide label asks "is this service on screen?" — for a tab that means
-    // the window is up AND it is the selected one.
-    tray?.setVisible(id, (loft?.window.isVisible() ?? false) && id === activeId);
+    notifications?.setActive(id, isActiveService(id));
+    // "Is this service on screen?" — what the tray's Show/Hide label and the gate's
+    // `visible` axis both ask. Read from the host rather than compared against the selected
+    // id: selecting the grid puts N services on screen at once, and that rule lives in
+    // ServiceHost.isVisible so it cannot have a second, drifting copy here.
+    const onScreen = loft?.hostOf(id)?.isVisible() ?? false;
+    notifications?.setVisible(id, onScreen);
+    tray?.setVisible(id, onScreen);
   }
   // A service in its own window has no other tab to be behind — always active.
   for (const id of windows.keys()) notifications?.setActive(id, true);
+  // Which services are on screen just changed, and the manager draws exactly that.
+  notifyHub();
 }
 
 // Global DND: persist + reflect in the tray (notification gating is Stage 3b).
@@ -1255,7 +1307,18 @@ if (!app.requestSingleInstanceLock()) {
       buildServiceMenu,
       buildGridAddMenu,
       onActiveChanged: syncActiveTab,
-      onServiceLoad: (id) => notifications?.registerService(id),
+      // Everything main has pushed into this service's page, plus the gate axes that
+      // describe where the page now is. Two callers, one silent failure between them: a
+      // real page load drops the DND/hidden pushes, and a view MOVED into or out of a grid
+      // cell fires no load at all while its visible/active answers change underneath it.
+      // Neither reports an error — the symptom is a service that quietly stops raising
+      // banners — so both re-seed through here. `focused` is absent on purpose: it belongs
+      // to the window, and the window's own focus/blur handlers fan it across every tab.
+      onServiceLoad: (id) => {
+        notifications?.registerService(id);
+        notifications?.setActive(id, isActiveService(id));
+        notifications?.setVisible(id, hostOf(id)?.isVisible() ?? false);
+      },
       ensureAttached: (id) => {
         const def = getService(id);
         // Refuse for an unknown, uninstalled or detached service — the grid tree is
@@ -1295,8 +1358,12 @@ if (!app.requestSingleInstanceLock()) {
     loft.window.on('blur', () => { for (const id of loft!.ids()) notifications?.setFocused(id, false); });
     loft.window.on('show', () => {
       for (const id of loft!.ids()) {
-        notifications?.setVisible(id, true);
-        tray?.setVisible(id, loft!.activeId() === id); // on screen = shown AND selected
+        // One definition of "on screen" for both consumers (see syncActiveTab): the window
+        // being up is necessary but not sufficient — the service also has to hold the
+        // content rect, which with the grid selected is true of every cell at once.
+        const onScreen = loft!.hostOf(id)?.isVisible() ?? false;
+        notifications?.setVisible(id, onScreen);
+        tray?.setVisible(id, onScreen);
       }
     });
     loft.window.on('hide', () => {
