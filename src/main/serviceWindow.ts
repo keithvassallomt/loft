@@ -1,6 +1,6 @@
 import { BrowserWindow, WebContentsView } from 'electron';
 import { join } from 'node:path';
-import type { ServiceDef } from './registry';
+import type { ServiceKind } from './registry';
 import type { LoftConfig } from './config';
 import { computeLayout } from './layout';
 import { formatWindowTitle } from './serviceTitle';
@@ -13,7 +13,7 @@ import type { ServiceHost } from './serviceHost';
  * this file is only about the *window* — bounds, close-to-tray, the titlebar.
  */
 export interface ServiceWindow extends ServiceHost {
-  def: ServiceDef;
+  def: ServiceKind;
   window: BrowserWindow;
   serviceView: WebContentsView;
   titlebarView: WebContentsView;
@@ -30,7 +30,7 @@ export interface ServiceWindow extends ServiceHost {
 }
 
 export function createServiceWindow(
-  def: ServiceDef,
+  def: ServiceKind,
   cfg: LoftConfig,
   opts: { minimized: boolean; onQuit: () => boolean; view?: ServiceView },
 ): ServiceWindow {

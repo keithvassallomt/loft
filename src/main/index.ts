@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
-import { getService, listServices, SERVICES, ServiceDef, effectiveUrl } from './registry';
+import { getKind, listKinds, KINDS, ServiceKind, effectiveUrl } from './registry';
 import { loadConfig, saveConfig, configPath, LoftConfig, reopenDetachedEnabled } from './config';
 import { createServiceWindow, ServiceWindow } from './serviceWindow';
 import { createLoftWindow, LOFT_WINDOW_KEY, type LoftWindow } from './loftWindow';
@@ -42,6 +42,11 @@ import { computeGridLayout, splittableSizes, hasSplittableCell } from './gridLay
 import { beginGutterDrag, type GutterDrag } from './gutterDrag';
 import { gridDropPlan, type GridDropPlan } from './gridDrop';
 import type { HubState, ServicePatch } from '../shared/hubTypes';
+
+// Instance resolution goes here in Task 10. Today a "service" is still a registry kind,
+// so this shim keeps ~28 call sites stable across that switch.
+const getService = (id: string): ServiceKind | undefined => getKind(id);
+const listServices = (): readonly ServiceKind[] => listKinds();
 
 app.setName('Loft');
 app.setAppUserModelId('chat.loft.Loft');
@@ -141,7 +146,7 @@ const wantsOwnWindow = (id: string): boolean =>
 const gridBefore = config.grid ?? null;
 const gridPruned = prune(
   gridBefore,
-  validGridServices(SERVICES, (id) => config.services[id] !== undefined, wantsOwnWindow),
+  validGridServices(KINDS, (id) => config.services[id] !== undefined, wantsOwnWindow),
 );
 if (gridPruned !== gridBefore) {
   config.grid = gridPruned;
@@ -221,7 +226,7 @@ function syncLoftWindows(): void { helper?.setLoftWindows(windowKeys()); }
  *  config plus wherever the services actually live, and nothing caches it. */
 function hubState(): HubState {
   return buildHubState({
-    services: SERVICES,
+    services: KINDS,
     config,
     running: (id) => hostOf(id) !== undefined,
     visible: (id) => hostOf(id)?.isVisible() ?? false,
@@ -242,7 +247,7 @@ function notifyHub(): void { loft?.sendManager('hub:state', hubState()); }
 
 /** Create (or reuse) a service's OWN window. Reached only through placeService — go via
  *  that (or showService), so nothing can duplicate an attached service into a window. */
-function openService(def: ServiceDef, minimized: boolean, view?: ServiceView): ServiceHost {
+function openService(def: ServiceKind, minimized: boolean, view?: ServiceView): ServiceHost {
   // The reuse check goes through hostOf, not the windows map: a service can live in a
   // shared host now, so "is it already open?" must consult every host.
   const existing = hostOf(def.id);
@@ -287,7 +292,7 @@ function openService(def: ServiceDef, minimized: boolean, view?: ServiceView): S
 
 /** Load a service into the Loft window's rail. Does NOT select it — attaching is not
  *  showing (the open-on-startup set attaches without stealing the manager's place). */
-function attachService(def: ServiceDef, view?: ServiceView): ServiceHost {
+function attachService(def: ServiceKind, view?: ServiceView): ServiceHost {
   const l = loft!;
   const host = l.attach(def, view);
   tray?.addService({ id: def.id, displayName: def.displayName, dnd: config.services[def.id]?.dnd ?? false });
@@ -308,7 +313,7 @@ function attachService(def: ServiceDef, view?: ServiceView): ServiceHost {
 
 /** Load a service into the host its config asks for. THE one place that decides where a
  *  service lives (spec §7); everything else asks hostOf where it ended up. */
-function placeService(def: ServiceDef, minimized: boolean): ServiceHost {
+function placeService(def: ServiceKind, minimized: boolean): ServiceHost {
   // First launch of a service implicitly Adds it (marks it configured, per opt-in-off
   // launcher default — no launcher/icon write here) so a directly-launched service shows
   // up as Installed in the hub (spec §6f). Here rather than in openService so an attached
@@ -343,7 +348,7 @@ function placeService(def: ServiceDef, minimized: boolean): ServiceHost {
  * the rail through the cell branch would make removing the cell the only way to see a
  * gridded service full-size.
  */
-function showService(def: ServiceDef, opts: { preferCell?: boolean } = {}): ServiceHost {
+function showService(def: ServiceKind, opts: { preferCell?: boolean } = {}): ServiceHost {
   const preferCell = opts.preferCell ?? true;
   // A gridded service already has somewhere to be shown: its cell. Select the grid and make
   // that cell the focused one instead of handing the service the whole content rect — which
@@ -554,7 +559,7 @@ function buildServiceMenu(id: string): Electron.MenuItemConstructorOptions[] {
  */
 function buildGridAddMenu(): Electron.MenuItemConstructorOptions[] {
   const inGrid = new Set(gridServicesOf(config.grid ?? null));
-  const items = SERVICES
+  const items = KINDS
     .filter((d) => config.services[d.id] !== undefined)
     .filter((d) => !inGrid.has(d.id) && !isDetached(d.id))
     .map((d) => ({ label: d.displayName, click: () => addToGrid(d.id) }));
@@ -686,7 +691,7 @@ function reconcileAutostart(): void {
     .then(() => notifyHub());
 }
 
-function resolveServiceFromArgs(argv: string[]): ServiceDef | undefined {
+function resolveServiceFromArgs(argv: string[]): ServiceKind | undefined {
   const { service } = parseArgs(argv);
   return service ? getService(service) : undefined;
 }
@@ -1207,7 +1212,7 @@ if (!app.requestSingleInstanceLock()) {
     try {
       const configured: TrayServiceSeed[] = Object.keys(config.services)
         .map((id) => getService(id))
-        .filter((d): d is ServiceDef => d !== undefined)
+        .filter((d): d is ServiceKind => d !== undefined)
         .map((d) => ({
           id: d.id,
           displayName: d.displayName,
@@ -1322,7 +1327,7 @@ if (!app.requestSingleInstanceLock()) {
     // still parses their `--service <id>` form, so they launch the service at login
     // even when "Open on startup" is unticked — inverting the setting the hub shows.
     try {
-      const removed = removeLegacyAutostart(SERVICES.map((s) => s.id));
+      const removed = removeLegacyAutostart(KINDS.map((s) => s.id));
       if (removed.length) console.log(`Removed ${removed.length} legacy autostart entr${removed.length === 1 ? 'y' : 'ies'} (v1)`);
     } catch (err) { console.error('Legacy autostart cleanup failed:', err); }
 
@@ -1346,7 +1351,7 @@ if (!app.requestSingleInstanceLock()) {
     // handler is registered at module scope above, so it is already there.
     loft = createLoftWindow({
       cfg: config,
-      services: [...SERVICES], // the registry is readonly; the rail wants a plain array
+      services: [...KINDS], // the registry is readonly; the rail wants a plain array
       onQuit: () => quitting,
       badge: (id) => currentBadge.get(id) ?? 0,
       detached: isDetached,

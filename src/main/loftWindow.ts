@@ -1,5 +1,5 @@
 import { BrowserWindow, WebContentsView, Menu } from 'electron';
-import type { ServiceDef } from './registry';
+import type { ServiceKind } from './registry';
 import type { LoftConfig } from './config';
 import { computeLayout, RAIL_WIDTH, type Rect } from './layout';
 import { formatWindowTitle } from './serviceTitle';
@@ -30,7 +30,7 @@ export interface LoftWindow {
   hide(): void;
   /** create+mount a view; does NOT select it. Pass a pre-built (live) view to MOVE it in
    *  from a detached window without reloading; omit it to build a fresh one. */
-  attach(def: ServiceDef, view?: ServiceView): ServiceHost;
+  attach(def: ServiceKind, view?: ServiceView): ServiceHost;
   /** Unmount and hand the still-live view back for re-mounting elsewhere.
    *  ORDERING CONTRACT: call this BEFORE writing `detached: true` to config. It picks
    *  the next tab by locating `id` in the attached list, so a config flag flipped first
@@ -87,7 +87,7 @@ export interface LoftWindow {
 
 export interface LoftWindowDeps {
   cfg: LoftConfig;
-  services: ServiceDef[];
+  services: ServiceKind[];
   /** Never true unless the app is really quitting — close-to-tray depends on it. */
   onQuit(): boolean;
   /** Live unread for a service, ungated (the rail model applies badgesEnabled itself). */

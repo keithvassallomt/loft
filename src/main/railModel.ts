@@ -1,5 +1,5 @@
 import type { LoftConfig } from './config';
-import type { ServiceDef } from './registry';
+import type { ServiceKind } from './registry';
 import { GRID_ID, services as gridServices, type GridNode } from './gridTree';
 
 /** One entry in the Loft window's service rail. */
@@ -31,7 +31,7 @@ export interface RailState {
 
 export interface RailModelInput {
   /** The registry, in its canonical order — the tiebreak for anything railOrder omits. */
-  services: ServiceDef[];
+  services: ServiceKind[];
   config: LoftConfig;
   loaded(id: string): boolean;
   detached(id: string): boolean;
@@ -44,7 +44,7 @@ export interface RailModelInput {
  * rail renders without duplicating the ranking rule — a drag writes railOrder, and it must
  * agree with what the user saw.
  */
-export function orderedRailIds(services: readonly ServiceDef[], config: LoftConfig): string[] {
+export function orderedRailIds(services: readonly ServiceKind[], config: LoftConfig): string[] {
   const installed = services.filter((d) => config.services[d.id] !== undefined);
   const order = config.railOrder ?? [];
   const rank = (id: string): number => {

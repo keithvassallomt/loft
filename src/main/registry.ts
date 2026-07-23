@@ -1,4 +1,5 @@
-export interface ServiceDef {
+/** One supported app. A *kind*, not an account — several instances can share one. */
+export interface ServiceKind {
   id: string;
   displayName: string;
   url: string;
@@ -27,7 +28,7 @@ export interface ServiceDef {
   serverRequired?: boolean;
 }
 
-export const SERVICES: readonly ServiceDef[] = [
+export const KINDS: readonly ServiceKind[] = [
   { id: 'whatsapp', displayName: 'WhatsApp', url: 'https://web.whatsapp.com/', selfHosted: false, origins: ['https://web.whatsapp.com'] },
   { id: 'messenger', displayName: 'Messenger', url: 'https://www.facebook.com/messages/', selfHosted: false, origins: ['https://www.facebook.com'] },
   { id: 'slack', displayName: 'Slack', url: 'https://app.slack.com/client/', selfHosted: false, origins: ['https://app.slack.com'], clearCachesOnStart: true },
@@ -36,12 +37,12 @@ export const SERVICES: readonly ServiceDef[] = [
   { id: 'talk', displayName: 'NextCloud Talk', url: 'https://example.invalid/', selfHosted: true, origins: [], appPath: '/apps/spreed/', serverRequired: true },
 ];
 
-export function listServices(): readonly ServiceDef[] {
-  return SERVICES;
+export function listKinds(): readonly ServiceKind[] {
+  return KINDS;
 }
 
-export function getService(id: string): ServiceDef | undefined {
-  return SERVICES.find((s) => s.id === id);
+export function getKind(id: string): ServiceKind | undefined {
+  return KINDS.find((s) => s.id === id);
 }
 
 /**
@@ -60,9 +61,9 @@ export function getService(id: string): ServiceDef | undefined {
  * Unparseable input is returned untouched: the recovery overlay explains a failed load
  * far better than a silently rewritten URL would.
  */
-export function effectiveUrl(service: ServiceDef, customUrl?: string): string {
+export function effectiveUrl(kind: ServiceKind, customUrl?: string): string {
   const raw = customUrl?.trim();
-  if (!service.selfHosted || !raw) return service.url;
+  if (!kind.selfHosted || !raw) return kind.url;
 
   let url: URL;
   try {
@@ -71,7 +72,7 @@ export function effectiveUrl(service: ServiceDef, customUrl?: string): string {
     return raw;
   }
 
-  const appPath = service.appPath;
+  const appPath = kind.appPath;
   if (appPath && !url.pathname.includes(appPath.replace(/\/+$/, ''))) {
     url.pathname = `${url.pathname.replace(/\/+$/, '')}${appPath}`;
   }

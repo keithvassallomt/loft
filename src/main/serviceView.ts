@@ -1,6 +1,6 @@
 import { BrowserWindow, WebContentsView, session, shell } from 'electron';
 import { join } from 'node:path';
-import type { ServiceDef } from './registry';
+import type { ServiceKind } from './registry';
 import { effectiveUrl } from './registry';
 import type { LoftConfig } from './config';
 import type { Rect } from './layout';
@@ -19,7 +19,7 @@ import { classifyNavigation, classifyWindowOpen, isExternallyOpenable } from './
  * That is what lets a detach keep the page's scroll position and half-typed drafts.
  */
 export interface ServiceView {
-  readonly def: ServiceDef;
+  readonly def: ServiceKind;
   readonly view: WebContentsView;
   /** Add this view (and any live recovery overlay) to a window, at `rect`. */
   mount(window: BrowserWindow, rect: Rect): void;
@@ -102,7 +102,7 @@ function safeSend(view: WebContentsView, channel: string, ...args: unknown[]): v
  * that `mount()` re-checks, or move the initial load into an explicit start() the
  * host calls after mounting.
  */
-export function createServiceView(def: ServiceDef, cfg: LoftConfig): ServiceView {
+export function createServiceView(def: ServiceKind, cfg: LoftConfig): ServiceView {
   const partition = `persist:${def.id}`;
   const ses = session.fromPartition(partition);
   configureSession(ses, partition);

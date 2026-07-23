@@ -1,9 +1,9 @@
-import type { ServiceDef } from './registry';
+import type { ServiceKind } from './registry';
 import type { LoftConfig } from './config';
 import type { HubState, TrayBackend } from '../shared/hubTypes';
 
 export interface HubStateDeps {
-  services: readonly ServiceDef[];
+  services: readonly ServiceKind[];
   config: LoftConfig;
   running(id: string): boolean;
   visible(id: string): boolean;

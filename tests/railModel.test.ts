@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { buildRailModel, nextActiveId, orderedRailIds, type RailModelInput } from '../src/main/railModel';
-import type { ServiceDef } from '../src/main/registry';
+import type { ServiceKind } from '../src/main/registry';
 
-const def = (id: string, displayName: string): ServiceDef =>
+const def = (id: string, displayName: string): ServiceKind =>
   ({ id, displayName, url: `https://${id}.test/`, selfHosted: false, origins: [] });
 
 const SERVICES = [def('whatsapp', 'WhatsApp'), def('slack', 'Slack'), def('element', 'Element')];

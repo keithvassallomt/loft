@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { addService, removeService } from '../src/main/install';
-import { getService } from '../src/main/registry';
+import { getKind } from '../src/main/registry';
 import type { LoftConfig } from '../src/main/config';
 
-const wa = getService('whatsapp')!;
+const wa = getKind('whatsapp')!;
 const tmps: string[] = [];
 function tmp(): string { const d = mkdtempSync(join(tmpdir(), 'loft-inst-')); tmps.push(d); return d; }
 afterEach(() => { for (const d of tmps.splice(0)) rmSync(d, { recursive: true, force: true }); });

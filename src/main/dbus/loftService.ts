@@ -1,5 +1,5 @@
 import * as dbus from 'dbus-next';
-import { SERVICES } from '../registry';
+import { KINDS } from '../registry';
 import { dbusName } from './names';
 
 const { Interface, ACCESS_READ } = dbus.interface;
@@ -71,7 +71,7 @@ export async function startLoftDbusService(deps: LoftServiceDeps): Promise<void>
   const bus = dbus.sessionBus();
   await bus.requestName(BUS, 0);
   bus.export('/chat/loft/Loft', new LoftRootObject(deps));
-  for (const svc of SERVICES) {
+  for (const svc of KINDS) {
     bus.export(`/chat/loft/${dbusName(svc.displayName)}`, new LoftServiceObject(svc.id, deps));
   }
 }

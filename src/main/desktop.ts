@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ServiceDef } from './registry';
+import type { ServiceKind } from './registry';
 import { applicationsDir, iconsDir } from './paths';
 
 type Env = NodeJS.ProcessEnv;
@@ -34,7 +34,7 @@ export function isDevExec(exec: string, env: Env = process.env): boolean {
   return !env.APPIMAGE && (exec.includes('/node_modules/') || exec.endsWith('/electron'));
 }
 
-export function serviceLauncherContent(def: ServiceDef, exec: string, iconPath: string): string {
+export function serviceLauncherContent(def: ServiceKind, exec: string, iconPath: string): string {
   return (
     `[Desktop Entry]\n` +
     `Type=Application\n` +
@@ -61,7 +61,7 @@ export function hubDesktopContent(exec: string, iconPath: string): string {
 }
 
 /** Copy the bundled per-service PNG into the user's loft icons dir; return the dest path. */
-export function deployServiceIcon(def: ServiceDef, opts: { env?: Env; iconSourceDir: string }): string {
+export function deployServiceIcon(def: ServiceKind, opts: { env?: Env; iconSourceDir: string }): string {
   const dir = iconsDir(opts.env);
   mkdirSync(dir, { recursive: true });
   const dst = join(dir, `${def.id}.png`);
@@ -76,7 +76,7 @@ export function serviceLauncherPath(id: string, env?: Env): string {
   return join(applicationsDir(env), `loft-${id}.desktop`);
 }
 
-function launcherPath(def: ServiceDef, env?: Env): string {
+function launcherPath(def: ServiceKind, env?: Env): string {
   return serviceLauncherPath(def.id, env);
 }
 
@@ -92,7 +92,7 @@ function launcherPath(def: ServiceDef, env?: Env): string {
  * doing it here covers every caller at once.
  */
 export function writeServiceLauncher(
-  def: ServiceDef,
+  def: ServiceKind,
   opts: { env?: Env; execPath?: string; iconSourceDir: string },
 ): void {
   const env = opts.env ?? process.env;
@@ -108,7 +108,7 @@ export function writeServiceLauncher(
   writeFileSync(launcherPath(def, opts.env), serviceLauncherContent(def, exec, icon), 'utf8');
 }
 
-export function removeServiceLauncher(def: ServiceDef, env: Env = process.env): void {
+export function removeServiceLauncher(def: ServiceKind, env: Env = process.env): void {
   const p = launcherPath(def, env);
   if (existsSync(p)) rmSync(p, { force: true });
 }

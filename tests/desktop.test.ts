@@ -6,9 +6,9 @@ import {
   isFlatpak, desktopExec, isDevExec, serviceLauncherContent, hubDesktopContent,
   writeServiceLauncher, removeServiceLauncher, deployServiceIcon, ensureHubDesktopEntry,
 } from '../src/main/desktop';
-import { getService } from '../src/main/registry';
+import { getKind } from '../src/main/registry';
 
-const wa = getService('whatsapp')!;
+const wa = getKind('whatsapp')!;
 const tmps: string[] = [];
 function tmp(): string { const d = mkdtempSync(join(tmpdir(), 'loft-')); tmps.push(d); return d; }
 afterEach(() => { for (const d of tmps.splice(0)) rmSync(d, { recursive: true, force: true }); });

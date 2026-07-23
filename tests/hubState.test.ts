@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { buildHubState } from '../src/main/hubState';
-import { SERVICES } from '../src/main/registry';
+import { KINDS } from '../src/main/registry';
 import type { LoftConfig } from '../src/main/config';
 
 const base = {
-  services: SERVICES,
+  services: KINDS,
   running: () => false,
   visible: () => false,
   badge: () => 0,
@@ -18,7 +18,7 @@ describe('buildHubState', () => {
     const s = buildHubState({ ...base, config });
     expect(s.services.find((x) => x.id === 'whatsapp')!.installed).toBe(true);
     expect(s.services.find((x) => x.id === 'slack')!.installed).toBe(false);
-    expect(s.services).toHaveLength(SERVICES.length);
+    expect(s.services).toHaveLength(KINDS.length);
   });
 
   it('tells the hub whether a server is required and what the default is', () => {

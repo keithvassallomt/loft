@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { buildRailState } from '../src/main/railModel';
 import { GRID_ID } from '../src/main/gridTree';
 import type { LoftConfig } from '../src/main/config';
-import type { ServiceDef } from '../src/main/registry';
+import type { ServiceKind } from '../src/main/registry';
 
-const defs: ServiceDef[] = [
-  { id: 'whatsapp', displayName: 'WhatsApp' } as ServiceDef,
-  { id: 'slack', displayName: 'Slack' } as ServiceDef,
+const defs: ServiceKind[] = [
+  { id: 'whatsapp', displayName: 'WhatsApp' } as ServiceKind,
+  { id: 'slack', displayName: 'Slack' } as ServiceKind,
 ];
 
 const base = {
