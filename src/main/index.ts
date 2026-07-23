@@ -28,7 +28,7 @@ import { createSignalShutdown } from './shutdown';
 import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath } from './desktop';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
-import { RAIL_WIDTH, GRID_GUTTER, type Rect } from './layout';
+import { RAIL_WIDTH } from './layout';
 import { railDragOutcome, railGestureOutcome } from './railDrag';
 import { railSlotIndex, type RailSlot } from './railSlots';
 import { moveInOrder } from './railOrder';
