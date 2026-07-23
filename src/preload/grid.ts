@@ -1,0 +1,38 @@
+import { contextBridge, ipcRenderer, type IpcRenderer } from 'electron';
+import type { GridViewState } from '../main/gridLayout';
+
+export interface GridBridge {
+  /** Subscribe to grid chrome state. Returns an unsubscribe — call it on teardown. */
+  onState(cb: (state: GridViewState) => void): () => void;
+  /** Make this cell the zoom target. */
+  focusCell(service: string): void;
+  /** Take this service out of the grid; it keeps running and stays in the rail. */
+  removeCell(service: string): void;
+  /** A header-handle drag began; main resolves the drop from the moves that follow. */
+  cellDragBegin(service: string): void;
+  /** A gutter drag began, identified by the split it resizes. */
+  gutterDragBegin(path: string, dir: 'row' | 'col'): void;
+  /** Live pointer position during either drag, in grid-view coordinates. */
+  dragMove(x: number, y: number): void;
+  /** Release position; main decides the outcome. */
+  dragEnd(x: number, y: number): void;
+}
+
+/** Pure factory so the bridge is testable against a fake ipc (mirrors preload/rail.ts). */
+export function buildGridBridge(ipc: IpcRenderer): GridBridge {
+  return {
+    onState(cb) {
+      const h = (_e: unknown, state: GridViewState): void => cb(state);
+      ipc.on('grid:state', h);
+      return () => ipc.removeListener('grid:state', h);
+    },
+    focusCell: (service) => ipc.send('grid:focusCell', service),
+    removeCell: (service) => ipc.send('grid:removeCell', service),
+    cellDragBegin: (service) => ipc.send('grid:cellDragBegin', service),
+    gutterDragBegin: (path, dir) => ipc.send('grid:gutterDragBegin', { path, dir }),
+    dragMove: (x, y) => ipc.send('grid:dragMove', { x, y }),
+    dragEnd: (x, y) => ipc.send('grid:dragEnd', { x, y }),
+  };
+}
+
+contextBridge.exposeInMainWorld('loftGrid', buildGridBridge(ipcRenderer));

@@ -31,6 +31,17 @@ export interface GridLayout {
   gutters: GridGutter[];
 }
 
+/** Everything the grid chrome renderer needs in one push. `origin` is the content
+ *  rect's top-left: the renderer's own coordinate space starts there, but every Rect in
+ *  `layout` is in window coordinates, so the renderer subtracts it. */
+export interface GridViewState {
+  layout: GridLayout;
+  origin: { x: number; y: number };
+  names: Record<string, string>;
+  badges: Record<string, number>;
+  focused: string | undefined;
+}
+
 const px = (n: number): number => Math.max(0, Math.round(n));
 
 export function computeGridLayout(tree: GridNode | null, content: Rect): GridLayout {

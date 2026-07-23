@@ -555,6 +555,7 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on('rail:select', (_e, id: string) => { const d = getService(id); if (d) showService(d); });
   ipcMain.on('rail:menu', (_e, id: string) => loft?.popServiceMenu(id));
   ipcMain.on('rail:showManager', () => loft?.showManager());
+  ipcMain.on('rail:showGrid', () => { loft?.showGrid(); loft?.open(); });
   // --- rail drag gestures -----------------------------------------------------
   // The renderer measures and reports; main owns every decision (see railSlots/
   // railGestureOutcome). One cached geometry snapshot serves both gesture kinds: a
@@ -885,6 +886,8 @@ if (!app.requestSingleInstanceLock()) {
       onServiceLoad: (id) => notifications?.registerService(id),
       railPreload: join(__dirname, '..', 'preload', 'rail.js'),
       railHtml: join(__dirname, '..', 'renderer', 'rail', 'index.html'),
+      gridPreload: join(__dirname, '..', 'preload', 'grid.js'),
+      gridHtml: join(__dirname, '..', 'renderer', 'grid', 'index.html'),
       titlebarPreload: join(__dirname, '..', 'preload', 'titlebar.js'),
       titlebarHtml: join(__dirname, '..', 'renderer', 'titlebar', 'index.html'),
       managerPreload: join(__dirname, '..', 'preload', 'hub.js'),

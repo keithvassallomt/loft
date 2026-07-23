@@ -6,6 +6,8 @@ import { formatWindowTitle } from './serviceTitle';
 import { createServiceView, type ServiceView } from './serviceView';
 import type { ServiceHost } from './serviceHost';
 import { buildRailModel, buildRailState, nextActiveId, type RailItem } from './railModel';
+import { computeGridLayout, type GridViewState } from './gridLayout';
+import { GRID_ID } from './gridTree';
 
 /** The window's own display name — the key the GNOME helper and KWin match on. */
 export const LOFT_WINDOW_KEY = 'Loft';
@@ -33,7 +35,7 @@ export interface LoftWindow {
    *  makes it show the manager instead of the next service. */
   detach(id: string): ServiceView | undefined;
   unload(id: string): void; // destroy the view; drop to sleeping
-  select(id: string | undefined): void; // undefined = show the manager
+  select(id: string | undefined): void; // undefined = show the manager, GRID_ID = the grid
   activeId(): string | undefined;
   hostOf(id: string): ServiceHost | undefined;
   has(id: string): boolean;
@@ -41,6 +43,10 @@ export interface LoftWindow {
   setBadge(id: string, count: number): void;
   refreshRail(): void;
   showManager(): void;
+  /** Select the grid view. */
+  showGrid(): void;
+  /** Re-push the grid chrome state (layout, names, badges, focus). */
+  refreshGrid(): void;
   /** Push to the manager view (the hub renderer). index.ts owns the `hub:*` IPC — those
    *  handlers drive main's own state (config, hosts, autostart), not this window's — but the
    *  manager is a view in here, so this is its way in. No-ops before the view has loaded;
@@ -78,6 +84,8 @@ export interface LoftWindowDeps {
   onServiceLoad(id: string): void;
   railPreload: string;
   railHtml: string;
+  gridPreload: string;
+  gridHtml: string;
   titlebarPreload: string;
   titlebarHtml: string;
   managerPreload: string;
@@ -108,6 +116,8 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   const views = new Map<string, ServiceView>();
   const hosts = new Map<string, ServiceHost>();
   let active: string | undefined;
+  /** Which grid cell the titlebar's zoom buttons act on (grid-view spec §7.4). */
+  let focusedCell: string | undefined;
 
   // --- chrome views -----------------------------------------------------------
   const rail = new WebContentsView({
@@ -123,10 +133,21 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   });
   void manager.webContents.loadFile(deps.managerHtml);
 
+  // The grid's chrome: header strips, gutters and the empty state. Deliberately at the
+  // BOTTOM of the grid's own stack — service views mount on top of it in their body
+  // rects, so headers and gutters are simply the regions no page covers. A transparent
+  // view over the pages would swallow every click in its rect (electron#49039, open).
+  const grid = new WebContentsView({
+    webPreferences: { preload: deps.gridPreload, contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  void grid.webContents.loadFile(deps.gridHtml);
+
   // Insertion order is z-order. Rail and titlebar never overlap the content rect, so
-  // only manager-vs-service matters, and setVisible arbitrates that.
+  // only manager-vs-service matters, and setVisible arbitrates that. The grid's chrome
+  // goes in before the manager so the service views added later land above it.
   window.contentView.addChildView(rail);
   window.contentView.addChildView(titlebar);
+  window.contentView.addChildView(grid);
   window.contentView.addChildView(manager);
 
   const rects = (): { rail: Rect; titlebar: Rect; content: Rect } => {
@@ -139,6 +160,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     rail.setBounds(r.rail);
     titlebar.setBounds(r.titlebar);
     manager.setBounds(r.content);
+    grid.setBounds(r.content);
     for (const sv of views.values()) sv.setRect(r.content);
   };
   relayout();
@@ -182,6 +204,27 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     safeSend(titlebar, 'titlebar:set-context', active);
   };
 
+  const refreshGrid = (): void => {
+    const content = rects().content;
+    const layout = computeGridLayout(deps.cfg.grid ?? null, content);
+    const names: Record<string, string> = {};
+    const badges: Record<string, number> = {};
+    for (const c of layout.cells) {
+      const def = deps.services.find((d) => d.id === c.service);
+      names[c.service] = def?.displayName ?? c.service;
+      badges[c.service] =
+        deps.cfg.services[c.service]?.badgesEnabled === false ? 0 : deps.badge(c.service);
+    }
+    const state: GridViewState = {
+      layout,
+      origin: { x: content.x, y: content.y },
+      names,
+      badges,
+      focused: focusedCell,
+    };
+    safeSend(grid, 'grid:state', state);
+  };
+
   /**
    * The window's OS title (spec 09 §6a): "Loft", or "Loft (7)" summing unread across
    * ATTACHED, loaded, badges-enabled services. Attached-only on purpose — it names this
@@ -198,7 +241,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     window.setTitle(formatWindowTitle(LOFT_WINDOW_KEY, total));
   };
 
-  const refreshAll = (): void => { refreshRail(); refreshTitlebar(); refreshWindowTitle(); };
+  const refreshAll = (): void => { refreshRail(); refreshTitlebar(); refreshGrid(); refreshWindowTitle(); };
 
   // Cold-start race (mirrors serviceWindow's titlebar did-finish-load binding): the
   // showManager() call at the bottom of this function runs refreshAll() in the same
@@ -214,9 +257,27 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   // and titlebar (push-only) can.
   rail.webContents.on('did-finish-load', refreshAll);
   titlebar.webContents.on('did-finish-load', refreshAll);
+  grid.webContents.on('did-finish-load', refreshAll);
 
   // --- selection --------------------------------------------------------------
+  /** Position the grid's service views over the chrome view. Task 8 fills this in;
+   *  for now the grid shows only its own chrome. */
+  const placeGridCells = (): void => {
+    for (const sv of views.values()) sv.setVisible(false);
+  };
+
   const select = (id: string | undefined): void => {
+    // GRID_ID is a reserved selection, not a service: it has no entry in `views`, so it
+    // must be admitted before the selectable-id guard below rejects it.
+    if (id === GRID_ID) {
+      active = GRID_ID;
+      manager.setVisible(false);
+      grid.setVisible(true);
+      placeGridCells();
+      refreshAll();
+      deps.onActiveChanged(GRID_ID);
+      return;
+    }
     // An unselectable id (sleeping ⇒ no view, or detached ⇒ its own window) must not be
     // left as `active`: that strands a dead id over a blank content rect. Fall back to the
     // manager rather than returning. select(undefined) passes the guard, so no recursion.
@@ -224,6 +285,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     active = id;
     const r = rects().content;
     manager.setVisible(id === undefined);
+    grid.setVisible(false);
     for (const [vid, sv] of views) {
       const on = vid === id;
       sv.setVisible(on);
@@ -234,6 +296,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   };
 
   const showManager = (): void => select(undefined);
+  const showGrid = (): void => select(GRID_ID);
 
   // --- lifecycle --------------------------------------------------------------
   window.on('close', (e) => {
@@ -357,6 +420,8 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
 
     refreshRail: refreshAll,
     showManager,
+    showGrid,
+    refreshGrid,
     sendManager: (channel, ...args) => safeSend(manager, channel, ...args),
     sendRail: (channel, ...args) => safeSend(rail, channel, ...args),
 
@@ -367,12 +432,13 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       Menu.buildFromTemplate(deps.buildServiceMenu(id)).popup({ window });
     },
 
-    /** The rail/titlebar/manager views belong to the WINDOW, not to any one service —
+    /** The rail/titlebar/grid/manager views belong to the WINDOW, not to any one service —
      *  no ServiceHost owns them, so index.ts must ask the window before falling back
      *  to a per-service lookup when routing titlebar IPC. */
     ownsWebContents: (wcId) =>
       rail.webContents.id === wcId ||
       titlebar.webContents.id === wcId ||
+      grid.webContents.id === wcId ||
       manager.webContents.id === wcId ||
       [...views.values()].some((sv) => sv.ownsWebContents(wcId)),
     persist,

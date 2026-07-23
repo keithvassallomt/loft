@@ -1,0 +1,78 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  height: 100vh;
+  background: #1c1d21;
+  color: #e6e7ea;
+  font: 12px/1.3 system-ui, sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+#grid { position: absolute; inset: 0; }
+
+.chead {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px;
+  background: #33363f;
+  font-size: 11px;
+  overflow: hidden;
+}
+.chead.focused { background: #2c4a80; }
+.chead .icon { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.chead .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chead .badge {
+  flex: none;
+  padding: 0 4px;
+  border-radius: 7px;
+  background: #4c8dff;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+}
+.chead .spacer { flex: 1; }
+.chead button {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: #9497a1;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.chead button:hover { background: #ffffff1f; color: #fff; }
+.chead .handle { cursor: grab; }
+.chead .handle:active { cursor: grabbing; }
+
+.gutter { position: absolute; background: #0f1013; }
+.gutter.row { cursor: col-resize; }
+.gutter.col { cursor: row-resize; }
+.gutter:hover, .gutter.dragging { background: #4c8dff; }
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #9497a1;
+  text-align: center;
+}
+.empty.show { display: flex; }
+.empty .plus {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed #ffffff33;
+  border-radius: 11px;
+  font-size: 20px;
+}
+.empty span { opacity: 0.6; }
