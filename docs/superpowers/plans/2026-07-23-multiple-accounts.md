@@ -564,15 +564,17 @@ git commit -m "feat(instances): resolve accounts from kinds, with stable D-Bus s
 
 - [ ] **Step 1: Move and rename the sources**
 
+`assets/icons/alt/` is **untracked** — git has never seen these files — so this is a plain `mv`, not `git mv`.
+
 ```bash
 mkdir -p assets/icons/variants
 for d in assets/icons/alt/*-pastel-variants; do
   for f in "$d"/*.svg; do
     b=$(basename "$f" .svg)                 # e.g. whatsapp-pastel-rose
-    git mv "$f" "assets/icons/variants/${b/-pastel-/-}.svg"
+    mv "$f" "assets/icons/variants/${b/-pastel-/-}.svg"
   done
 done
-git rm -q assets/icons/alt/whatsapp-pastel-variants/palette.json
+rm -f assets/icons/alt/whatsapp-pastel-variants/palette.json
 rmdir assets/icons/alt/*-pastel-variants assets/icons/alt
 ls assets/icons/variants/
 ```
@@ -864,6 +866,8 @@ git commit -m "feat(icons): variant index, auto-assignment and the icon fallback
 
 ### Task 6: Launchers and icon deployment take an instance
 
+> **Ordering note (plan-mandated):** this task deliberately leaves `src/main/index.ts` compiling against a temporary shim. Task 10 removes it. It is scaffolding with a named removal point, not an oversight.
+
 **Files:**
 - Modify: `src/main/desktop.ts:37-48` (`serviceLauncherContent`), `:63-71` (`deployServiceIcon`), `:79-114`
 - Test: `tests/desktop.test.ts`
@@ -1020,6 +1024,8 @@ git commit -m "feat(desktop): launchers and icons are per instance, not per kind
 ---
 
 ### Task 7: Adding and removing an instance
+
+> **Ordering note (plan-mandated):** this task deliberately leaves `src/main/index.ts` compiling against a temporary shim. Task 10 removes it. It is scaffolding with a named removal point, not an oversight.
 
 **Files:**
 - Modify: `src/main/install.ts`
@@ -1375,6 +1381,8 @@ git commit -m "feat(tray): carry the D-Bus segment, rename in place, forget remo
 
 ### Task 9: D-Bus objects are per instance and dynamic
 
+> **Ordering note (plan-mandated):** this task leaves `src/main/index.ts` passing a temporary `instances` dep and holding an unused handle; Task 10 wires both. Scaffolding with a named removal point, not an oversight.
+
 **Files:**
 - Modify: `src/main/dbus/loftService.ts`
 - Test: `tests/dbusNames.test.ts`
@@ -1649,6 +1657,8 @@ git commit -m "feat(main): services are accounts everywhere in the main process"
 ---
 
 ### Task 11: The hub speaks instances and kinds, and can add another
+
+> **Ordering note (plan-mandated):** the two new IPC deps are stubbed here and implemented in Task 12. Scaffolding with a named removal point, not an oversight.
 
 **Files:**
 - Modify: `src/shared/hubTypes.ts`, `src/main/hubState.ts`, `src/main/hubIpc.ts`, `src/preload/hub.ts`, `src/main/index.ts` (the `buildHubState` call)
