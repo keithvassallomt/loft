@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRenderer } from 'electron';
 import type { GridViewState } from '../main/gridLayout';
+import type { Rect } from '../main/layout';
 
 export interface GridBridge {
   /** Subscribe to grid chrome state. Returns an unsubscribe — call it on teardown. */
@@ -16,6 +17,13 @@ export interface GridBridge {
   dragMove(x: number, y: number): void;
   /** Release position; main decides the outcome. */
   dragEnd(x: number, y: number): void;
+  /** The drop preview rectangle, or null to hide it. Returns an unsubscribe.
+   *  Shared with the transparent overlay view (src/renderer/gridOverlay), which runs this
+   *  same preload — it needs nothing else the bridge offers, and a second preload for one
+   *  channel would be a second place to keep the channel names in step. */
+  onPreview(
+    cb: (r: (Rect & { originX: number; originY: number }) | null) => void,
+  ): () => void;
 }
 
 /** Pure factory so the bridge is testable against a fake ipc (mirrors preload/rail.ts). */
@@ -32,6 +40,11 @@ export function buildGridBridge(ipc: IpcRenderer): GridBridge {
     gutterDragBegin: (path, dir) => ipc.send('grid:gutterDragBegin', { path, dir }),
     dragMove: (x, y) => ipc.send('grid:dragMove', { x, y }),
     dragEnd: (x, y) => ipc.send('grid:dragEnd', { x, y }),
+    onPreview(cb) {
+      const h = (_e: unknown, r: (Rect & { originX: number; originY: number }) | null): void => cb(r);
+      ipc.on('grid:preview', h);
+      return () => ipc.removeListener('grid:preview', h);
+    },
   };
 }
 

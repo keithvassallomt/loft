@@ -112,6 +112,41 @@ export function canSplit(rect: Rect, edge: Edge): boolean {
 }
 
 /**
+ * The sizes gridTree.autoPlace is allowed to measure: a leaf whose split would break the
+ * minimum is reported as unmeasurable, which is autoPlace's own skip signal.
+ *
+ * The minimum has to be applied on the way IN because autoPlace owns no geometry — it
+ * splits whichever leaf it is told is biggest — and withholding a size is the only lever
+ * the caller has. With every leaf withheld autoPlace declines and returns the tree by
+ * reference, which its callers already treat as a no-op.
+ *
+ * Without this the two ways of adding a cell disagree: a DRAG refuses a sub-minimum split
+ * (the drop preview applies canSplit), while ＋ would silently make one.
+ *
+ * The edge chosen below must stay in step with autoPlace's own rule ("split the long
+ * way") — the question being asked is whether the split autoPlace WOULD make is legal.
+ */
+export function splittableSizes(
+  layout: GridLayout,
+): (service: string) => { width: number; height: number } | undefined {
+  return (service) => {
+    const cell = layout.cells.find((c) => c.service === service);
+    if (!cell) return undefined;
+    const size = { width: cell.body.width, height: cell.body.height };
+    const edge: Edge = size.width >= size.height ? 'right' : 'bottom';
+    return canSplit(cellRect(cell), edge) ? size : undefined;
+  };
+}
+
+/** Is there any cell left that autoPlace could legally split — i.e. would ＋ do anything?
+ *  An empty grid always can: its first service becomes the root leaf, splitting nothing. */
+export function hasSplittableCell(layout: GridLayout): boolean {
+  if (layout.cells.length === 0) return true;
+  const sizeOf = splittableSizes(layout);
+  return layout.cells.some((c) => sizeOf(c.service) !== undefined);
+}
+
+/**
  * Hold a divider drag inside the pixel minimum for both children. gridTree.resize
  * applies only structural bounds — it has no idea how big the split is — so this is
  * the layer that enforces the real limit.

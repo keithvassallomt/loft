@@ -1,0 +1,16 @@
+/* The page itself must stay see-through: this view sits ON TOP of the live service views,
+   so any painted background would hide the grid the preview is describing. The view's own
+   setBackgroundColor('#00000000') is the other half of that — both are required. */
+html, body { margin: 0; height: 100%; background: transparent; }
+
+#preview {
+  position: absolute;
+  display: none;
+  border: 2px solid #4c8dff;
+  border-radius: 4px;
+  background: rgba(76, 141, 255, 0.2);
+  /* Belt and braces: the whole view is hidden between drags, and nothing in here should
+     ever eat a click even while it is up. */
+  pointer-events: none;
+}
+#preview.show { display: block; }

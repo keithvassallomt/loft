@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { computeGridLayout, cellRect, canSplit, clampRatio } from '../src/main/gridLayout';
+import {
+  computeGridLayout, cellRect, canSplit, clampRatio, splittableSizes, hasSplittableCell,
+} from '../src/main/gridLayout';
 import { CELL_HEADER_HEIGHT, GRID_GUTTER, type Rect } from '../src/main/layout';
 import type { GridNode } from '../src/main/gridTree';
 
@@ -91,6 +93,45 @@ describe('canSplit', () => {
 
   it('refuses a horizontal split that would go under MIN_CELL_HEIGHT plus the header', () => {
     expect(canSplit({ x: 0, y: 0, width: 1000, height: 300 }, 'top')).toBe(false);
+  });
+});
+
+describe('splittableSizes / hasSplittableCell — the ＋ gate', () => {
+  // The window the ＋ regression was measured in: ~900x600, minus the rail and titlebar.
+  const small: Rect = { x: 52, y: 40, width: 848, height: 560 };
+
+  const grid4: GridNode = {
+    kind: 'split', dir: 'row', ratio: 0.5,
+    a: { kind: 'split', dir: 'col', ratio: 0.5, a: leaf('whatsapp'), b: leaf('slack') },
+    b: { kind: 'split', dir: 'col', ratio: 0.5, a: leaf('telegram'), b: leaf('element') },
+  };
+
+  it('says an empty grid has room — the first service splits nothing', () => {
+    expect(hasSplittableCell(computeGridLayout(null, content))).toBe(true);
+  });
+
+  it('measures a leaf that can still be split', () => {
+    const sizeOf = splittableSizes(computeGridLayout(leaf('whatsapp'), content));
+    expect(sizeOf('whatsapp')).toEqual({ width: 1000, height: 600 - CELL_HEADER_HEIGHT });
+  });
+
+  it('withholds a leaf whose split would go under the minimum, so autoPlace skips it', () => {
+    // Four cells of 421x277 in a 848x560 content rect: halving one horizontally leaves
+    // 207px against a 240px minimum, and halving it vertically leaves 135px of body
+    // against 160 + the header.
+    const layout = computeGridLayout(grid4, small);
+    const sizeOf = splittableSizes(layout);
+    for (const c of layout.cells) expect(sizeOf(c.service)).toBeUndefined();
+    expect(hasSplittableCell(layout)).toBe(false);
+  });
+
+  it('still finds room for the same grid in a window big enough for it', () => {
+    const layout = computeGridLayout(grid4, { x: 52, y: 40, width: 2000, height: 1400 });
+    expect(hasSplittableCell(layout)).toBe(true);
+  });
+
+  it('reports an unknown service as unmeasurable rather than throwing', () => {
+    expect(splittableSizes(computeGridLayout(leaf('whatsapp'), content))('nope')).toBeUndefined();
   });
 });
 

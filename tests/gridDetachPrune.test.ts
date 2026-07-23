@@ -19,6 +19,7 @@ vi.mock('electron', () => {
     webContents = new FakeWebContents();
     setBounds(): void {}
     setVisible(): void {}
+    setBackgroundColor(): void {}
   }
   class BrowserWindow {
     contentView = { addChildView: (): void => {}, removeChildView: (): void => {} };
@@ -111,7 +112,7 @@ function make(grid: GridNode | null | undefined, attachIds: string[]): Harness {
     onServiceLoad: () => {},
     ensureAttached,
     railPreload: 'rail.js', railHtml: 'rail.html',
-    gridPreload: 'grid.js', gridHtml: 'grid.html',
+    gridPreload: 'grid.js', gridHtml: 'grid.html', overlayHtml: 'overlay.html',
     titlebarPreload: 'tb.js', titlebarHtml: 'tb.html',
     managerPreload: 'mgr.js', managerHtml: 'mgr.html',
     iconPath: 'loft.png',

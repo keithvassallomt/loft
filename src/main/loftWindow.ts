@@ -67,6 +67,10 @@ export interface LoftWindow {
   popGridAddMenu(): void;
   /** The content rect, so main can compute grid geometry without owning the window. */
   contentRect(): Rect;
+  /** Show the drop preview at `rect` (window coordinates), or hide it with null. Drawn by
+   *  a transparent overlay view above every service view, because a page cannot be drawn
+   *  on from outside it. */
+  showDropPreview(rect: Rect | null): void;
   ownsWebContents(id: number): boolean;
   persist(): void;
   destroy(): void;
@@ -107,6 +111,8 @@ export interface LoftWindowDeps {
   railHtml: string;
   gridPreload: string;
   gridHtml: string;
+  /** The drop-preview overlay's page. Shares gridPreload — it only needs `grid:preview`. */
+  overlayHtml: string;
   titlebarPreload: string;
   titlebarHtml: string;
   managerPreload: string;
@@ -163,6 +169,23 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   });
   void grid.webContents.loadFile(deps.gridHtml);
 
+  // The drop preview, drawn over the live pages: a WebContentsView cannot be painted on
+  // from outside, so the only way to show a rectangle across the cells is another view on
+  // top of them. Transparent, and ALWAYS PRESENT — created once here and toggled with
+  // setVisible rather than built per drag, because a freshly created view does not cover
+  // the views below it until its page has finished loading (electron#47351, open), which
+  // would flicker in the middle of the gesture.
+  //
+  // Two silent failures live in the next line: the alpha byte comes FIRST (AARRGGBB, not
+  // RRGGBBAA), and the string 'transparent' is not a valid colour here — it is accepted
+  // and ignored, leaving an opaque view over the grid.
+  const overlay = new WebContentsView({
+    webPreferences: { preload: deps.gridPreload, contextIsolation: true, sandbox: true, nodeIntegration: false },
+  });
+  overlay.setBackgroundColor('#00000000');
+  void overlay.webContents.loadFile(deps.overlayHtml);
+  overlay.setVisible(false);
+
   // Insertion order is z-order. Rail and titlebar never overlap the content rect, so
   // only manager-vs-service matters, and setVisible arbitrates that. The grid's chrome
   // goes in before the manager so the service views added later land above it.
@@ -170,6 +193,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   window.contentView.addChildView(titlebar);
   window.contentView.addChildView(grid);
   window.contentView.addChildView(manager);
+  window.contentView.addChildView(overlay);
 
   const rects = (): { rail: Rect; titlebar: Rect; content: Rect } => {
     const [w, h] = window.getContentSize();
@@ -186,6 +210,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     titlebar.setBounds(r.titlebar);
     manager.setBounds(r.content);
     grid.setBounds(r.content);
+    overlay.setBounds(r.content);
     // The grid owns the content rect while it is the selection: giving every view the
     // full rect here would undo the cell placement one line later.
     if (active === GRID_ID) { placeGridCells(); refreshGrid(); return; }
@@ -318,6 +343,9 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   const restack = (): void => {
     window.contentView.addChildView(grid);
     for (const sv of views.values()) sv.raise();
+    // Last, unconditionally: the drop preview describes where a page WILL go, so it has
+    // to sit above every page it is describing. Re-raising a hidden view is free.
+    window.contentView.addChildView(overlay);
   };
 
   /**
@@ -588,6 +616,18 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
 
     contentRect: () => rects().content,
 
+    /** Hidden while there is nothing to preview, so the overlay never sits over the pages
+     *  outside a drag — it has no click-through, and neither does anything else in a
+     *  WebContentsView stack. The rect is pushed in window coordinates with the content
+     *  rect's origin alongside it, exactly as the grid chrome's own state is: the renderer
+     *  positions what it is told and computes nothing. */
+    showDropPreview: (r) => {
+      overlay.setVisible(r !== null);
+      const content = rects().content;
+      safeSend(overlay, 'grid:preview',
+        r === null ? null : { ...r, originX: content.x, originY: content.y });
+    },
+
     /** The rail/titlebar/grid/manager views belong to the WINDOW, not to any one service —
      *  no ServiceHost owns them, so index.ts must ask the window before falling back
      *  to a per-service lookup when routing titlebar IPC. */
@@ -595,6 +635,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       rail.webContents.id === wcId ||
       titlebar.webContents.id === wcId ||
       grid.webContents.id === wcId ||
+      overlay.webContents.id === wcId ||
       manager.webContents.id === wcId ||
       [...views.values()].some((sv) => sv.ownsWebContents(wcId)),
     persist,

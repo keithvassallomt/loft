@@ -28,13 +28,19 @@ import { createSignalShutdown } from './shutdown';
 import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath } from './desktop';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
-import { RAIL_WIDTH } from './layout';
+import { RAIL_WIDTH, GRID_GUTTER, type Rect } from './layout';
 import { railDragOutcome, railGestureOutcome } from './railDrag';
 import { railSlotIndex, type RailSlot } from './railSlots';
 import { moveInOrder } from './railOrder';
 import { orderedRailIds } from './railModel';
-import { services as gridServicesOf, prune, validGridServices, autoPlace } from './gridTree';
-import { computeGridLayout } from './gridLayout';
+import {
+  GRID_ID, services as gridServicesOf, prune, validGridServices, autoPlace,
+  insert as insertIntoGrid, move as moveInGrid,
+} from './gridTree';
+import {
+  computeGridLayout, cellRect, canSplit, splittableSizes, hasSplittableCell,
+} from './gridLayout';
+import { gridDropTarget } from './gridDrop';
 import type { HubState, ServicePatch } from '../shared/hubTypes';
 
 app.setName('Loft');
@@ -474,6 +480,9 @@ function buildServiceMenu(id: string): Electron.MenuItemConstructorOptions[] {
  *
  * An empty result becomes a single disabled item rather than an empty menu — an empty menu
  * pops as a stray one-pixel box on some desktops and reads as a broken button.
+ *
+ * A grid with no legal split left gets the same treatment for the same reason: a ＋ that
+ * cannot place anything has to say so, not pop a list of services and then do nothing.
  */
 function buildGridAddMenu(): Electron.MenuItemConstructorOptions[] {
   const inGrid = new Set(gridServicesOf(config.grid ?? null));
@@ -481,9 +490,19 @@ function buildGridAddMenu(): Electron.MenuItemConstructorOptions[] {
     .filter((d) => config.services[d.id] !== undefined)
     .filter((d) => !inGrid.has(d.id) && !isDetached(d.id))
     .map((d) => ({ label: d.displayName, click: () => addToGrid(d.id) }));
-  return items.length
-    ? items
-    : [{ label: 'Every service is already in the grid', enabled: false }];
+  if (!items.length) return [{ label: 'Every service is already in the grid', enabled: false }];
+  if (!gridHasRoom()) {
+    return [{ label: 'No room for another cell — resize the window', enabled: false }];
+  }
+  return items;
+}
+
+/** Could ＋ place anything at all right now? The rule itself lives in gridLayout, where it
+ *  is testable without a window; this only supplies the geometry. */
+function gridHasRoom(): boolean {
+  const content = loft?.contentRect();
+  if (!content) return false;
+  return hasSplittableCell(computeGridLayout(config.grid ?? null, content));
 }
 
 /** Put a service in the grid where autoPlace decides — measured against the cells as they
@@ -493,14 +512,16 @@ function buildGridAddMenu(): Electron.MenuItemConstructorOptions[] {
 function addToGrid(id: string): void {
   const content = loft?.contentRect();
   if (!content) return;
-  const layout = computeGridLayout(config.grid ?? null, content);
-  const rectOf = (s: string): { width: number; height: number } | undefined => {
-    const cell = layout.cells.find((c) => c.service === s);
-    return cell && { width: cell.body.width, height: cell.body.height };
-  };
-  const next = autoPlace(config.grid ?? null, id, rectOf);
-  // autoPlace returns the tree by reference when it declined (already gridded, nothing
-  // measurable) — don't write a no-op over config, and don't repaint for nothing.
+  // splittableSizes, not the raw cell sizes: it withholds any leaf whose split would break
+  // the minimum, so ＋ obeys the same rule the drag preview draws with.
+  const next = autoPlace(
+    config.grid ?? null,
+    id,
+    splittableSizes(computeGridLayout(config.grid ?? null, content)),
+  );
+  // autoPlace returns the tree by reference when it declined (already gridded, or nothing
+  // it was allowed to measure) — don't write a no-op over config, and don't repaint for
+  // nothing.
   if (next === config.grid) return;
   config.grid = next;
   saveConfig(configPath(), config);
@@ -509,6 +530,39 @@ function addToGrid(id: string): void {
   // refresh here. Unconditional: the grid is normally already the selection (the ＋ lives
   // in its titlebar), and re-selecting it is what re-places the cells.
   loft?.showGrid();
+}
+
+/**
+ * The rectangle a drop at this point would produce, or null when there is no legal target
+ * (a gutter, outside the grid, or a split that would break the minimum). Drives the live
+ * preview during a rail drag AND is the shape the release itself commits, so the two can
+ * only ever agree by being the same rule — hence gridDropTarget + canSplit here and in
+ * the rail:dragEnd 'grid' case, and nowhere a third time.
+ *
+ * `x`/`y` are window coordinates, which is what the rail already sends: the rail view's
+ * origin IS the window origin (layout.ts), so its clientX/clientY map straight through
+ * and computeGridLayout's rects are already in the same space.
+ */
+function gridPreviewRect(x: number, y: number): Rect | null {
+  const content = loft?.contentRect();
+  if (!content) return null;
+  const { cells } = computeGridLayout(config.grid ?? null, content);
+  const at = gridDropTarget({ x, y }, cells, content);
+  if (at === null) return null;
+  // An empty grid takes the whole content rect: the first service is the root leaf.
+  if (at === 'root') return content;
+  const cell = cells.find((c) => c.service === at.target);
+  if (!cell) return null;
+  const r = cellRect(cell);
+  if (!canSplit(r, at.edge)) return null;
+  const halfW = (r.width - GRID_GUTTER) / 2;
+  const halfH = (r.height - GRID_GUTTER) / 2;
+  switch (at.edge) {
+    case 'left': return { x: r.x, y: r.y, width: halfW, height: r.height };
+    case 'right': return { x: r.x + r.width - halfW, y: r.y, width: halfW, height: r.height };
+    case 'top': return { x: r.x, y: r.y, width: r.width, height: halfH };
+    case 'bottom': return { x: r.x, y: r.y + r.height - halfH, width: r.width, height: halfH };
+  }
 }
 
 /**
@@ -661,7 +715,7 @@ if (!app.requestSingleInstanceLock()) {
   // railGestureOutcome). One cached geometry snapshot serves both gesture kinds: a
   // pointer-capture drag of a rail icon, and a cross-window HTML5 drop from a detached
   // window's titlebar.
-  let railDrag: { slots: RailSlot[]; lastIndex: number } | undefined;
+  let railDrag: { slots: RailSlot[]; lastIndex: number; lastPreview?: string } | undefined;
 
   const railIds = (): string[] => orderedRailIds(listServices(), config);
 
@@ -674,11 +728,22 @@ if (!app.requestSingleInstanceLock()) {
   const clearRailDrag = (): void => {
     railDrag = undefined;
     loft?.sendRail('rail:dropSlot', -1);
+    // Every main-side end of a rail gesture goes through here — the release, the
+    // cross-window drop, and the no-geometry early return in rail:dragEnd, which calls
+    // this BEFORE it bails. The overlay swallows clicks in the content rect while it is
+    // visible (a WebContentsView has no click-through), so leaving it up is not a cosmetic
+    // bug; one owner of "the gesture is over" is what keeps that from happening.
+    loft?.showDropPreview(null);
   };
 
   ipcMain.on('rail:dragBegin', (_e, m: { slots: RailSlot[] }) => {
     // lastIndex starts at a value no real index can equal, so the first move always pushes.
     railDrag = { slots: m.slots, lastIndex: -2 };
+    // Belt and braces for the one end the renderer keeps to itself: a pointercancel ends
+    // the gesture in the rail without telling main, so a preview could be left up. It
+    // covers the rail's own strip either way, so the next drag is always reachable — and
+    // this clears it.
+    loft?.showDropPreview(null);
   });
 
   ipcMain.on('rail:dragMove', (_e, m: { clientX: number; clientY: number }) => {
@@ -687,6 +752,26 @@ if (!app.requestSingleInstanceLock()) {
     // rather than promising a slot the release will not honour.
     const outside = railDragOutcome(m.clientX, RAIL_WIDTH) === 'detach';
     const index = outside ? -1 : railSlotIndex(m.clientY, railDrag.slots);
+    // Grid drop preview. The rail's clientX/clientY are window coordinates, so the content
+    // rect is reached by comparing directly — no offset arithmetic beyond the rect's own
+    // origin, which computeGridLayout already works in. Sent before the slot-index
+    // early-return below: the preview changes as the pointer crosses a cell's diagonals,
+    // which happens with the slot index pinned at -1 the whole time. Deduped like the slot
+    // index for the same reason — pointermove fires far faster than the preview changes,
+    // and every push is an IPC round trip plus a view visibility flip.
+    if (loft?.activeId() === GRID_ID) {
+      // Only where a release would really be a drop: inside the rail's own band the
+      // gesture still means reorder, so previewing there promises a cell the release will
+      // not create — the mirror of why the slot indicator hides outside the band.
+      const preview = outside ? gridPreviewRect(m.clientX, m.clientY) : null;
+      const key = preview
+        ? `${preview.x},${preview.y},${preview.width},${preview.height}`
+        : 'none';
+      if (key !== railDrag.lastPreview) {
+        railDrag.lastPreview = key;
+        loft.showDropPreview(preview);
+      }
+    }
     if (index === railDrag.lastIndex) return;
     railDrag.lastIndex = index;
     loft?.sendRail('rail:dropSlot', index);
@@ -714,7 +799,48 @@ if (!app.requestSingleInstanceLock()) {
       canDetach,
       fromIndex: ids.indexOf(m.id),
       toIndex,
+      gridSelected: loft?.activeId() === GRID_ID,
+      // Detach is what a release BEYOND the window means, so the grid may only claim one
+      // that landed inside the content rect. Half-open on both axes, matching gridDrop's
+      // own `inside`.
+      insideContent: (() => {
+        const c = loft?.contentRect();
+        return c !== undefined
+          && m.releaseX >= c.x && m.releaseX < c.x + c.width
+          && m.releaseY >= c.y && m.releaseY < c.y + c.height;
+      })(),
     })) {
+      case 'grid': {
+        const content = loft?.contentRect();
+        if (!content) break;
+        const { cells } = computeGridLayout(config.grid ?? null, content);
+        const at = gridDropTarget({ x: m.releaseX, y: m.releaseY }, cells, content);
+        // Same gate the preview drew with (gridPreviewRect): a release the preview refused
+        // to promise does nothing at all.
+        if (at === null) break;
+        if (at !== 'root') {
+          const cell = cells.find((c) => c.service === at.target);
+          if (!cell || !canSplit(cellRect(cell), at.edge)) break;
+        }
+        // Grid and detached are mutually exclusive (spec §7.1): re-attach first, which
+        // hands the live view across without a reload.
+        if (isDetached(m.id)) setDetached(m.id, false);
+        const tree = config.grid ?? null;
+        config.grid = at === 'root'
+          ? insertIntoGrid(null, m.id, m.id, 'left')
+          // Already a leaf ⇒ this is a relocation, not a second cell for the same view.
+          // insert refuses a duplicate outright, which would make the drag look ignored.
+          : gridServicesOf(tree).includes(m.id)
+            ? moveInGrid(tree, m.id, at.target, at.edge)
+            : insertIntoGrid(tree, m.id, at.target, at.edge);
+        saveConfig(configPath(), config);
+        // showGrid, not refreshGrid: re-attaching a detached service above can hand the
+        // selection to that service's own tab (setDetached → showService when its window
+        // was on screen), and the drop must still land the user on the grid. Re-selecting
+        // the grid is also what wakes a sleeping leaf, via placeGridCells → ensureAttached.
+        loft?.showGrid();
+        break;
+      }
       case 'detach':
         setDetached(m.id, true);
         showService(d);
@@ -1007,6 +1133,7 @@ if (!app.requestSingleInstanceLock()) {
       railHtml: join(__dirname, '..', 'renderer', 'rail', 'index.html'),
       gridPreload: join(__dirname, '..', 'preload', 'grid.js'),
       gridHtml: join(__dirname, '..', 'renderer', 'grid', 'index.html'),
+      overlayHtml: join(__dirname, '..', 'renderer', 'gridOverlay', 'index.html'),
       titlebarPreload: join(__dirname, '..', 'preload', 'titlebar.js'),
       titlebarHtml: join(__dirname, '..', 'renderer', 'titlebar', 'index.html'),
       managerPreload: join(__dirname, '..', 'preload', 'hub.js'),
