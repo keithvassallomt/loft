@@ -16,6 +16,21 @@ let gridPendingState: GridViewState | null = null;
  *  lostpointercapture — the one place a gesture ends. Null means "no release seen", i.e.
  *  the gesture was cancelled rather than finished. */
 let gridDragRelease: { x: number; y: number } | null = null;
+/** The pointer that captured the gutter. Every later event has to be matched against it:
+ *  a second finger tapping the same gutter has its pointerdown refused (one gesture at a
+ *  time), but its pointerup would otherwise pass the .dragging check and record a release
+ *  at ITS coordinates — so a system pan that then steals the first finger ends as a
+ *  dragEnd at the tap point instead of the dragCancel it is. */
+let gridDragPointer: number | null = null;
+/** Pointerdown point, and whether the gesture has since travelled far enough to count as a
+ *  drag rather than a click. */
+let gridDragFrom: { x: number; y: number } | null = null;
+let gridDragPastSlop = false;
+/** How far, in CSS px on either axis, the pointer must travel before a gesture stops being
+ *  a click. A bare click on a divider must not resize (main's GutterDrag.end enforces that
+ *  from `moved`), and a single device pixel of hand tremor would otherwise latch `moved`
+ *  and turn the click into a resize after all. */
+const GRID_DRAG_SLOP = 3;
 
 /** One owner of "the gesture is over" on this side: drop the guard and apply whatever we
  *  refused to render while it was up. */
@@ -122,17 +137,30 @@ function gridGutter(g: GridLayout['gutters'][number], state: GridViewState): HTM
     el.setPointerCapture(e.pointerId);
     el.classList.add('dragging');
     gridDragging = true;
+    gridDragPointer = e.pointerId;
+    gridDragFrom = { x: e.clientX, y: e.clientY };
+    gridDragPastSlop = false;
     gridDragRelease = null;
     window.loftGrid.gutterDragBegin(g.path, g.dir);
   });
   el.addEventListener('pointermove', (e) => {
-    if (!el.classList.contains('dragging')) return;
+    if (!el.classList.contains('dragging') || e.pointerId !== gridDragPointer) return;
+    // Held back until the pointer has left the click slop, and unconditional after that:
+    // once this is a drag it stays one, so a drag that wanders back over its start point
+    // behaves exactly as it did before the threshold existed.
+    if (!gridDragPastSlop) {
+      const from = gridDragFrom;
+      if (!from) return;
+      if (Math.abs(e.clientX - from.x) < GRID_DRAG_SLOP
+        && Math.abs(e.clientY - from.y) < GRID_DRAG_SLOP) return;
+      gridDragPastSlop = true;
+    }
     window.loftGrid.dragMove(e.clientX, e.clientY);
   });
   // Records the release point and nothing else. Ending the gesture here too would send main
   // both an end and (later) a cancel for one gesture.
   el.addEventListener('pointerup', (e) => {
-    if (!el.classList.contains('dragging')) return;
+    if (!el.classList.contains('dragging') || e.pointerId !== gridDragPointer) return;
     gridDragRelease = { x: e.clientX, y: e.clientY };
   });
   // The single "gesture is over" signal: it fires for a release, for a cancel, and for this
@@ -144,11 +172,17 @@ function gridGutter(g: GridLayout['gutters'][number], state: GridViewState): HTM
   // otherwise: it keeps the drag tracked, and every later pointermove over this gutter — a
   // plain hover — goes on resizing the split. Touch makes that reachable in practice:
   // preventDefault on pointerdown does not stop the gesture being stolen for a pan.
+  // Deliberately not gated on the pointer id: this fires only for the pointer that held
+  // capture on this element, and adding a second condition to the ONE signal that ends a
+  // gesture could only ever make it fire zero times.
   el.addEventListener('lostpointercapture', () => {
     if (!el.classList.contains('dragging')) return;
     el.classList.remove('dragging');
     const release = gridDragRelease;
     gridDragRelease = null;
+    gridDragPointer = null;
+    gridDragFrom = null;
+    gridDragPastSlop = false;
     endGridDrag();
     if (release) window.loftGrid.dragEnd(release.x, release.y);
     else window.loftGrid.dragCancel();

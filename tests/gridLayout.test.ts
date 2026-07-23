@@ -144,8 +144,11 @@ describe('clampRatio', () => {
     expect(clampRatio('row', 1000, 0.5)).toBe(0.5);
   });
 
-  it('falls back to a half when the axis cannot fit two minimum children', () => {
-    expect(clampRatio('row', 300, 0.9)).toBe(0.5);
+  it('answers "no legal ratio" when the axis cannot fit two minimum children', () => {
+    // Not 0.5, which is what it used to answer: a made-up ratio re-centres the split on the
+    // first pixel of a drag, discarding the user's own — and the caller persists that.
+    expect(clampRatio('row', 300, 0.9)).toBeNull();
+    expect(clampRatio('col', 100, 0.5)).toBeNull();
   });
 });
 

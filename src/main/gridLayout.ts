@@ -198,12 +198,18 @@ export function splitRectAt(
  * Hold a divider drag inside the pixel minimum for both children. gridTree.resize
  * applies only structural bounds — it has no idea how big the split is — so this is
  * the layer that enforces the real limit.
+ *
+ * Null when the axis cannot fit two minimum children at all: there is no legal ratio, and
+ * the honest answer is that the divider cannot move. Inventing one — this used to answer a
+ * flat 0.5 — re-centres the split on the first pixel of drag, throwing away whatever ratio
+ * the user had, and the caller then persists the loss. Resizing a split with no room is
+ * meaningless either way; silently rewriting the layout is strictly worse than doing
+ * nothing.
  */
-export function clampRatio(dir: 'row' | 'col', axisPx: number, ratio: number): number {
+export function clampRatio(dir: 'row' | 'col', axisPx: number, ratio: number): number | null {
   const avail = axisPx - GRID_GUTTER;
   const min = dir === 'row' ? MIN_CELL_WIDTH : MIN_CELL_HEIGHT + CELL_HEADER_HEIGHT;
-  // Two minimum children do not fit at all: refuse to move rather than pick a side.
-  if (avail < min * 2) return 0.5;
+  if (avail < min * 2) return null;
   const lo = min / avail;
   return Math.min(1 - lo, Math.max(lo, ratio));
 }

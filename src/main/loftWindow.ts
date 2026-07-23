@@ -368,8 +368,14 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
    * per view per frame — hundreds a second — the first of which re-parents the grid chrome
    * view that is holding pointer capture for the very gesture driving it.
    *
-   * Set in api.attach, the one place a view is mounted, so it covers both the grid's own
-   * wake path (ensureAttached → attachService → attach) and an attach from anywhere else.
+   * Set in api.attach, the one place THIS file mounts a view, so it covers both the grid's
+   * own wake path (ensureAttached → attachService → attach) and an attach from anywhere
+   * else. It is not the only addChildView in the app: ServiceView.showRecovery mounts a
+   * stuck cell's recovery overlay on a 15s timer, above everything. Nothing here tracks
+   * that — restack already brings a recovery overlay back up with its own page (see
+   * ServiceView.raise), and the one ordering it could still break, "the drop preview sits
+   * above every page it describes", is enforced by showDropPreview itself rather than by a
+   * flag a second file has to remember to set.
    * Starts true: the construction-time addChildView order below puts the overlay on top,
    * but any service attached before the grid is first selected lands above it.
    */
@@ -644,6 +650,12 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
      *  rect's origin alongside it, exactly as the grid chrome's own state is: the renderer
      *  positions what it is told and computes nothing. */
     showDropPreview: (r) => {
+      // Raised here, by the code that shows it, so "the preview is above every page it
+      // describes" holds without anyone else remembering to say so: a view mounted outside
+      // api.attach — a stuck cell's recovery overlay, which appears on a timer — appends
+      // above this one and no restack is due until the next attach. Re-adding an existing
+      // child is how a view is raised (see restack) and costs nothing per drag.
+      if (r !== null) window.contentView.addChildView(overlay);
       overlay.setVisible(r !== null);
       const content = rects().content;
       safeSend(overlay, 'grid:preview',

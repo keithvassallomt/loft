@@ -14,13 +14,13 @@ import { resize as resizeGrid, type GridNode, type Path } from './gridTree';
  */
 export interface GutterDrag {
   /** Apply a pointer position. Returns the tree to install, or undefined when there is
-   *  nothing to resize because the path went stale (a remove collapsed the split). */
+   *  nothing to resize — because the path went stale (a remove collapsed the split), or
+   *  because the split has no legal ratio left (see clampRatio). */
   move(tree: GridNode | null, content: Rect, x: number, y: number): GridNode | null | undefined;
   /** Same, for the release — except that a gesture with no moves behind it returns
    *  undefined. A pointerdown/pointerup on a divider with no motion is a bare CLICK, and a
-   *  click must not resize: it would snap the divider's centre to the click point (up to
-   *  half a gutter away), and in a window too small for two minimum children clampRatio
-   *  answers a hard 0.5, silently discarding the user's ratio for good. */
+   *  click must not resize: it would snap the divider's centre to the click point, up to
+   *  half a gutter away. */
   end(tree: GridNode | null, content: Rect, x: number, y: number): GridNode | null | undefined;
   /** Has any move actually resized the split? The caller's cue that there is something
    *  worth persisting — including on an aborted gesture, which keeps what it moved. */
@@ -45,12 +45,17 @@ export function beginGutterDrag(path: Path): GutterDrag {
     // a gutter's width — grabbing it would visibly shift it before the first move.
     const along = dir === 'row' ? x - rect.x : y - rect.y;
     const raw = (along - GRID_GUTTER / 2) / Math.max(1, axis - GRID_GUTTER);
-    moved = true;
     // Two bounds, deliberately composed here: clampRatio holds the PIXEL minimum (it is the
     // only layer that knows how big this split is) and gridTree.resize re-applies the
     // structural one. Whichever is tighter wins, which is what makes the divider stop dead
     // instead of crushing a cell.
-    return resizeGrid(tree, path, clampRatio(dir, axis, raw));
+    const ratio = clampRatio(dir, axis, raw);
+    // The split cannot fit two minimum children, so no position of this divider is legal.
+    // Leave the tree alone — and leave `moved` false, so the release writes nothing either:
+    // a gesture that resized nothing has nothing to persist.
+    if (ratio === null) return undefined;
+    moved = true;
+    return resizeGrid(tree, path, ratio);
   };
 
   return {

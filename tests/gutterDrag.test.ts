@@ -53,14 +53,43 @@ describe('beginGutterDrag', () => {
   });
 
   it('does not re-centre a split too small for two minimum children on a bare click', () => {
-    // The expensive half of the click bug. Below 2 × MIN_CELL_WIDTH there is no legal ratio,
-    // so clampRatio answers a flat 0.5 — applying a click here would silently discard the
-    // user's ratio for good, and persist the loss.
     const narrow: Rect = { x: 0, y: 0, width: 300, height: 600 };
-    const tree = rowTree(0.8);
-    expect(beginGutterDrag('').end(tree, narrow, 150, 300)).toBeUndefined();
-    // And the hazard is real, not hypothetical: the same point applied as a MOVE does
-    // re-centre it. Nothing but the no-move rule stands between a click and that.
-    expect(beginGutterDrag('').move(tree, narrow, 150, 300)).toEqual({ ...tree, ratio: 0.5 });
+    expect(beginGutterDrag('').end(rowTree(0.8), narrow, 150, 300)).toBeUndefined();
+  });
+
+  it('leaves a split too small for two minimum children untouched by a real DRAG', () => {
+    // Below 2 × MIN_CELL_WIDTH there is no legal ratio at all, so there is nothing a drag
+    // here could mean. It used to mean 0.5 — one pixel of movement re-centred the split,
+    // discarding whatever ratio the user had, and the release persisted the loss.
+    const narrow: Rect = { x: 0, y: 0, width: 300, height: 600 };
+    const start = rowTree(0.8);
+    let tree: GridNode | null = start;
+    const drag = beginGutterDrag('');
+    const next = drag.move(tree, narrow, 150, 300);
+    expect(next).toBeUndefined();
+    if (next !== undefined) tree = next;
+    // By identity: not a re-built equal tree either, so nothing downstream can mistake this
+    // for a change worth writing.
+    expect(tree).toBe(start);
+    expect(drag.moved()).toBe(false);
+    // …and the release that follows is just as inert.
+    expect(drag.end(tree, narrow, 150, 300)).toBeUndefined();
+    expect(drag.moved()).toBe(false);
+  });
+
+  it('still counts as moved when the release path went stale', () => {
+    // index.ts gates its config write on moved(), not on the release step succeeding,
+    // because a release whose path went stale still has the earlier moves behind it — and
+    // those are what needs writing.
+    const drag = beginGutterDrag('');
+    let tree: GridNode | null = rowTree(0.5);
+    const moved = drag.move(tree, content, 306, 300);
+    if (moved !== undefined) tree = moved;
+    expect(tree).toEqual(rowTree(0.303));
+
+    // A remove collapsed the split under the gesture: the path now names a leaf.
+    expect(drag.end(leaf('whatsapp'), content, 500, 300)).toBeUndefined();
+    expect(drag.moved()).toBe(true);
+    expect(tree).toEqual(rowTree(0.303));
   });
 });
