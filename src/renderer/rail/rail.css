@@ -52,6 +52,10 @@ body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
   .home:hover { background: #4a4a4c; }
   .home.active { box-shadow: inset 3px 0 0 #0a84ff; background: #48484a; }
   .divider { background: #545456; }
+  .grid { color: #98989d; }
+  .grid:hover { background: #4a4a4c; }
+  .grid.active { box-shadow: inset 3px 0 0 #0a84ff; background: #48484a; }
+  .grid .count { background: #0a84ff; }
 }
 
 /* Insertion indicator: where a dragged icon would land. Fixed-position so it is not a
@@ -77,12 +81,12 @@ body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
   border: 0;
   border-radius: 9px;
   background: transparent;
-  color: var(--rail-fg, #9497a1);
+  color: #86868b;
   font-size: 17px;
   cursor: pointer;
 }
-.grid:hover { background: #ffffff14; }
-.grid.active { background: #ffffff24; color: #fff; }
+.grid:hover { background: #d1d1d6; }
+.grid.active { box-shadow: inset 3px 0 0 #0071e3; background: #d8d8dd; }
 .grid .count {
   position: absolute;
   right: 1px;
@@ -90,7 +94,7 @@ body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
   min-width: 13px;
   padding: 0 3px;
   border-radius: 7px;
-  background: var(--accent, #4c8dff);
+  background: #0071e3;
   color: #fff;
   font-size: 9px;
   font-weight: 700;

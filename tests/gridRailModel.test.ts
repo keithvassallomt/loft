@@ -24,6 +24,7 @@ describe('buildRailState', () => {
     expect(s.gridActive).toBe(false);
     expect(s.gridCount).toBe(0);
     expect(s.managerActive).toBe(true);
+    expect(s.items.every((i) => !i.active)).toBe(true);
   });
 
   it('counts the services in the grid', () => {
@@ -42,13 +43,10 @@ describe('buildRailState', () => {
     expect(s.items.every((i) => !i.active)).toBe(true);
   });
 
-  it('does not mark the manager active when the grid is selected', () => {
-    expect(buildRailState({ ...base, activeId: GRID_ID, grid: null }).managerActive).toBe(false);
-  });
-
-  it('still marks a selected service active, with the grid inactive', () => {
+  it('still marks a selected service active, with the grid and manager inactive', () => {
     const s = buildRailState({ ...base, activeId: 'slack', grid: null });
     expect(s.gridActive).toBe(false);
+    expect(s.managerActive).toBe(false);
     expect(s.items.find((i) => i.id === 'slack')!.active).toBe(true);
   });
 });
