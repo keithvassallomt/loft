@@ -162,10 +162,16 @@ export function hasSplittableCell(layout: GridLayout): boolean {
 }
 
 /**
- * The rect a given split occupies — the axis length a divider drag is measured against.
- * Undefined when the path names a leaf or does not exist, so a path that went stale under
- * an in-flight drag (a remove collapsed the split) reads as "nothing to resize" rather
- * than throwing, matching gridTree.resize's own tolerance of a stale path.
+ * The rect a given split occupies — the axis length a divider drag is measured against —
+ * together with the axis it divides. Undefined when the path names a leaf or does not
+ * exist, so a path that went stale under an in-flight drag (a remove collapsed the split)
+ * reads as "nothing to resize" rather than throwing, matching gridTree.resize's own
+ * tolerance of a stale path.
+ *
+ * `dir` is returned rather than left to the caller because the caller's own copy of it
+ * comes from the renderer, captured when the gesture began. A main-side prune mid-drag can
+ * reshape the tree so the path now names a split of the OTHER direction; the rect follows
+ * the tree, so the axis has to as well, or the drag resizes along the wrong one.
  *
  * Walks with splitRects rather than re-deriving the halves: a divider has to land on the
  * exact pixel the cell it borders lands on, and two independent roundings of one division
@@ -175,7 +181,7 @@ export function splitRectAt(
   tree: GridNode | null,
   content: Rect,
   path: Path,
-): Rect | undefined {
+): { rect: Rect; dir: 'row' | 'col' } | undefined {
   let node = tree;
   let rect = content;
   for (const step of path) {
@@ -185,7 +191,7 @@ export function splitRectAt(
     if (step === 'b') { rect = rb; node = node.b; continue; }
     return undefined;
   }
-  return node && node.kind === 'split' ? rect : undefined;
+  return node && node.kind === 'split' ? { rect, dir: node.dir } : undefined;
 }
 
 /**

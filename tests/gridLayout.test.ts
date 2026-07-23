@@ -156,15 +156,19 @@ describe('splitRectAt', () => {
     b: { kind: 'split', dir: 'col', ratio: 0.5, a: leaf('slack'), b: leaf('telegram') },
   };
 
-  it('gives the root split the whole content rect', () => {
-    expect(splitRectAt(tree, content, '')).toEqual(content);
+  it('gives the root split the whole content rect, and its own axis', () => {
+    expect(splitRectAt(tree, content, '')).toEqual({ rect: content, dir: 'row' });
   });
 
-  it('gives a nested split only its own share', () => {
+  it('gives a nested split only its own share, and ITS axis, not the root\'s', () => {
     const avail = 1000 - GRID_GUTTER;
     const aw = Math.round(avail * 0.5);
+    // The axis comes from the node the path lands on. That is what makes a drag immune to a
+    // mid-gesture prune reshaping the split under it — the renderer's captured `dir` is not
+    // consulted at all.
     expect(splitRectAt(tree, content, 'b')).toEqual({
-      x: 52 + aw + GRID_GUTTER, y: 40, width: avail - aw, height: 600,
+      rect: { x: 52 + aw + GRID_GUTTER, y: 40, width: avail - aw, height: 600 },
+      dir: 'col',
     });
   });
 
@@ -178,7 +182,7 @@ describe('splitRectAt', () => {
     // The whole point of sharing splitRects with computeGridLayout: the rect a drag is
     // measured against has to be the rect the cell actually gets, on an odd width too.
     const odd: Rect = { x: 0, y: 0, width: 999, height: 501 };
-    const rect = splitRectAt(tree, odd, 'b')!;
+    const { rect } = splitRectAt(tree, odd, 'b')!;
     const cells = computeGridLayout(tree, odd).cells;
     const slack = cells.find((c) => c.service === 'slack')!;
     const telegram = cells.find((c) => c.service === 'telegram')!;

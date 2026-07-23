@@ -358,6 +358,24 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   let placingCells = false;
 
   /**
+   * Has a view been added since the last restack? Only an ADD can disturb the z-order —
+   * addChildView appends, so the newcomer lands above everything, including the views that
+   * must stay on top. Nothing else does: a resize moves rects, a removal leaves the
+   * survivors' relative order alone.
+   *
+   * Gating restack on this is what keeps a divider drag cheap. placeGridCells runs on every
+   * pointermove of a resize, and an unconditional restack there is a native view re-order
+   * per view per frame — hundreds a second — the first of which re-parents the grid chrome
+   * view that is holding pointer capture for the very gesture driving it.
+   *
+   * Set in api.attach, the one place a view is mounted, so it covers both the grid's own
+   * wake path (ensureAttached → attachService → attach) and an attach from anywhere else.
+   * Starts true: the construction-time addChildView order below puts the overlay on top,
+   * but any service attached before the grid is first selected lands above it.
+   */
+  let stackDirty = true;
+
+  /**
    * Put every gridded service's view in its cell's BODY rect — below that cell's header
    * strip, which the chrome view underneath owns. Non-gridded views are hidden: the grid
    * is the selection, so nothing else is on screen.
@@ -389,7 +407,8 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
         // stuck cell recovers inside its own body rect with its header still on screen.
         sv.setRect(c.body);
       }
-      restack();
+      // Nothing was added, so nothing moved in the stack — see stackDirty.
+      if (stackDirty) { stackDirty = false; restack(); }
     } finally {
       placingCells = false;
     }
@@ -530,6 +549,9 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       sv.mount(window, rects().content);
       sv.setVisible(false); // select() decides what's on screen
       views.set(def.id, sv);
+      // mount() appended this view above everything, the overlay included — the grid's
+      // z-order has to be re-established before it next paints. See stackDirty.
+      stackDirty = true;
       hosts.delete(def.id);
       // Mirrors serviceWindow's binding: a load wipes whatever main pushed into the page,
       // so main gets told to push it again. Without this an attached service never hears

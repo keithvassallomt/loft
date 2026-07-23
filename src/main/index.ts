@@ -28,18 +28,16 @@ import { createSignalShutdown } from './shutdown';
 import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath } from './desktop';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
-import { GRID_GUTTER, RAIL_WIDTH } from './layout';
+import { RAIL_WIDTH, type Rect } from './layout';
 import { railDragOutcome, railGestureOutcome } from './railDrag';
 import { railSlotIndex, type RailSlot } from './railSlots';
 import { moveInOrder } from './railOrder';
 import { orderedRailIds } from './railModel';
 import {
-  GRID_ID, services as gridServicesOf, prune, validGridServices, autoPlace,
-  resize as resizeGrid,
+  GRID_ID, services as gridServicesOf, prune, validGridServices, autoPlace, type GridNode,
 } from './gridTree';
-import {
-  computeGridLayout, splittableSizes, hasSplittableCell, splitRectAt, clampRatio,
-} from './gridLayout';
+import { computeGridLayout, splittableSizes, hasSplittableCell } from './gridLayout';
+import { beginGutterDrag, type GutterDrag } from './gutterDrag';
 import { gridDropPlan, type GridDropPlan } from './gridDrop';
 import type { HubState, ServicePatch } from '../shared/hubTypes';
 
@@ -699,7 +697,7 @@ if (!app.requestSingleInstanceLock()) {
   // computes nothing, main owns the tree and therefore owns the ratio. The path names the
   // split rather than the pair of cells, so a drag survives anything that does not touch
   // that split — and reads as a no-op if the split itself has gone.
-  let gutterDrag: { path: string; dir: 'row' | 'col' } | undefined;
+  let gutterDrag: GutterDrag | undefined;
 
   const clearGutterDrag = (): void => {
     gutterDrag = undefined;
@@ -709,38 +707,30 @@ if (!app.requestSingleInstanceLock()) {
   };
 
   ipcMain.on('grid:gutterDragBegin', (_e, p?: { path?: unknown; dir?: unknown }) => {
+    // `dir` is still part of the renderer's payload and still validated — but it is not
+    // stored: the axis is read back off the tree on every step (splitRectAt), so a prune
+    // that reshapes the split mid-drag cannot leave the drag measuring the wrong way.
     if (typeof p?.path !== 'string' || (p.dir !== 'row' && p.dir !== 'col')) return;
-    gutterDrag = { path: p.path, dir: p.dir };
+    gutterDrag = beginGutterDrag(p.path);
   });
 
-  const applyGutterDrag = (x: number, y: number): void => {
-    if (!gutterDrag) return;
+  /** Feed a renderer-space pointer to the tracked gesture through one of its steps and
+   *  install whatever tree comes back. `undefined` means "this step changes nothing". */
+  const applyGutterDrag = (
+    step: (t: GridNode | null, c: Rect, x: number, y: number) => GridNode | null | undefined,
+    x: number,
+    y: number,
+  ): void => {
     const content = loft?.contentRect();
     if (!content) return;
     // The grid renderer's coordinates start at the content rect's origin (its state carries
     // that origin so it can subtract it); every rect main holds is in window coordinates.
-    const px = x + content.x;
-    const py = y + content.y;
-    const rect = splitRectAt(config.grid ?? null, content, gutterDrag.path);
-    // The path went stale mid-drag (a remove collapsed the split) — do nothing rather than
-    // resize whatever else now sits at that path.
-    if (!rect) return;
-    const axis = gutterDrag.dir === 'row' ? rect.width : rect.height;
-    // The inverse of gridLayout.splitRects: the ratio divides the split's axis MINUS the
-    // gutter, and the gutter sits between the halves, so aim its CENTRE at the pointer.
-    // Measured against the whole axis instead, the divider would trail the cursor by up to
-    // a gutter's width — grabbing it would visibly shift it before the first move.
-    const along = gutterDrag.dir === 'row' ? px - rect.x : py - rect.y;
-    const raw = (along - GRID_GUTTER / 2) / Math.max(1, axis - GRID_GUTTER);
-    // Two bounds, deliberately composed here: clampRatio holds the PIXEL minimum (it is the
-    // only layer that knows how big this split is) and gridTree.resize re-applies the
-    // structural one. Whichever is tighter wins, which is what makes the divider stop dead
-    // instead of crushing a cell.
-    config.grid = resizeGrid(config.grid ?? null, gutterDrag.path,
-                             clampRatio(gutterDrag.dir, axis, raw));
-    // Live, not on release: the pages follow the divider as it moves. The chrome does not —
-    // the renderer refuses to re-render mid-drag (it would destroy the element holding
-    // pointer capture) and catches up the moment the gesture ends.
+    const next = step(config.grid ?? null, content, x + content.x, y + content.y);
+    if (next === undefined) return;
+    config.grid = next;
+    // Live, not on release: the pages follow the divider as it moves, and so does the grid
+    // chrome — the renderer updates the existing nodes in place mid-drag rather than
+    // rebuilding them, so nothing destroys the element holding pointer capture.
     loft?.refreshGrid();
   };
 
@@ -748,15 +738,20 @@ if (!app.requestSingleInstanceLock()) {
     if (typeof p?.x !== 'number' || typeof p?.y !== 'number') return;
     // No tracked drag means this move belongs to a gesture main never saw begin, or to one a
     // second pointer already ended — ignore it, exactly as rail:dragMove does.
-    if (gutterDrag) { applyGutterDrag(p.x, p.y); return; }
+    if (gutterDrag) { applyGutterDrag(gutterDrag.move, p.x, p.y); return; }
     // Cell-handle drags are handled in Task 12.
   });
 
+  // A release only resizes if the gesture actually moved (see GutterDrag.end), and only
+  // persists on the same condition. Otherwise this is a bare CLICK on a divider, and a click
+  // must leave both the tree and config.json exactly as it found them. The save is gated on
+  // `moved`, not on this last step succeeding: a release whose path went stale still has the
+  // earlier moves behind it, and those are what needs writing.
   ipcMain.on('grid:dragEnd', (_e, p?: { x?: unknown; y?: unknown }) => {
     if (gutterDrag && typeof p?.x === 'number' && typeof p?.y === 'number') {
-      applyGutterDrag(p.x, p.y);
-      saveConfig(configPath(), config);
+      applyGutterDrag(gutterDrag.end, p.x, p.y);
     }
+    if (gutterDrag?.moved()) saveConfig(configPath(), config);
     clearGutterDrag();
   });
 
@@ -765,9 +760,10 @@ if (!app.requestSingleInstanceLock()) {
   // gutter — a plain hover. The moves already applied are persisted rather than reverted:
   // the user watched the pages move, so the arrangement on screen is the one that should
   // survive a restart, and leaving it unsaved only defers the write to the next unrelated
-  // saveConfig — committing it later, with no gesture to explain it.
+  // saveConfig — committing it later, with no gesture to explain it. A gesture that never
+  // moved wrote nothing, so there is nothing to persist.
   ipcMain.on('grid:dragCancel', () => {
-    if (gutterDrag) saveConfig(configPath(), config);
+    if (gutterDrag?.moved()) saveConfig(configPath(), config);
     clearGutterDrag();
   });
 
