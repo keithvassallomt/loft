@@ -600,13 +600,12 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       // mount() appended this view above everything, the overlay included — the grid's
       // z-order has to be re-established before it next paints. See stackDirty.
       stackDirty = true;
-      // Which sibling view the user last clicked into. Electron documents this as the
-      // supported way to tell them apart: "The focus and blur events of WebContents should
-      // only be used to detect focus change between different WebContents ... in the same
-      // window." Its macOS caveat does not apply on Linux. Only meaningful while the grid
-      // is up — in single-view mode there is one visible page and zoom follows the
-      // selection, not the click.
-      sv.view.webContents.on('focus', () => {
+      // Which sibling view the user last clicked into — only meaningful while the grid is up:
+      // in single-view mode there is one visible page and zoom follows the selection, not the
+      // click. setOnFocus, not a webContents listener of our own: attach() runs again with
+      // this same live view every time it comes back from its own window, so binding here
+      // would stack one listener per move (the leak setOnLoad's contract already forbids).
+      sv.setOnFocus(() => {
         if (active !== GRID_ID || focusedCell === def.id) return;
         if (!gridServices(deps.cfg.grid ?? null).includes(def.id)) return;
         focusedCell = def.id;

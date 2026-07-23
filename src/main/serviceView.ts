@@ -35,6 +35,11 @@ export interface ServiceView {
    *  previous one — the view's webContents outlives any one host now, so hosts must set this
    *  rather than each binding their own did-finish-load listener (which would leak per move). */
   setOnLoad(fn: () => void): void;
+  /** Set the single "the user clicked into this view" host hook (which grid cell the zoom
+   *  buttons act on). Same contract as setOnLoad, and for the same reason: a host attaches
+   *  the SAME live view again every time it comes back from a detached window, so a host
+   *  that bound its own 'focus' listener would stack one per move. */
+  setOnFocus(fn: () => void): void;
   /** Re-lay-out within the current window. */
   setRect(rect: Rect): void;
   /** Whether the view is drawn. JS keeps running either way (backgroundThrottling: false). */
@@ -202,6 +207,13 @@ export function createServiceView(def: ServiceDef, cfg: LoftConfig): ServiceView
   let onLoad: (() => void) | undefined;
   serviceView.webContents.on('did-finish-load', () => onLoad?.());
 
+  // Same single-hook rule for focus (see setOnFocus). Electron documents 'focus' as the
+  // supported way to tell sibling views in one window apart: "The focus and blur events of
+  // WebContents should only be used to detect focus change between different WebContents ...
+  // in the same window." Bound exactly once here; hosts re-point it.
+  let onFocus: (() => void) | undefined;
+  serviceView.webContents.on('focus', () => onFocus?.());
+
   // Current host + rect. Both are undefined/zero until mount(); the recovery overlay
   // needs them because it is added to whichever window the service currently lives in.
   let host: BrowserWindow | undefined;
@@ -322,6 +334,7 @@ export function createServiceView(def: ServiceDef, cfg: LoftConfig): ServiceView
       host = undefined;
     },
     setOnLoad: (fn) => { onLoad = fn; },
+    setOnFocus: (fn) => { onFocus = fn; },
     setRect: (r) => {
       rect = r;
       serviceView.setBounds(r);

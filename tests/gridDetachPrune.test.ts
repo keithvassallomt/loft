@@ -55,21 +55,35 @@ const DEFS = [
   { id: 'telegram', displayName: 'Telegram', url: 'https://web.telegram.org/a/' },
 ];
 
+/** What the fake recorded, for the tests that are about the hooks rather than the tree. */
+interface ViewHooks {
+  /** 'focus' listeners bound straight onto the webContents by a HOST. Must stay 0: the real
+   *  ServiceView binds one internally and hosts re-point it through setOnFocus, or every
+   *  return from a detached window stacks another. */
+  rawFocusListeners: number;
+  /** Every setOnFocus call, so a re-attach can be seen replacing rather than adding. */
+  onFocus: (() => void)[];
+}
+
 /** The minimum a ServiceView has to do to survive attach → select → detach/unload. */
-function fakeView(id: string): ServiceView {
+function fakeView(id: string): ServiceView & { hooks: ViewHooks } {
   const def = DEFS.find((d) => d.id === id)!;
-  return {
+  const hooks: ViewHooks = { rawFocusListeners: 0, onFocus: [] };
+  return Object.assign({
     def,
-    // `on` is here because attach() subscribes to the view's 'focus' to track which grid
-    // cell the zoom buttons act on. The fake records nothing — these tests are about the
-    // tree, not focus — but it must exist, or attach() throws before the prune under test.
     view: {
-      webContents: { id: 900, isDestroyed: () => false, close: () => {}, on: () => {} },
+      webContents: {
+        id: 900,
+        isDestroyed: () => false,
+        close: () => {},
+        on: (ev: string) => { if (ev === 'focus') hooks.rawFocusListeners += 1; },
+      },
     },
     mount: () => {},
     unmount: () => {},
     raise: () => {},
     setOnLoad: () => {},
+    setOnFocus: (fn: () => void) => { hooks.onFocus.push(fn); },
     setRect: () => {},
     setVisible: () => {},
     setZoom: () => {},
@@ -83,7 +97,7 @@ function fakeView(id: string): ServiceView {
     clearAndReload: async () => {},
     ownsWebContents: () => false,
     dispose: () => {},
-  } as unknown as ServiceView;
+  } as unknown as ServiceView, { hooks });
 }
 
 interface Harness {
@@ -202,6 +216,25 @@ describe('the detach ordering contract still holds', () => {
     expect(h.loft.activeId()).toBe('telegram');
     expect(h.activeChanges.at(-1)).toBe('telegram');
     expect(h.cfg.grid).toEqual({ kind: 'leaf', service: 'whatsapp' });
+  });
+});
+
+describe('the focused-cell hook is set, not stacked', () => {
+  it('re-points it when the same live view comes back from its own window', () => {
+    // attach() is called again with the SAME ServiceView on every return from a detached
+    // window, and unmount() removes child views but no webContents listeners — so a 'focus'
+    // listener bound in attach() leaked one handler per move, and the Nth return ran the
+    // grid's focus handling N times per click.
+    const h = make(undefined, []);
+    const sv = fakeView('slack');
+
+    h.loft.attach(DEFS[1] as never, sv);
+    const back = h.loft.detach('slack');
+    h.loft.attach(DEFS[1] as never, back);
+
+    expect(sv.hooks.rawFocusListeners).toBe(0);
+    // Two sets, one per attach — and the real ServiceView keeps only the last.
+    expect(sv.hooks.onFocus).toHaveLength(2);
   });
 });
 

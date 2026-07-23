@@ -1112,6 +1112,12 @@ if (!app.requestSingleInstanceLock()) {
     removeService: (id, deleteData) => {
       const d = getService(id); if (!d) return;
       quitService(id);
+      // quitService returns early when the service is loaded NOWHERE, so loft.unload — and
+      // the prune inside it — never runs. Grid leaves are asleep in the ordinary case
+      // (nothing wakes them until Grid is first selected), so without this an uninstalled
+      // service keeps its leaf, it is persisted, and opening Grid draws a header strip for a
+      // service that no longer exists with no page behind it. No-op by identity otherwise.
+      loft?.dropFromGrid(id);
       removeService(d, config, deleteData);
       saveConfig(configPath(), config);
       reconcileAutostart();
