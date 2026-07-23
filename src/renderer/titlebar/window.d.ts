@@ -6,6 +6,7 @@ interface Window {
     reload(): void;
     onSetService(cb: (name: string) => void): void;
     attach(): void;
+    addToGrid(): void;
     onSetAttachable(cb: (id: string | null) => void): void;
     onSetContext(cb: (id: string | null) => void): void;
   };

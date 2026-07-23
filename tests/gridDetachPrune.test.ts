@@ -106,6 +106,7 @@ function make(grid: GridNode | null | undefined, attachIds: string[]): Harness {
     detached: () => false,
     loadedElsewhere: () => false,
     buildServiceMenu: () => [],
+    buildGridAddMenu: () => [],
     onActiveChanged: (id) => { activeChanges.push(id); },
     onServiceLoad: () => {},
     ensureAttached,

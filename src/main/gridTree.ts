@@ -95,6 +95,39 @@ export function insert(
   }));
 }
 
+/**
+ * Where ＋ puts a service: split the largest leaf, alternating direction so the result
+ * stays roughly square. There is no pointer to aim with, so the tree picks — this is the
+ * only place auto-placement exists; a drag always aims (grid-view spec §5).
+ *
+ * Takes `rectOf` rather than a layout because this file owns no geometry (see the header):
+ * the caller measures the CURRENT cells and hands the sizes back. A leaf `rectOf` cannot
+ * size is skipped, so an empty tree — no cells to measure — still seeds its root leaf
+ * without ever asking.
+ */
+export function autoPlace(
+  tree: GridNode | null,
+  service: string,
+  rectOf: (leafService: string) => { width: number; height: number } | undefined,
+): GridNode {
+  if (!tree) return { kind: 'leaf', service };
+  let best: string | undefined;
+  let bestArea = -1;
+  for (const s of services(tree)) {
+    const r = rectOf(s);
+    if (!r) continue;
+    const area = r.width * r.height;
+    if (area > bestArea) { bestArea = area; best = s; }
+  }
+  // Nothing measurable to split beside. Returning the tree by reference matches insert's
+  // no-op contract, so a caller can still tell nothing happened.
+  if (!best) return tree;
+  const r = rectOf(best)!;
+  // Split the long way: a wide cell halves into two side-by-side, a tall one into two
+  // stacked. That is what keeps repeated ＋ from degenerating into slivers.
+  return insert(tree, service, best, r.width >= r.height ? 'right' : 'bottom');
+}
+
 /** Removes `service`'s leaf, collapsing its parent into the sibling (see the inline
  *  comment below). Returns the tree unchanged, by reference, when `service` isn't in it, so
  *  callers can use `===` to detect a no-op the same way insert does. */

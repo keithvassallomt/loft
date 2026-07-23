@@ -63,6 +63,10 @@ export interface LoftWindow {
   /** Push to the rail view (e.g. the live drop-slot index during a drag). */
   sendRail(channel: string, ...args: unknown[]): void;
   popServiceMenu(id: string): void;
+  /** Native menu of services not yet in the grid (grid-view spec §3). */
+  popGridAddMenu(): void;
+  /** The content rect, so main can compute grid geometry without owning the window. */
+  contentRect(): Rect;
   ownsWebContents(id: number): boolean;
   persist(): void;
   destroy(): void;
@@ -84,6 +88,11 @@ export interface LoftWindowDeps {
   loadedElsewhere(id: string): boolean;
   /** Rail right-click → the per-service menu. Main owns it so it's native. */
   buildServiceMenu(id: string): Electron.MenuItemConstructorOptions[];
+  /** Menu template listing services that can still be added to the grid. Built by main for
+   *  the same reason buildServiceMenu is: the ＋ menu must be a real native menu, and the
+   *  "which services qualify" rule (installed, not gridded, not detached) belongs where the
+   *  registry and config live, not in here. */
+  buildGridAddMenu(): Electron.MenuItemConstructorOptions[];
   /** Selection changed (or the manager took over, id undefined). */
   onActiveChanged(id: string | undefined): void;
   /** This service's page finished loading. A navigation drops everything main pushed into
@@ -209,6 +218,18 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   const refreshTitlebar = (): void => {
     // set-context tells the titlebar which service it is showing, or null for the manager
     // view — which is what hides the service-only controls (reload/zoom) and the icon.
+    //
+    // The grid is the third context: it owns no single service, so it gets ＋ instead of
+    // reload. It is deliberately announced as the plain string 'grid', NOT GRID_ID — the
+    // renderer cannot import the sentinel, and a hand-copied U+0000 in renderer source is
+    // eaten by editors and copy-paste, leaving a comparison that silently never matches.
+    // The sentinel stays on this side of the IPC boundary; only a service whose id were
+    // literally 'grid' could collide, and registry.ts is where that is kept true.
+    if (active === GRID_ID) {
+      safeSend(titlebar, 'titlebar:set-service', 'Grid');
+      safeSend(titlebar, 'titlebar:set-context', 'grid');
+      return;
+    }
     if (!active) {
       safeSend(titlebar, 'titlebar:set-service', 'Loft');
       safeSend(titlebar, 'titlebar:set-context', null);
@@ -558,6 +579,14 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     popServiceMenu: (id) => {
       Menu.buildFromTemplate(deps.buildServiceMenu(id)).popup({ window });
     },
+
+    /** The titlebar's ＋ while the grid is selected. The template is rebuilt on every pop —
+     *  its contents depend on what is installed, gridded and detached right now. */
+    popGridAddMenu: () => {
+      Menu.buildFromTemplate(deps.buildGridAddMenu()).popup({ window });
+    },
+
+    contentRect: () => rects().content,
 
     /** The rail/titlebar/grid/manager views belong to the WINDOW, not to any one service —
      *  no ServiceHost owns them, so index.ts must ask the window before falling back

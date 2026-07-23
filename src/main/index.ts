@@ -33,7 +33,8 @@ import { railDragOutcome, railGestureOutcome } from './railDrag';
 import { railSlotIndex, type RailSlot } from './railSlots';
 import { moveInOrder } from './railOrder';
 import { orderedRailIds } from './railModel';
-import { services as gridServicesOf, prune, validGridServices } from './gridTree';
+import { services as gridServicesOf, prune, validGridServices, autoPlace } from './gridTree';
+import { computeGridLayout } from './gridLayout';
 import type { HubState, ServicePatch } from '../shared/hubTypes';
 
 app.setName('Loft');
@@ -462,6 +463,55 @@ function buildServiceMenu(id: string): Electron.MenuItemConstructorOptions[] {
 }
 
 /**
+ * The titlebar's ＋ menu while the grid is selected: every service that could still take a
+ * cell. Three exclusions, all of them states the grid cannot represent — not installed (no
+ * view to tile), already a leaf (insert refuses a duplicate, so the item would do nothing),
+ * and detached (its view lives in its own window; gridded and detached are mutually
+ * exclusive, grid-view spec §7.1).
+ *
+ * Sleeping services are deliberately IN the list: grid membership means live (§6), and
+ * adding one wakes it through the grid's own ensureAttached.
+ *
+ * An empty result becomes a single disabled item rather than an empty menu — an empty menu
+ * pops as a stray one-pixel box on some desktops and reads as a broken button.
+ */
+function buildGridAddMenu(): Electron.MenuItemConstructorOptions[] {
+  const inGrid = new Set(gridServicesOf(config.grid ?? null));
+  const items = SERVICES
+    .filter((d) => config.services[d.id] !== undefined)
+    .filter((d) => !inGrid.has(d.id) && !isDetached(d.id))
+    .map((d) => ({ label: d.displayName, click: () => addToGrid(d.id) }));
+  return items.length
+    ? items
+    : [{ label: 'Every service is already in the grid', enabled: false }];
+}
+
+/** Put a service in the grid where autoPlace decides — measured against the cells as they
+ *  are on screen right now, so ＋ splits whatever is actually biggest. Selects the grid
+ *  too: the ＋ lives in the grid's own titlebar today, but a caller that adds from
+ *  elsewhere should still land the user on the thing they just changed. */
+function addToGrid(id: string): void {
+  const content = loft?.contentRect();
+  if (!content) return;
+  const layout = computeGridLayout(config.grid ?? null, content);
+  const rectOf = (s: string): { width: number; height: number } | undefined => {
+    const cell = layout.cells.find((c) => c.service === s);
+    return cell && { width: cell.body.width, height: cell.body.height };
+  };
+  const next = autoPlace(config.grid ?? null, id, rectOf);
+  // autoPlace returns the tree by reference when it declined (already gridded, nothing
+  // measurable) — don't write a no-op over config, and don't repaint for nothing.
+  if (next === config.grid) return;
+  config.grid = next;
+  saveConfig(configPath(), config);
+  // Selecting the grid wakes the new leaf (placeGridCells → ensureAttached) and repaints
+  // every chrome view on the way out, including the rail's cell count — nothing else to
+  // refresh here. Unconditional: the grid is normally already the selection (the ＋ lives
+  // in its titlebar), and re-selecting it is what re-places the cells.
+  loft?.showGrid();
+}
+
+/**
  * The selected tab changed. Nothing else can tell the notification gate: a tab switch
  * fires no window event at all, so without this every background tab keeps looking
  * focused+visible and silently stops notifying (spec §6d — it fails as absence, which is
@@ -573,6 +623,9 @@ if (!app.requestSingleInstanceLock()) {
     findBySenderId(e.sender.id)?.hide();
   });
   ipcMain.on('titlebar:reload', (e) => titlebarTarget(e.sender.id)?.reload());
+  // The ＋ is only rendered while the titlebar's context is the grid, so no sender check
+  // beyond that: the per-service windows' titlebars never show the button.
+  ipcMain.on('titlebar:addToGrid', () => loft?.popGridAddMenu());
   ipcMain.on('titlebar:attach', (e) => {
     const id = titlebarTarget(e.sender.id)?.def.id;
     if (id) setDetached(id, false);
@@ -588,6 +641,21 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on('rail:menu', (_e, id: string) => loft?.popServiceMenu(id));
   ipcMain.on('rail:showManager', () => loft?.showManager());
   ipcMain.on('rail:showGrid', () => { loft?.showGrid(); loft?.open(); });
+
+  // --- grid:* — the grid chrome view (src/renderer/grid) -----------------------
+  // A cell's ✕. Reuses LoftWindow's own prune rather than repeating the
+  // identity-compare-and-write here: dropFromGrid is backed by pruneFromGrid, which also
+  // clears the focused cell when it was the one removed. A second copy would drift, and
+  // would miss that. It edits the tree in memory only, so persist it here.
+  ipcMain.on('grid:removeCell', (_e, service?: unknown) => {
+    if (typeof service !== 'string') return;
+    loft?.dropFromGrid(service);
+    saveConfig(configPath(), config);
+    // The service keeps running and stays in the rail — only its cell goes. refreshRail is
+    // the whole-chrome refresh (refreshAll), which is what this needs and refreshGrid alone
+    // would not give: the rail's Grid entry renders the cell COUNT, and it just changed.
+    loft?.refreshRail();
+  });
   // --- rail drag gestures -----------------------------------------------------
   // The renderer measures and reports; main owns every decision (see railSlots/
   // railGestureOutcome). One cached geometry snapshot serves both gesture kinds: a
@@ -914,6 +982,7 @@ if (!app.requestSingleInstanceLock()) {
       detached: isDetached,
       loadedElsewhere: (id) => windows.has(id),
       buildServiceMenu,
+      buildGridAddMenu,
       onActiveChanged: syncActiveTab,
       onServiceLoad: (id) => notifications?.registerService(id),
       ensureAttached: (id) => {

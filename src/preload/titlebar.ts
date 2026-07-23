@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('loft', {
   onSetService: (cb: (name: string) => void) =>
     ipcRenderer.on('titlebar:set-service', (_e, name: string) => cb(name)),
   attach: () => ipcRenderer.send('titlebar:attach'),
+  /** ＋ while the grid is selected: main pops the native "add to grid" menu. */
+  addToGrid: () => ipcRenderer.send('titlebar:addToGrid'),
   onSetAttachable: (cb: (id: string | null) => void) =>
     ipcRenderer.on('titlebar:set-attachable', (_e, id: string | null) => cb(id)),
   onSetContext: (cb: (id: string | null) => void) =>

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  insert, remove, move, resize, services, prune, findPath, validGridServices,
+  insert, remove, move, resize, services, prune, findPath, validGridServices, autoPlace,
   type GridNode,
 } from '../src/main/gridTree';
 
@@ -47,6 +47,49 @@ describe('insert', () => {
   it('returns the tree unchanged when the target is not a leaf in it', () => {
     const tree = leaf('whatsapp');
     expect(insert(tree, 'slack', 'element', 'left')).toBe(tree);
+  });
+});
+
+describe('autoPlace', () => {
+  const rects: Record<string, { width: number; height: number }> = {
+    whatsapp: { width: 800, height: 600 },
+    slack: { width: 200, height: 600 },
+  };
+  const rectOf = (s: string): { width: number; height: number } | undefined => rects[s];
+
+  it('seeds an empty grid', () => {
+    expect(autoPlace(null, 'whatsapp', rectOf)).toEqual({ kind: 'leaf', service: 'whatsapp' });
+  });
+
+  it('seeds an empty grid without measuring anything', () => {
+    // The ＋ path hands it a layout of a null tree, which has no cells at all.
+    expect(autoPlace(null, 'whatsapp', () => undefined)).toEqual(leaf('whatsapp'));
+  });
+
+  it('splits the largest leaf, vertically when it is wider than tall', () => {
+    const tree = insert(leaf('whatsapp'), 'slack', 'whatsapp', 'right');
+    expect(autoPlace(tree, 'telegram', rectOf)).toEqual({
+      kind: 'split', dir: 'row', ratio: 0.5,
+      a: { kind: 'split', dir: 'row', ratio: 0.5, a: leaf('whatsapp'), b: leaf('telegram') },
+      b: leaf('slack'),
+    });
+  });
+
+  it('splits horizontally when the largest leaf is taller than wide', () => {
+    const tall = { whatsapp: { width: 300, height: 900 } };
+    expect(autoPlace(leaf('whatsapp'), 'slack', (s) => tall[s as 'whatsapp'])).toEqual({
+      kind: 'split', dir: 'col', ratio: 0.5, a: leaf('whatsapp'), b: leaf('slack'),
+    });
+  });
+
+  it('returns the tree unchanged when nothing can be measured', () => {
+    const tree = insert(leaf('whatsapp'), 'slack', 'whatsapp', 'right');
+    expect(autoPlace(tree, 'telegram', () => undefined)).toBe(tree);
+  });
+
+  it('refuses a service already in the grid, like insert does', () => {
+    const tree = insert(leaf('whatsapp'), 'slack', 'whatsapp', 'right');
+    expect(autoPlace(tree, 'slack', rectOf)).toBe(tree);
   });
 });
 
