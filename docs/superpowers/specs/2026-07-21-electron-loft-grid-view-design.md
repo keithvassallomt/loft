@@ -90,6 +90,15 @@ design never relies on it. Instead, any structural change ends with a `restack()
 re-adds in order: chrome, each service view, overlay. Deterministic, and immune to the
 undocumented part.
 
+A service view is **not one view**. A stuck or crashed service has a recovery overlay
+stacked above its page, so restacking must re-add *both*, page first — hence
+`ServiceView.raise()` rather than `addChildView(sv.view)` at the call site. Re-adding the
+page alone raises it above its own recovery overlay and buries the UI that exists to
+rescue it, and a badge tick is enough to trigger it (`setBadge` → `refreshAll` →
+`refreshGrid` → `restack`). `raise()` also re-asserts `setVisible`, because a re-add is
+not documented to carry a `false` across and the grid restacks views it has deliberately
+hidden — every service not in the tree.
+
 [i49039]: https://github.com/electron/electron/issues/49039
 [i23863]: https://github.com/electron/electron/issues/23863
 [i47351]: https://github.com/electron/electron/issues/47351
