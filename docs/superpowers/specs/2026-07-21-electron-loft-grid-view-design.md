@@ -267,6 +267,22 @@ detached service to the grid re-attaches it first (`setDetached(id, false)`, whi
 already hands the live view across without a reload, `index.ts:371-409`); detaching a
 gridded service removes its leaf first. `prune` on load is the defensive backstop.
 
+**The leaf must be pruned inside `LoftWindow.detach` and `unload`, not by their callers.**
+Both call `refreshAll()` *during* the transition, and `refreshGrid` → `placeGridCells`
+then tries to wake a leaf whose view has just been removed — at the one moment
+`isDetached(id)` is false in every term: the per-service window does not exist yet, the
+view is already out of `views`, and `detach`'s ordering contract forbids writing
+`detached: true` beforehand. A caller-side prune runs too late to prevent it, and the
+result is a *second* live view of the same service in the same partition: duplicate
+notification relays, two badge scrapers writing one id, and a WhatsApp Web session that
+can log the other out. Pruning inside the two methods makes the invariant hold by
+construction. `ensureAttached` additionally refuses any id that is not currently a leaf,
+so the wake path can only ever wake services the tree actually names.
+
+Consequence, accepted: detaching or unloading a gridded service **removes its cell**
+rather than leaving a placeholder, so there is no detach-and-return-to-the-same-slot —
+the user re-drops it. That follows from grid membership meaning live.
+
 ### 7.2 The drag gesture conflict
 
 Dragging a rail icon rightward out of the rail currently means *detach*
