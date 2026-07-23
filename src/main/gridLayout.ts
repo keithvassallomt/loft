@@ -162,6 +162,33 @@ export function hasSplittableCell(layout: GridLayout): boolean {
 }
 
 /**
+ * The rect a given split occupies — the axis length a divider drag is measured against.
+ * Undefined when the path names a leaf or does not exist, so a path that went stale under
+ * an in-flight drag (a remove collapsed the split) reads as "nothing to resize" rather
+ * than throwing, matching gridTree.resize's own tolerance of a stale path.
+ *
+ * Walks with splitRects rather than re-deriving the halves: a divider has to land on the
+ * exact pixel the cell it borders lands on, and two independent roundings of one division
+ * disagree on every odd width.
+ */
+export function splitRectAt(
+  tree: GridNode | null,
+  content: Rect,
+  path: Path,
+): Rect | undefined {
+  let node = tree;
+  let rect = content;
+  for (const step of path) {
+    if (!node || node.kind !== 'split') return undefined;
+    const [ra, rb] = splitRects(rect, node.dir, node.ratio);
+    if (step === 'a') { rect = ra; node = node.a; continue; }
+    if (step === 'b') { rect = rb; node = node.b; continue; }
+    return undefined;
+  }
+  return node && node.kind === 'split' ? rect : undefined;
+}
+
+/**
  * Hold a divider drag inside the pixel minimum for both children. gridTree.resize
  * applies only structural bounds — it has no idea how big the split is — so this is
  * the layer that enforces the real limit.

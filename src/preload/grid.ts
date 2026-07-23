@@ -17,6 +17,10 @@ export interface GridBridge {
   dragMove(x: number, y: number): void;
   /** Release position; main decides the outcome. */
   dragEnd(x: number, y: number): void;
+  /** The gesture was aborted (pointercancel), not released. Main must clear exactly what a
+   *  dragEnd clears: without it the drag stays tracked and every later pointermove keeps
+   *  resizing — the same stranded-gesture bug rail:dragCancel exists to prevent. */
+  dragCancel(): void;
   /** The drop preview rectangle, or null to hide it. Returns an unsubscribe.
    *  Shared with the transparent overlay view (src/renderer/gridOverlay), which runs this
    *  same preload — it needs nothing else the bridge offers, and a second preload for one
@@ -40,6 +44,7 @@ export function buildGridBridge(ipc: IpcRenderer): GridBridge {
     gutterDragBegin: (path, dir) => ipc.send('grid:gutterDragBegin', { path, dir }),
     dragMove: (x, y) => ipc.send('grid:dragMove', { x, y }),
     dragEnd: (x, y) => ipc.send('grid:dragEnd', { x, y }),
+    dragCancel: () => ipc.send('grid:dragCancel'),
     onPreview(cb) {
       const h = (_e: unknown, r: (Rect & { originX: number; originY: number }) | null): void => cb(r);
       ipc.on('grid:preview', h);

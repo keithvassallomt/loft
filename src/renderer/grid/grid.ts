@@ -9,6 +9,21 @@ type GridViewState = import('../../main/gridLayout').GridViewState;
 const gridRoot = document.getElementById('grid')!;
 const gridEmptyEl = document.getElementById('empty')!;
 
+let gridDragging = false;
+/** A grid:state that arrived mid-drag; applied once the gesture ends (see renderGrid). */
+let gridPendingState: GridViewState | null = null;
+
+/** One owner of "the gesture is over" on this side: drop the guard and apply whatever we
+ *  refused to render while it was up. */
+function endGridDrag(): void {
+  gridDragging = false;
+  if (gridPendingState) {
+    const s = gridPendingState;
+    gridPendingState = null;
+    renderGrid(s);
+  }
+}
+
 /** Position an absolutely-placed element from a main-computed Rect. Every rect arrives
  *  in window coordinates; the grid view's own origin is the content rect's origin, so
  *  each one is offset by the layout's origin before use. */
@@ -81,10 +96,54 @@ function gridGutter(g: GridLayout['gutters'][number], state: GridViewState): HTM
   el.dataset.path = g.path;
   el.dataset.dir = g.dir;
   placeGridEl(el, g.rect, state.origin);
+
+  // Drag the divider to resize the split it belongs to. The renderer reports the pointer
+  // and nothing else — main owns the tree, so it owns the ratio (see grid:gutterDragBegin).
+  // setPointerCapture keeps the whole gesture on this element even once the cursor leaves
+  // the gutter, which it does immediately: the divider is 6px wide.
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return; // primary button only — middle/right fall through
+    // One gesture at a time. Main tracks a single drag, so a second pointer grabbing another
+    // gutter would silently retarget the first one's moves at the second one's split; refuse
+    // it here instead, where the second gutter simply never enters .dragging and its own
+    // moves and release are ignored.
+    if (gridDragging) return;
+    e.preventDefault();
+    el.setPointerCapture(e.pointerId);
+    el.classList.add('dragging');
+    gridDragging = true;
+    window.loftGrid.gutterDragBegin(g.path, g.dir);
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!el.classList.contains('dragging')) return;
+    window.loftGrid.dragMove(e.clientX, e.clientY);
+  });
+  el.addEventListener('pointerup', (e) => {
+    if (!el.classList.contains('dragging')) return;
+    el.classList.remove('dragging');
+    endGridDrag();
+    window.loftGrid.dragEnd(e.clientX, e.clientY);
+  });
+  // A cancel is an end main never hears about otherwise: no pointerup fires, so dragEnd is
+  // never sent, main keeps the drag tracked, and every later pointermove over this gutter —
+  // a plain hover — would go on resizing the split. Touch makes this reachable in practice:
+  // preventDefault on pointerdown does not stop the gesture being stolen for a pan.
+  el.addEventListener('pointercancel', () => {
+    if (!el.classList.contains('dragging')) return;
+    el.classList.remove('dragging');
+    endGridDrag();
+    window.loftGrid.dragCancel();
+  });
   return el;
 }
 
 function renderGrid(state: GridViewState): void {
+  // Never re-render mid-drag. replaceChildren would destroy the very gutter holding pointer
+  // capture, and the replacement node never receives the pointerup — orphaning the gesture:
+  // dragging stuck true, dragEnd never sent, main still resizing on every later hover. A
+  // badge landing a second late is invisible next to that. Live during a resize this is the
+  // rule, not the exception: main refreshes the grid on every move. endGridDrag() flushes.
+  if (gridDragging) { gridPendingState = state; return; }
   gridEmptyEl.classList.toggle('show', state.layout.cells.length === 0);
   gridRoot.replaceChildren(
     ...state.layout.gutters.map((g) => gridGutter(g, state)),

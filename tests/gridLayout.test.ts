@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeGridLayout, cellRect, canSplit, clampRatio, splittableSizes, hasSplittableCell,
+  splitRectAt,
 } from '../src/main/gridLayout';
 import { CELL_HEADER_HEIGHT, GRID_GUTTER, type Rect } from '../src/main/layout';
 import type { GridNode } from '../src/main/gridTree';
@@ -145,5 +146,44 @@ describe('clampRatio', () => {
 
   it('falls back to a half when the axis cannot fit two minimum children', () => {
     expect(clampRatio('row', 300, 0.9)).toBe(0.5);
+  });
+});
+
+describe('splitRectAt', () => {
+  const tree: GridNode = {
+    kind: 'split', dir: 'row', ratio: 0.5,
+    a: leaf('whatsapp'),
+    b: { kind: 'split', dir: 'col', ratio: 0.5, a: leaf('slack'), b: leaf('telegram') },
+  };
+
+  it('gives the root split the whole content rect', () => {
+    expect(splitRectAt(tree, content, '')).toEqual(content);
+  });
+
+  it('gives a nested split only its own share', () => {
+    const avail = 1000 - GRID_GUTTER;
+    const aw = Math.round(avail * 0.5);
+    expect(splitRectAt(tree, content, 'b')).toEqual({
+      x: 52 + aw + GRID_GUTTER, y: 40, width: avail - aw, height: 600,
+    });
+  });
+
+  it('returns undefined for a leaf path or a path that does not exist', () => {
+    expect(splitRectAt(tree, content, 'a')).toBeUndefined();
+    expect(splitRectAt(tree, content, 'zzz')).toBeUndefined();
+    expect(splitRectAt(null, content, '')).toBeUndefined();
+  });
+
+  it('lands the divider on the same pixel the cell does', () => {
+    // The whole point of sharing splitRects with computeGridLayout: the rect a drag is
+    // measured against has to be the rect the cell actually gets, on an odd width too.
+    const odd: Rect = { x: 0, y: 0, width: 999, height: 501 };
+    const rect = splitRectAt(tree, odd, 'b')!;
+    const cells = computeGridLayout(tree, odd).cells;
+    const slack = cells.find((c) => c.service === 'slack')!;
+    const telegram = cells.find((c) => c.service === 'telegram')!;
+    expect(rect.x).toBe(slack.header.x);
+    expect(rect.width).toBe(slack.header.width);
+    expect(rect.y + rect.height).toBe(telegram.body.y + telegram.body.height);
   });
 });
