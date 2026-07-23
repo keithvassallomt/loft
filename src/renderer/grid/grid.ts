@@ -16,11 +16,11 @@ let gridPendingState: GridViewState | null = null;
  *  lostpointercapture — the one place a gesture ends. Null means "no release seen", i.e.
  *  the gesture was cancelled rather than finished. */
 let gridDragRelease: { x: number; y: number } | null = null;
-/** The pointer that captured the gutter. Every later event has to be matched against it:
- *  a second finger tapping the same gutter has its pointerdown refused (one gesture at a
- *  time), but its pointerup would otherwise pass the .dragging check and record a release
- *  at ITS coordinates — so a system pan that then steals the first finger ends as a
- *  dragEnd at the tap point instead of the dragCancel it is. */
+/** The pointer that captured the dragged element. Every later event has to be matched
+ *  against it: a second finger tapping the same gutter has its pointerdown refused (one
+ *  gesture at a time), but its pointerup would otherwise pass the .dragging check and record
+ *  a release at ITS coordinates — so a system pan that then steals the first finger ends as
+ *  a dragEnd at the tap point instead of the dragCancel it is. */
 let gridDragPointer: number | null = null;
 /** Pointerdown point, and whether the gesture has since travelled far enough to count as a
  *  drag rather than a click. */
@@ -29,7 +29,9 @@ let gridDragPastSlop = false;
 /** How far, in CSS px on either axis, the pointer must travel before a gesture stops being
  *  a click. A bare click on a divider must not resize (main's GutterDrag.end enforces that
  *  from `moved`), and a single device pixel of hand tremor would otherwise latch `moved`
- *  and turn the click into a resize after all. */
+ *  and turn the click into a resize after all. The ⠿ handle shares it so that a click on the
+ *  handle cannot flash a drop preview either — its release is a no-op regardless (a drop on
+ *  the cell's own rect is refused), but a preview that blinks on a click still reads as one. */
 const GRID_DRAG_SLOP = 3;
 
 /** One owner of "the gesture is over" on this side: drop the guard and apply whatever we
@@ -41,6 +43,80 @@ function endGridDrag(): void {
     gridPendingState = null;
     renderGrid(s);
   }
+}
+
+/**
+ * Latch the state one pointer-capture gesture needs. Both grid gestures — a divider resize
+ * and a ⠿ cell move — run through here, so there is exactly one answer to "is a drag under
+ * way", which is what the one-gesture-at-a-time guard and renderGrid's deferral both read.
+ *
+ * setPointerCapture keeps the whole gesture on this element even once the cursor leaves it,
+ * which it does immediately: a divider is 6px wide and a handle barely bigger.
+ *
+ * Callers guard on `gridDragging` before calling: main tracks a single drag, so a second
+ * pointer grabbing another gutter or handle would silently retarget the first one's moves.
+ */
+function beginGridGesture(el: HTMLElement, e: PointerEvent): void {
+  el.setPointerCapture(e.pointerId);
+  el.classList.add('dragging');
+  gridDragging = true;
+  gridDragPointer = e.pointerId;
+  gridDragFrom = { x: e.clientX, y: e.clientY };
+  gridDragPastSlop = false;
+  gridDragRelease = null;
+}
+
+/** Is this move part of the tracked gesture, and has it travelled far enough to count as a
+ *  drag rather than a click? Held back until the pointer has left the click slop, and
+ *  unconditional after that: once this is a drag it stays one, so a drag that wanders back
+ *  over its start point behaves exactly as it did before the threshold existed. */
+function gridGestureMoved(el: HTMLElement, e: PointerEvent): boolean {
+  if (!el.classList.contains('dragging') || e.pointerId !== gridDragPointer) return false;
+  if (gridDragPastSlop) return true;
+  const from = gridDragFrom;
+  if (!from) return false;
+  if (Math.abs(e.clientX - from.x) < GRID_DRAG_SLOP
+    && Math.abs(e.clientY - from.y) < GRID_DRAG_SLOP) return false;
+  gridDragPastSlop = true;
+  return true;
+}
+
+/** Record the release point and nothing else. Ending the gesture here too would send main
+ *  both an end and (later) a cancel for one gesture. */
+function gridGestureRelease(el: HTMLElement, e: PointerEvent): void {
+  if (!el.classList.contains('dragging') || e.pointerId !== gridDragPointer) return;
+  gridDragRelease = { x: e.clientX, y: e.clientY };
+}
+
+/**
+ * The single "gesture is over" signal, wired to lostpointercapture: it fires for a release,
+ * for a cancel, and for this node being removed from the DOM alike. Ending only on
+ * pointerup/pointercancel would let a lost capture latch gridDragging true for the rest of
+ * the session — no further grid drag would start, and the chrome would never fully
+ * re-render again.
+ *
+ * No release recorded ⇒ the gesture was cancelled, which is an end main never hears about
+ * otherwise: it keeps the drag tracked, so every later pointermove over this element — a
+ * plain hover — goes on resizing the split or moving the drop preview, and the preview
+ * overlay swallows every click in the content rect while it is up. Touch makes that
+ * reachable in practice: preventDefault on pointerdown does not stop the gesture being
+ * stolen for a pan.
+ *
+ * Deliberately not gated on the pointer id: this fires only for the pointer that held
+ * capture on this element, and adding a second condition to the ONE signal that ends a
+ * gesture could only ever make it fire zero times.
+ */
+function endGridGesture(el: HTMLElement): void {
+  if (!el.classList.contains('dragging')) return;
+  el.classList.remove('dragging');
+  const release = gridDragRelease;
+  gridDragRelease = null;
+  gridDragPointer = null;
+  gridDragFrom = null;
+  gridDragPastSlop = false;
+  endGridDrag();
+  if (release) window.loftGrid.dragEnd(release.x, release.y);
+  else window.loftGrid.dragCancel();
 }
 
 /** Position an absolutely-placed element from a main-computed Rect. Every rect arrives
@@ -95,6 +171,24 @@ function gridCellHeader(cell: GridLayout['cells'][number], state: GridViewState)
   handle.title = 'Move this cell';
   handle.setAttribute('aria-label', `Move ${name.textContent}`);
   handle.textContent = '⠿';
+  // Drag the handle to move this cell somewhere else in the grid. Exactly the gesture the
+  // gutters use — same capture, same slop, same single end-or-cancel signal — and main tells
+  // the two apart by which *DragBegin it saw, not by anything sent per move.
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return; // primary button only — middle/right fall through
+    if (gridDragging) return; // one gesture at a time; see beginGridGesture
+    e.preventDefault();
+    // The header's own pointerdown focuses the cell. A drag is not a focus click, and letting
+    // both run would make every abandoned drag also steal the zoom target.
+    e.stopPropagation();
+    beginGridGesture(handle, e);
+    window.loftGrid.cellDragBegin(cell.service);
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (gridGestureMoved(handle, e)) window.loftGrid.dragMove(e.clientX, e.clientY);
+  });
+  handle.addEventListener('pointerup', (e) => gridGestureRelease(handle, e));
+  handle.addEventListener('lostpointercapture', () => endGridGesture(handle));
   el.append(handle);
 
   const close = document.createElement('button');
@@ -124,69 +218,20 @@ function gridGutter(g: GridLayout['gutters'][number], state: GridViewState): HTM
 
   // Drag the divider to resize the split it belongs to. The renderer reports the pointer
   // and nothing else — main owns the tree, so it owns the ratio (see grid:gutterDragBegin).
-  // setPointerCapture keeps the whole gesture on this element even once the cursor leaves
-  // the gutter, which it does immediately: the divider is 6px wide.
   el.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return; // primary button only — middle/right fall through
-    // One gesture at a time. Main tracks a single drag, so a second pointer grabbing another
-    // gutter would silently retarget the first one's moves at the second one's split; refuse
-    // it here instead, where the second gutter simply never enters .dragging and its own
-    // moves and release are ignored.
+    // One gesture at a time (see beginGridGesture): the second gutter simply never enters
+    // .dragging, so its own moves and release are ignored.
     if (gridDragging) return;
     e.preventDefault();
-    el.setPointerCapture(e.pointerId);
-    el.classList.add('dragging');
-    gridDragging = true;
-    gridDragPointer = e.pointerId;
-    gridDragFrom = { x: e.clientX, y: e.clientY };
-    gridDragPastSlop = false;
-    gridDragRelease = null;
+    beginGridGesture(el, e);
     window.loftGrid.gutterDragBegin(g.path, g.dir);
   });
   el.addEventListener('pointermove', (e) => {
-    if (!el.classList.contains('dragging') || e.pointerId !== gridDragPointer) return;
-    // Held back until the pointer has left the click slop, and unconditional after that:
-    // once this is a drag it stays one, so a drag that wanders back over its start point
-    // behaves exactly as it did before the threshold existed.
-    if (!gridDragPastSlop) {
-      const from = gridDragFrom;
-      if (!from) return;
-      if (Math.abs(e.clientX - from.x) < GRID_DRAG_SLOP
-        && Math.abs(e.clientY - from.y) < GRID_DRAG_SLOP) return;
-      gridDragPastSlop = true;
-    }
-    window.loftGrid.dragMove(e.clientX, e.clientY);
+    if (gridGestureMoved(el, e)) window.loftGrid.dragMove(e.clientX, e.clientY);
   });
-  // Records the release point and nothing else. Ending the gesture here too would send main
-  // both an end and (later) a cancel for one gesture.
-  el.addEventListener('pointerup', (e) => {
-    if (!el.classList.contains('dragging') || e.pointerId !== gridDragPointer) return;
-    gridDragRelease = { x: e.clientX, y: e.clientY };
-  });
-  // The single "gesture is over" signal: it fires for a release, for a cancel, and for this
-  // node being removed from the DOM alike. Ending only on pointerup/pointercancel would let
-  // a lost capture latch gridDragging true for the rest of the session — no further gutter
-  // drag would start, and the chrome would never fully re-render again.
-  //
-  // No release recorded ⇒ the gesture was cancelled, which is an end main never hears about
-  // otherwise: it keeps the drag tracked, and every later pointermove over this gutter — a
-  // plain hover — goes on resizing the split. Touch makes that reachable in practice:
-  // preventDefault on pointerdown does not stop the gesture being stolen for a pan.
-  // Deliberately not gated on the pointer id: this fires only for the pointer that held
-  // capture on this element, and adding a second condition to the ONE signal that ends a
-  // gesture could only ever make it fire zero times.
-  el.addEventListener('lostpointercapture', () => {
-    if (!el.classList.contains('dragging')) return;
-    el.classList.remove('dragging');
-    const release = gridDragRelease;
-    gridDragRelease = null;
-    gridDragPointer = null;
-    gridDragFrom = null;
-    gridDragPastSlop = false;
-    endGridDrag();
-    if (release) window.loftGrid.dragEnd(release.x, release.y);
-    else window.loftGrid.dragCancel();
-  });
+  el.addEventListener('pointerup', (e) => gridGestureRelease(el, e));
+  el.addEventListener('lostpointercapture', () => endGridGesture(el));
   return el;
 }
 

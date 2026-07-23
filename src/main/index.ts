@@ -531,20 +531,30 @@ function addToGrid(id: string): void {
 }
 
 /**
- * What a rail drag at this point would do — the preview rect and the tree to commit — or
+ * What a drag released at this point would do — the preview rect and the tree to commit — or
  * null when there is no legal drop. The rule itself lives in gridDrop.gridDropPlan, where it
  * is testable without a window; this only supplies the geometry and the current tree, and it
- * is the ONE thing both the live preview and the release call, so they cannot disagree.
+ * is the ONE thing every live preview and every release calls, so they cannot disagree.
+ * Both gestures that can drop into the grid go through it: a rail icon being added, and a
+ * cell being moved by its ⠿ handle (which is the MOVE case — gridDropPlan measures that
+ * against the post-removal tree, and refuses the cell's own rect).
  *
  * `x`/`y` are window coordinates, which is what the rail already sends: the rail view's
  * origin IS the window origin (layout.ts), so its clientX/clientY map straight through
- * and computeGridLayout's rects are already in the same space.
+ * and computeGridLayout's rects are already in the same space. The grid chrome's own
+ * coordinates start at the content rect instead, so its callers add that origin first.
  */
 function planGridDrop(x: number, y: number, draggedId: string): GridDropPlan | null {
   const content = loft?.contentRect();
   if (!content) return null;
   return gridDropPlan({ x, y }, config.grid ?? null, content, draggedId);
 }
+
+/** Identity of a previewed rectangle, for deduping the pushes. pointermove fires far faster
+ *  than the preview changes, and every push is an IPC round trip plus a native view
+ *  visibility flip (and a re-raise) — see LoftWindow.showDropPreview. */
+const previewKey = (r: Rect | null): string =>
+  r === null ? 'none' : `${r.x},${r.y},${r.width},${r.height}`;
 
 /**
  * The selected tab changed. Nothing else can tell the notification gate: a tab switch
@@ -692,26 +702,49 @@ if (!app.requestSingleInstanceLock()) {
     loft?.refreshRail();
   });
 
-  // --- grid gutter drags — resize the split a divider belongs to ---------------
+  // --- grid drags — resize a split, or move a cell -----------------------------
   // Same split as everywhere else in the grid: the renderer reports a pointer position and
-  // computes nothing, main owns the tree and therefore owns the ratio. The path names the
-  // split rather than the pair of cells, so a drag survives anything that does not touch
-  // that split — and reads as a no-op if the split itself has gone.
+  // computes nothing, main owns the tree and therefore owns the ratio and the drop. Both
+  // gestures share grid:dragMove/dragEnd/dragCancel; which one is running is decided by the
+  // *DragBegin main last saw, so exactly one of these two is ever set.
+  //
+  // The gutter path names the split rather than the pair of cells, so a drag survives
+  // anything that does not touch that split — and reads as a no-op if the split itself has
+  // gone.
   let gutterDrag: GutterDrag | undefined;
+  /** The service whose ⠿ handle is being dragged, plus the last preview pushed for it. */
+  let cellDrag: { id: string; lastPreview?: string } | undefined;
 
-  const clearGutterDrag = (): void => {
+  const clearGridDrag = (): void => {
+    // One clearer for both kinds. A second one for the next kind of drag is how the FIRST
+    // kind gets left tracked: every end below already routes through here.
     gutterDrag = undefined;
+    cellDrag = undefined;
     // Belt and braces, as clearRailDrag does: a gutter drag never raises a preview, but the
     // overlay has no click-through, so no end of any gesture may leave one up.
     loft?.showDropPreview(null);
   };
 
   ipcMain.on('grid:gutterDragBegin', (_e, p?: { path?: unknown; dir?: unknown }) => {
+    // A begin of either kind ends whatever was tracked: two pointers can interleave, and a
+    // move fed to a stale gesture resizes or relocates something the user is not touching.
+    // Cleared before the payload check, not after — a begin means the previous gesture is
+    // over whether or not this one is well-formed.
+    clearGridDrag();
     // `dir` is still part of the renderer's payload and still validated — but it is not
     // stored: the axis is read back off the tree on every step (splitRectAt), so a prune
     // that reshapes the split mid-drag cannot leave the drag measuring the wrong way.
     if (typeof p?.path !== 'string' || (p.dir !== 'row' && p.dir !== 'col')) return;
     gutterDrag = beginGutterDrag(p.path);
+  });
+
+  // A cell's ⠿ handle: move that cell elsewhere in the grid. Only the dragged service is
+  // tracked — where it lands is planGridDrop's answer, recomputed from the live tree on
+  // every move, so a prune mid-drag cannot leave this aiming at a cell that has gone.
+  ipcMain.on('grid:cellDragBegin', (_e, service?: unknown) => {
+    clearGridDrag(); // same reasoning as grid:gutterDragBegin above
+    if (typeof service !== 'string') return;
+    cellDrag = { id: service };
   });
 
   /** Feed a renderer-space pointer to the tracked gesture through one of its steps and
@@ -734,12 +767,38 @@ if (!app.requestSingleInstanceLock()) {
     loft?.refreshGrid();
   };
 
+  /**
+   * What a cell move released at this renderer-space point would do — the ONE call behind
+   * both its preview and its release, so the rectangle the drag promises is the arrangement
+   * the drop makes.
+   *
+   * A move needs something to move: if the leaf was pruned while the pointer was down (a
+   * detach, an unload, a service removed from the hub), gridDropPlan would read the release
+   * as a fresh INSERT and put the service back into a grid it has just left. Detached and
+   * gridded are mutually exclusive (spec §7.1), and the re-inserted cell would have no page
+   * behind it — placeGridCells cannot wake a detached service.
+   */
+  const planCellMove = (x: number, y: number, id: string): GridDropPlan | null => {
+    const content = loft?.contentRect();
+    if (!content || !gridServicesOf(config.grid ?? null).includes(id)) return null;
+    // The grid renderer's coordinates start at the content rect's origin, as in
+    // applyGutterDrag; planGridDrop works in window coordinates.
+    return planGridDrop(x + content.x, y + content.y, id);
+  };
+
   ipcMain.on('grid:dragMove', (_e, p?: { x?: unknown; y?: unknown }) => {
     if (typeof p?.x !== 'number' || typeof p?.y !== 'number') return;
     // No tracked drag means this move belongs to a gesture main never saw begin, or to one a
     // second pointer already ended — ignore it, exactly as rail:dragMove does.
     if (gutterDrag) { applyGutterDrag(gutterDrag.move, p.x, p.y); return; }
-    // Cell-handle drags are handled in Task 12.
+    if (!cellDrag) return;
+    // Preview only — a cell move commits nothing until the release, unlike a resize, whose
+    // pages follow the divider live.
+    const preview = planCellMove(p.x, p.y, cellDrag.id)?.rect ?? null;
+    const key = previewKey(preview);
+    if (key === cellDrag.lastPreview) return;
+    cellDrag.lastPreview = key;
+    loft?.showDropPreview(preview);
   });
 
   // A release only resizes if the gesture actually moved (see GutterDrag.end), and only
@@ -748,11 +807,28 @@ if (!app.requestSingleInstanceLock()) {
   // `moved`, not on this last step succeeding: a release whose path went stale still has the
   // earlier moves behind it, and those are what needs writing.
   ipcMain.on('grid:dragEnd', (_e, p?: { x?: unknown; y?: unknown }) => {
-    if (gutterDrag && typeof p?.x === 'number' && typeof p?.y === 'number') {
-      applyGutterDrag(gutterDrag.end, p.x, p.y);
-    }
+    const x = typeof p?.x === 'number' ? p.x : undefined;
+    const y = typeof p?.y === 'number' ? p.y : undefined;
+    if (gutterDrag && x !== undefined && y !== undefined) applyGutterDrag(gutterDrag.end, x, y);
     if (gutterDrag?.moved()) saveConfig(configPath(), config);
-    clearGutterDrag();
+    // The cell move, committed in one step here. Releasing over a gutter or outside the grid
+    // CANCELS, and so does a drop on the dragged cell itself: planCellMove returns null for
+    // all of them, and null means the tree is left exactly as it was. It does not remove and
+    // does not detach — removal is the ✕ and only the ✕, so a slipped drag can never silently
+    // evict a service (grid-view spec §7.3).
+    if (cellDrag && x !== undefined && y !== undefined) {
+      const plan = planCellMove(x, y, cellDrag.id);
+      if (plan) {
+        config.grid = plan.next;
+        saveConfig(configPath(), config);
+        // refreshGrid, not showGrid: the grid is already the selection — this gesture began
+        // in its own chrome view — and every leaf already has a live view, so there is
+        // nothing to wake. It re-places the pages into their new cells (placeGridCells) as
+        // well as re-rendering the chrome.
+        loft?.refreshGrid();
+      }
+    }
+    clearGridDrag();
   });
 
   // The gesture was aborted by the system (pointercancel), not released. Without this the
@@ -764,7 +840,11 @@ if (!app.requestSingleInstanceLock()) {
   // moved wrote nothing, so there is nothing to persist.
   ipcMain.on('grid:dragCancel', () => {
     if (gutterDrag?.moved()) saveConfig(configPath(), config);
-    clearGutterDrag();
+    // A cancelled cell move has nothing to persist or revert: the tree is only touched on
+    // release, so an aborted one leaves it untouched by construction. What it does need is
+    // clearGridDrag's showDropPreview(null) — the preview overlay covers the whole content
+    // rect and swallows every click while it is up.
+    clearGridDrag();
   });
 
   // --- rail drag gestures -----------------------------------------------------

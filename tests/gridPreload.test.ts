@@ -36,6 +36,22 @@ describe('grid bridge', () => {
     ]);
   });
 
+  it('names the dragged service on a cell drag, then shares the same move/end channels', () => {
+    // Which gesture is running is decided by the begin main last saw — the moves carry no
+    // kind — so a cell drag that began on the wrong channel would silently be resolved as a
+    // resize (or as nothing at all).
+    const ipc = fakeIpc();
+    const b = buildGridBridge(ipc as never);
+    b.cellDragBegin('slack');
+    b.dragMove(400, 120);
+    b.dragEnd(410, 130);
+    expect(ipc.sent).toEqual([
+      ['grid:cellDragBegin', 'slack'],
+      ['grid:dragMove', { x: 400, y: 120 }],
+      ['grid:dragEnd', { x: 410, y: 130 }],
+    ]);
+  });
+
   it('sends dragCancel so an aborted gesture cannot go on resizing on every hover', () => {
     const ipc = fakeIpc();
     const b = buildGridBridge(ipc as never);

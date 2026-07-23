@@ -47,7 +47,10 @@ body {
 }
 .chead button:hover { background: #ffffff1f; color: #fff; }
 .chead .handle { cursor: grab; }
-.chead .handle:active { cursor: grabbing; }
+/* .dragging, not only :active — the gesture holds pointer capture and can wander far outside
+   the header, and the handle it came from is the only thing still marking which cell is on
+   the move. */
+.chead .handle:active, .chead .handle.dragging { cursor: grabbing; background: #ffffff1f; color: #fff; }
 
 .gutter { position: absolute; background: #0f1013; }
 .gutter.row { cursor: col-resize; }

@@ -76,6 +76,23 @@ describe('gridDropPlan — refusals and the empty grid', () => {
     expect(gridDropPlan({ x: 500, y: 295 }, leaf('whatsapp'), short, 'slack')).toBeNull();
   });
 
+  // The ⠿ handle drag (grid:cellDragBegin) resolves through this same call, so these two are
+  // what make a slipped cell move a no-op: a release that is not over another cell must leave
+  // the tree alone. Removal is the ✕ and only the ✕ — a drag can never evict a service.
+  it('returns null for a cell released over a gutter or outside the grid', () => {
+    const tree = row(leaf('whatsapp'), leaf('slack'));
+    expect(gridDropPlan({ x: 499, y: 300 }, tree, content, 'whatsapp')).toBeNull();
+    expect(gridDropPlan({ x: 1200, y: 300 }, tree, content, 'whatsapp')).toBeNull();
+    expect(gridDropPlan({ x: 500, y: -20 }, tree, content, 'whatsapp')).toBeNull();
+  });
+
+  it('refuses a move whose target is too small to split even after the removal', () => {
+    // 300 wide: whatever a leaves behind, halving it gives 147px — under MIN_CELL_WIDTH.
+    const tiny: Rect = { x: 0, y: 0, width: 300, height: 600 };
+    const tree = row(leaf('a'), leaf('b'));
+    expect(gridDropPlan({ x: 160, y: 300 }, tree, tiny, 'a')).toBeNull();
+  });
+
   it('applies the minimum to the POST-removal cell a move would split', () => {
     // b is only 297px wide on screen — too narrow to halve — but removing a leaves it the
     // full 600, so this move is legal even though the same drop by a not-yet-gridded
