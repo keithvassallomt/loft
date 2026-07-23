@@ -146,6 +146,24 @@ describe('config', () => {
     // hasOwnProperty reports false for either way — so asserting on it can never fail.
     expect('dnd' in cfg.services).toBe(false);
   });
+
+  it('keeps kind, name and icon on a service entry', () => {
+    const cfg = defaultConfig();
+    cfg.services['whatsapp-2'] = { kind: 'whatsapp', name: 'Work', icon: 'rose' };
+    const p = join(dir, 'config.json');
+    saveConfig(p, cfg);
+    expect(loadConfig(p).services['whatsapp-2']).toEqual({ kind: 'whatsapp', name: 'Work', icon: 'rose' });
+  });
+
+  it('drops non-string kind, name and icon rather than passing them through', () => {
+    // These reach the D-Bus export, the window title and a file path; a number or an
+    // object there is a crash, not a cosmetic problem.
+    const p = join(dir, 'config.json');
+    writeFileSync(p, JSON.stringify({
+      services: { 'whatsapp-2': { kind: 7, name: { a: 1 }, icon: ['rose'], dnd: true } },
+    }), 'utf8');
+    expect(loadConfig(p).services['whatsapp-2']).toEqual({ dnd: true });
+  });
 });
 
 describe('reopenDetachedEnabled', () => {

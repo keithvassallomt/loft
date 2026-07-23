@@ -18,6 +18,15 @@ export interface WindowState extends Bounds {
 }
 
 export interface ServiceConfig {
+  /**
+   * Registry kind. Absent means the id itself, which is what every pre-multi-account
+   * config says — that fallback is why this feature needs no migration.
+   */
+  kind?: string;
+  /** User's display name. Absent means the kind's default (or "WhatsApp 2" for instance 2). */
+  name?: string;
+  /** 'brand' | a variant colour key ('rose', …) | 'custom'. Absent means 'brand'. */
+  icon?: string;
   customUrl?: string;
   window?: WindowState;
   openOnStartup?: boolean;
@@ -100,6 +109,9 @@ export function sanitizeServiceConfig(v: unknown): ServiceConfig {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
   const s = v as Record<string, unknown>;
   const out: ServiceConfig = {};
+  if (typeof s.kind === 'string') out.kind = s.kind;
+  if (typeof s.name === 'string') out.name = s.name;
+  if (typeof s.icon === 'string') out.icon = s.icon;
   if (typeof s.customUrl === 'string') out.customUrl = s.customUrl;
   const w = sanitizeWindowState(s.window);
   if (w) out.window = w;
