@@ -335,19 +335,20 @@ unchanged — mount in the tick `createServiceView` returns, or the stuck-watche
 
 ## 8. Risks and spikes
 
-**S1 — transparent overlay over live sibling views (do first).** Verify on Wayland and
-X11 that a `WebContentsView` with `setBackgroundColor('#00000000')` genuinely shows the
-service views beneath it, and that its presence does not break the rail's pointer capture
-mid-drag. Note the API trap: alpha hex is `AARRGGBB`, not `RRGGBBAA`, and the string
-`"transparent"` is not a valid colour and fails silently.
-*Fallback if it fails:* `setVisible(false)` the service views for the duration of a drag
-and let the chrome view draw the preview directly. Costs a blank content area while
-dragging; costs nothing else, and needs no new view.
+**S1 — transparent overlay over live sibling views. RESOLVED 2026-07-23: GO.** A
+`WebContentsView` with `setBackgroundColor('#00000000')`, stacked above a live
+`web.whatsapp.com` view, renders the page through its transparent region with the preview
+rectangle drawn over it — verified on Wayland and X11, identical in both. Task 10 uses the
+overlay; the hide-the-views fallback is not needed.
 
-**S2 — capture across a live page (cheap).** Confirm pointer capture from the rail
-survives crossing a *live service* view, not just the manager. Near-certain, since the
-detach gesture already crosses the content area to reach the outside of the window, but
-it is a five-minute check against a page that captures pointer events itself.
+Watch the API trap when implementing: alpha hex is `AARRGGBB`, not `RRGGBBAA`, and the
+string `"transparent"` is not a valid colour and fails silently. The measured stack was
+chrome (bottom) → live page → transparent overlay → rail, which is exactly §4's ordering.
+
+**S2 — capture across a live page. RESOLVED 2026-07-23: GO.** A `setPointerCapture` drag
+begun in a rail-stand-in view kept delivering `pointermove` while the cursor was over both
+the live page and the transparent overlay, and delivered its final `pointerup` on release
+(logged at `381,259`, far outside the originating view). Both backends.
 
 **S3 — simultaneous rendering cost.** All service views are already alive; what is new is
 several *painting* at once. Measure with four cells on a mid-range machine before calling
