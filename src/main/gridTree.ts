@@ -96,9 +96,12 @@ export function insert(
 }
 
 /**
- * Where ＋ puts a service: split the largest leaf, alternating direction so the result
- * stays roughly square. There is no pointer to aim with, so the tree picks — this is the
- * only place auto-placement exists; a drag always aims (grid-view spec §5).
+ * Where ＋ puts a service: split the largest leaf along its own LONG axis — a wide cell
+ * halves side-by-side, a tall one stacks — so the result stays roughly square. The direction
+ * comes from that leaf's aspect ratio, not from the depth it sits at, which is the rule
+ * gridLayout.splittableSizes has to mirror to ask whether the split would be legal. There is
+ * no pointer to aim with, so the tree picks — this is the only place auto-placement exists;
+ * a drag always aims (grid-view spec §5).
  *
  * Takes `rectOf` rather than a layout because this file owns no geometry (see the header):
  * the caller measures the CURRENT cells and hands the sizes back. A leaf `rectOf` cannot

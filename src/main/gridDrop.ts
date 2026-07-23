@@ -1,5 +1,5 @@
-import { cellRect, type GridCell } from './gridLayout';
-import type { Edge } from './gridTree';
+import { canSplit, cellRect, computeGridLayout, splitRects, type GridCell } from './gridLayout';
+import { findPath, insert, remove, type Edge, type GridNode } from './gridTree';
 import type { Rect } from './layout';
 
 /** `'root'` = drop into an empty grid; `null` = no legal target, hide the preview. */
@@ -32,4 +32,66 @@ export function gridDropTarget(
   const dy = Math.min(ry, 1 - ry);
   const edge: Edge = dx < dy ? (rx < 0.5 ? 'left' : 'right') : (ry < 0.5 ? 'top' : 'bottom');
   return { target: hit.service, edge };
+}
+
+export interface GridDropPlan {
+  /** Where the dropped cell will land — the preview rectangle. */
+  rect: Rect;
+  /** The tree the release will produce. */
+  next: GridNode;
+}
+
+/** The half `insert` would give the newcomer: `left`/`top` take the `a` slot, `right`/
+ *  `bottom` the `b` slot, at insert's own ratio of 0.5. splitRects, not local arithmetic, so
+ *  the rect is the one computeGridLayout will hand the new cell down to the pixel. */
+function droppedHalf(rect: Rect, edge: Edge): Rect {
+  const [a, b] = splitRects(rect, edge === 'left' || edge === 'right' ? 'row' : 'col', 0.5);
+  return edge === 'left' || edge === 'top' ? a : b;
+}
+
+/**
+ * What a drop at `point` would do: the rectangle to preview AND the tree to commit, from one
+ * computation. `null` = no legal drop, so the preview hides and the release does nothing.
+ *
+ * The preview and the release used to be two copies of this rule, and they had already
+ * drifted: only the release knew that a service already in the grid MOVES rather than
+ * inserts. A move is remove-then-insert, and the remove collapses the dragged leaf's parent
+ * into its sibling — so the target cell has already GROWN by the time the insert runs, and a
+ * preview drawn on current geometry promised a rect that was off by up to a factor of two.
+ * Hence `next` is returned alongside `rect` rather than recomputed by the caller.
+ *
+ * The hit test still runs against the CURRENT on-screen layout — that is what the user is
+ * aiming at — while the resulting geometry is measured on the post-removal tree.
+ *
+ * `draggedId` may be a service that is not in the grid (including `''` for the cross-window
+ * HTML5 drag, whose id is unknown until `drop`); that is simply the insert case, which is
+ * correct — a service being attached by drag is never already a leaf.
+ */
+export function gridDropPlan(
+  point: { x: number; y: number },
+  tree: GridNode | null,
+  content: Rect,
+  draggedId: string,
+): GridDropPlan | null {
+  const { cells } = computeGridLayout(tree, content);
+  const at = gridDropTarget(point, cells, content);
+  if (at === null) return null;
+  // An empty grid takes the whole content rect: the first service is the root leaf.
+  if (at === 'root') return { rect: content, next: { kind: 'leaf', service: draggedId } };
+
+  const relocating = findPath(tree, draggedId) !== undefined;
+  // A self-drop is a no-op (move() returns the tree by identity), so it must not promise a
+  // split the release will not make.
+  if (relocating && at.target === draggedId) return null;
+  // Measure the tree the insert will actually run against, not the one on screen.
+  const base = relocating ? remove(tree, draggedId) : tree;
+  const cell = (relocating ? computeGridLayout(base, content).cells : cells)
+    .find((c) => c.service === at.target);
+  if (!cell) return null;
+  const r = cellRect(cell);
+  if (!canSplit(r, at.edge)) return null;
+  return {
+    rect: droppedHalf(r, at.edge),
+    next: insert(base, draggedId, at.target, at.edge),
+  };
 }

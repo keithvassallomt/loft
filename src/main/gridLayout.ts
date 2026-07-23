@@ -44,6 +44,31 @@ export interface GridViewState {
 
 const px = (n: number): number => Math.max(0, Math.round(n));
 
+/**
+ * The two child rects of one split — the only place the gutter is subtracted and the halves
+ * are rounded. Shared with gridDrop's preview rather than copied there: a previewed half has
+ * to be the pixel-exact rect the resulting cell will get, and two roundings of the same
+ * division disagree by a pixel on every odd width.
+ *
+ * `a`/`b` are gridTree's position-agnostic slots in layout order — `a` is left/top.
+ */
+export function splitRects(rect: Rect, dir: 'row' | 'col', ratio: number): [Rect, Rect] {
+  if (dir === 'row') {
+    const avail = px(rect.width - GRID_GUTTER);
+    const aw = px(avail * ratio);
+    return [
+      { ...rect, width: aw },
+      { ...rect, x: rect.x + aw + GRID_GUTTER, width: px(avail - aw) },
+    ];
+  }
+  const avail = px(rect.height - GRID_GUTTER);
+  const ah = px(avail * ratio);
+  return [
+    { ...rect, height: ah },
+    { ...rect, y: rect.y + ah + GRID_GUTTER, height: px(avail - ah) },
+  ];
+}
+
 export function computeGridLayout(tree: GridNode | null, content: Rect): GridLayout {
   const out: GridLayout = { cells: [], gutters: [] };
   if (!tree) return out;
@@ -64,28 +89,18 @@ export function computeGridLayout(tree: GridNode | null, content: Rect): GridLay
       return;
     }
 
-    if (node.dir === 'row') {
-      const avail = px(rect.width - GRID_GUTTER);
-      const aw = px(avail * node.ratio);
-      const bw = px(avail - aw);
-      walk(node.a, { ...rect, width: aw }, `${path}a`);
-      out.gutters.push({
+    const [ra, rb] = splitRects(rect, node.dir, node.ratio);
+    walk(node.a, ra, `${path}a`);
+    out.gutters.push(node.dir === 'row'
+      ? {
         path, dir: 'row',
-        rect: { x: rect.x + aw, y: rect.y, width: Math.min(GRID_GUTTER, rect.width), height: rect.height },
+        rect: { x: ra.x + ra.width, y: rect.y, width: Math.min(GRID_GUTTER, rect.width), height: rect.height },
+      }
+      : {
+        path, dir: 'col',
+        rect: { x: rect.x, y: ra.y + ra.height, width: rect.width, height: Math.min(GRID_GUTTER, rect.height) },
       });
-      walk(node.b, { ...rect, x: rect.x + aw + GRID_GUTTER, width: bw }, `${path}b`);
-      return;
-    }
-
-    const avail = px(rect.height - GRID_GUTTER);
-    const ah = px(avail * node.ratio);
-    const bh = px(avail - ah);
-    walk(node.a, { ...rect, height: ah }, `${path}a`);
-    out.gutters.push({
-      path, dir: 'col',
-      rect: { x: rect.x, y: rect.y + ah, width: rect.width, height: Math.min(GRID_GUTTER, rect.height) },
-    });
-    walk(node.b, { ...rect, y: rect.y + ah + GRID_GUTTER, height: bh }, `${path}b`);
+    walk(node.b, rb, `${path}b`);
   };
 
   walk(tree, content, '');

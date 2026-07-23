@@ -69,16 +69,31 @@ describe('rail bridge — drag channels', () => {
     const ipc = fakeIpc();
     const b = buildRailBridge(ipc as never);
     const slots = [{ id: 'slack', top: 50, height: 34 }];
-    b.dragBegin(slots);
+    b.dragBegin(slots, 'slack');
     b.dragMove(10, 120);
     b.dragEnd('slack', -140, 120);
     b.dropAttach('slack', 96);
     expect(ipc.sent).toEqual([
-      ['rail:dragBegin', { slots }],
+      ['rail:dragBegin', { slots, id: 'slack' }],
       ['rail:dragMove', { clientX: 10, clientY: 120 }],
       ['rail:dragEnd', { id: 'slack', releaseX: -140, releaseY: 120 }],
       ['rail:dropAttach', { id: 'slack', clientY: 96 }],
     ]);
+  });
+
+  it('omits the id for the cross-window drag, which does not know it yet', () => {
+    const ipc = fakeIpc();
+    const b = buildRailBridge(ipc as never);
+    const slots = [{ id: 'slack', top: 50, height: 34 }];
+    b.dragBegin(slots);
+    expect(ipc.sent).toEqual([['rail:dragBegin', { slots, id: undefined }]]);
+  });
+
+  it('sends dragCancel so an aborted gesture cannot strand the drop preview', () => {
+    const ipc = fakeIpc();
+    const b = buildRailBridge(ipc as never);
+    b.dragCancel();
+    expect(ipc.sent).toEqual([['rail:dragCancel', undefined]]);
   });
 
   it('delivers the drop-slot index and unsubscribes cleanly', () => {

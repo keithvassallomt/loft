@@ -31,10 +31,12 @@ function showSlot(index: number): void {
   slotLine.classList.add('show');
 }
 
-function beginDrag(): void {
+/** `id` is omitted by the cross-window HTML5 path, which does not learn the service until
+ *  'drop' — main treats that as "not currently a grid leaf", which is what it is. */
+function beginDrag(id?: string): void {
   slots = measure();
   dragging = true;
-  window.loftRail.dragBegin(slots);
+  window.loftRail.dragBegin(slots, id);
 }
 
 function endDrag(): void {
@@ -103,7 +105,7 @@ function serviceButton(item: RailItem): HTMLButtonElement {
     e.preventDefault();
     b.setPointerCapture(e.pointerId);
     b.classList.add('dragging');
-    beginDrag();
+    beginDrag(item.id);
   });
   b.addEventListener('pointermove', (e) => {
     if (!dragging) return;
@@ -115,7 +117,16 @@ function serviceButton(item: RailItem): HTMLButtonElement {
     endDrag();
     window.loftRail.dragEnd(item.id, e.clientX, e.clientY);
   });
-  b.addEventListener('pointercancel', () => { b.classList.remove('dragging'); endDrag(); });
+  // A cancel is an end main never hears about otherwise: no pointerup fires, so dragEnd is
+  // never sent and the grid drop preview — an overlay covering the whole content rect —
+  // would stay up and swallow every click on the grid, the selected service and the hub.
+  // Touch makes this reachable in practice: preventDefault on pointerdown does not stop the
+  // gesture being stolen for a pan.
+  b.addEventListener('pointercancel', () => {
+    b.classList.remove('dragging');
+    endDrag();
+    window.loftRail.dragCancel();
+  });
   // Keyboard activation (Enter/Space) dispatches a synthetic click with detail 0, not
   // pointer events; mouse clicks (detail >= 1) stay owned by the pointer path above.
   b.addEventListener('click', (e) => { if (e.detail === 0) window.loftRail.select(item.id); });

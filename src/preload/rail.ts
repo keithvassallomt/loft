@@ -14,10 +14,15 @@ export interface RailBridge {
   showGrid(): void;
   /** Report a drag that ended on a service icon; main decides the outcome from the release. */
   dragEnd(id: string, releaseX: number, releaseY: number): void;
-  /** Hand main the rail's icon geometry at drag start; it computes insertion indices from it. */
-  dragBegin(slots: RailSlot[]): void;
+  /** Hand main the rail's icon geometry at drag start; it computes insertion indices from it.
+   *  `id` is the dragged service where the gesture knows it — omitted for a cross-window
+   *  HTML5 drag, whose id the browser withholds until 'drop'. */
+  dragBegin(slots: RailSlot[], id?: string): void;
   /** Live pointer/dragover position during a drag. */
   dragMove(clientX: number, clientY: number): void;
+  /** The gesture was aborted (pointercancel), not released — main must drop its drag state
+   *  and hide the drop preview, which would otherwise sit there eating every click. */
+  dragCancel(): void;
   /** A cross-window HTML5 drop landed on the rail — attach this service at this position. */
   dropAttach(id: string, clientY: number): void;
   /** Insertion index to draw the indicator at; -1 hides it. Returns an unsubscribe. */
@@ -37,8 +42,9 @@ export function buildRailBridge(ipc: IpcRenderer): RailBridge {
     showManager: () => ipc.send('rail:showManager'),
     showGrid: () => ipc.send('rail:showGrid'),
     dragEnd: (id, releaseX, releaseY) => ipc.send('rail:dragEnd', { id, releaseX, releaseY }),
-    dragBegin: (slots) => ipc.send('rail:dragBegin', { slots }),
+    dragBegin: (slots, id) => ipc.send('rail:dragBegin', { slots, id }),
     dragMove: (clientX, clientY) => ipc.send('rail:dragMove', { clientX, clientY }),
+    dragCancel: () => ipc.send('rail:dragCancel'),
     dropAttach: (id, clientY) => ipc.send('rail:dropAttach', { id, clientY }),
     onDropSlot(cb) {
       const h = (_e: unknown, index: number): void => cb(index);

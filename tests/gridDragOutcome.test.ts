@@ -36,6 +36,16 @@ describe('railGestureOutcome with the grid selected', () => {
     })).toBe('grid');
   });
 
+  it('snaps back a non-detachable service dragged off the window, grid or no grid', () => {
+    // The grid is up but the release left the window, so the grid does not claim it; with
+    // nothing to detach the only answer left is 'none'. This is the one cell of the table
+    // where the grid feature changes what an un-detachable service does out of band, so pin
+    // it: a regression here would silently select (or reorder) a throw-away gesture.
+    expect(railGestureOutcome({
+      ...base, releaseX: 1600, canDetach: false, gridSelected: true, insideContent: false,
+    })).toBe('none');
+  });
+
   it('leaves in-band gestures alone — a click is still a select', () => {
     expect(railGestureOutcome({
       ...base, releaseX: 26, gridSelected: true, insideContent: false,
@@ -43,5 +53,25 @@ describe('railGestureOutcome with the grid selected', () => {
     expect(railGestureOutcome({
       ...base, releaseX: 26, gridSelected: true, insideContent: false, toIndex: 3,
     })).toBe('reorder');
+  });
+
+  it('treats the band boundary itself as still in-band, not a grid drop', () => {
+    // railDragOutcome leaves at exactly railWidth + margin (`>` , not `>=`), so a release
+    // pinned to the boundary is a rail gesture even with the grid selected and the point
+    // reported inside the content rect.
+    expect(railGestureOutcome({
+      ...base, releaseX: base.railWidth + base.margin, gridSelected: true, insideContent: true,
+    })).toBe('select');
+    expect(railGestureOutcome({
+      ...base,
+      releaseX: base.railWidth + base.margin,
+      gridSelected: true,
+      insideContent: true,
+      toIndex: 3,
+    })).toBe('reorder');
+    // One pixel further out and the grid claims it.
+    expect(railGestureOutcome({
+      ...base, releaseX: base.railWidth + base.margin + 1, gridSelected: true, insideContent: true,
+    })).toBe('grid');
   });
 });
