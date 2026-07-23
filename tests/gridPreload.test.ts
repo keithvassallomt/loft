@@ -59,6 +59,16 @@ describe('grid bridge', () => {
     expect(ipc.sent).toEqual([['grid:dragCancel', undefined]]);
   });
 
+  it('opens the ＋ menu on the titlebar’s own channel, not a second one', () => {
+    // The empty state's ＋ and the titlebar's ＋ must be one behaviour. titlebar:addToGrid's
+    // handler reads nothing off the sender, so reusing it is safe — and a new channel here
+    // would be a second handler to keep in step.
+    const ipc = fakeIpc();
+    const b = buildGridBridge(ipc as never);
+    b.addToGrid();
+    expect(ipc.sent).toEqual([['titlebar:addToGrid', undefined]]);
+  });
+
   it('unsubscribes so a re-render cannot stack duplicate state listeners', () => {
     const ipc = fakeIpc();
     const b = buildGridBridge(ipc as never);

@@ -1,10 +1,39 @@
-:root { color-scheme: dark; }
+/* System-aware like every other renderer here (rail.css, titlebar.css, recovery.css,
+   hub/app.css): this view fills the whole content rect, so a dark-only grid framed by a
+   light rail and titlebar was the one surface in the app that ignored the desktop theme.
+   The palette is theirs — the light values come from rail.css (the chrome this sits
+   directly beside) and the hub, the dark ones are the grid's own, unchanged. */
+:root {
+  color-scheme: light dark;
+  --g-bg: #f4f4f6;          /* hub --card */
+  --g-fg: #1a1a1a;          /* hub/titlebar --fg */
+  --g-head: #e5e5e7;        /* rail #rail background */
+  --g-muted: #6e6e73;       /* rail's glyph grey, one step darker to clear 3:1 */
+  --g-hover: #d1d1d6;       /* rail .home:hover */
+  --g-focus-bg: #0071e3;    /* rail light accent */
+  --g-focus-fg: #ffffff;
+  --g-accent: #0071e3;      /* badge + live gutter */
+  --g-gutter: #c7c7cc;      /* rail .divider */
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --g-bg: #1c1d21;
+    --g-fg: #e6e7ea;
+    --g-head: #33363f;
+    --g-muted: #98989d;     /* rail's dark .grid glyph */
+    --g-hover: #4a4a4c;     /* rail dark .home:hover */
+    --g-focus-bg: #2c4a80;
+    --g-focus-fg: #e6e7ea;
+    --g-accent: #4c8dff;
+    --g-gutter: #0f1013;
+  }
+}
 * { box-sizing: border-box; }
 body {
   margin: 0;
   height: 100vh;
-  background: #1c1d21;
-  color: #e6e7ea;
+  background: var(--g-bg);
+  color: var(--g-fg);
   font: 12px/1.3 system-ui, sans-serif;
   overflow: hidden;
   user-select: none;
@@ -17,18 +46,18 @@ body {
   align-items: center;
   gap: 5px;
   padding: 0 6px;
-  background: #33363f;
+  background: var(--g-head);
   font-size: 11px;
   overflow: hidden;
 }
-.chead.focused { background: #2c4a80; }
+.chead.focused { background: var(--g-focus-bg); color: var(--g-focus-fg); }
 .chead .icon { width: 12px; height: 12px; border-radius: 3px; flex: none; }
 .chead .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chead .badge {
   flex: none;
   padding: 0 4px;
   border-radius: 7px;
-  background: #4c8dff;
+  background: var(--g-accent);
   color: #fff;
   font-size: 9px;
   font-weight: 700;
@@ -38,24 +67,31 @@ body {
   flex: none;
   border: 0;
   background: transparent;
-  color: #9497a1;
+  color: var(--g-muted);
   font-size: 11px;
   line-height: 1;
   padding: 2px 3px;
   border-radius: 3px;
   cursor: pointer;
 }
-.chead button:hover { background: #ffffff1f; color: #fff; }
+/* On a focused header the muted grey would be reading against the accent fill, not the
+   header grey it was chosen for — inherit that header's own foreground instead. */
+.chead.focused button { color: inherit; }
+.chead button:hover { background: var(--g-hover); color: var(--g-fg); }
 .chead .handle { cursor: grab; }
 /* .dragging, not only :active — the gesture holds pointer capture and can wander far outside
    the header, and the handle it came from is the only thing still marking which cell is on
    the move. */
-.chead .handle:active, .chead .handle.dragging { cursor: grabbing; background: #ffffff1f; color: #fff; }
+.chead .handle:active, .chead .handle.dragging {
+  cursor: grabbing;
+  background: var(--g-hover);
+  color: var(--g-fg);
+}
 
-.gutter { position: absolute; background: #0f1013; }
+.gutter { position: absolute; background: var(--g-gutter); }
 .gutter.row { cursor: col-resize; }
 .gutter.col { cursor: row-resize; }
-.gutter:hover, .gutter.dragging { background: #4c8dff; }
+.gutter:hover, .gutter.dragging { background: var(--g-accent); }
 
 .empty {
   position: absolute;
@@ -65,17 +101,27 @@ body {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  color: #9497a1;
+  color: var(--g-muted);
   text-align: center;
 }
 .empty.show { display: flex; }
+/* A real button, not decoration: it is the biggest thing on an empty grid, so clicking it
+   has to open the same ＋ menu the titlebar's does. currentColor for the border keeps the
+   dashed outline and the glyph at one contrast in both themes. */
 .empty .plus {
   width: 44px;
   height: 44px;
   display: grid;
   place-items: center;
-  border: 2px dashed #ffffff33;
+  padding: 0;
+  border: 2px dashed currentColor;
   border-radius: 11px;
-  font-size: 20px;
+  background: transparent;
+  color: inherit;
+  font: 20px/1 system-ui, sans-serif;
+  cursor: pointer;
 }
-.empty span { opacity: 0.6; }
+.empty .plus:hover { color: var(--g-accent); background: var(--g-hover); }
+.empty .plus:focus-visible { outline: 2px solid var(--g-accent); outline-offset: 2px; }
+/* Legible, not decorative: 0.6 put this under 3:1 against the light background. */
+.empty span { opacity: 0.8; }

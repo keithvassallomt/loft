@@ -8,6 +8,7 @@ type GridViewState = import('../../main/gridLayout').GridViewState;
 // so a bare `root`/`render` collides with rail.ts's at compile time (TS2451/TS2393).
 const gridRoot = document.getElementById('grid')!;
 const gridEmptyEl = document.getElementById('empty')!;
+const gridAddEl = document.getElementById('add')!;
 
 let gridDragging = false;
 /** A grid:state that arrived mid-drag; applied once the gesture ends (see renderGrid). */
@@ -295,5 +296,11 @@ function renderGrid(state: GridViewState): void {
     ...state.layout.cells.map((c) => gridCellHeader(c, state)),
   );
 }
+
+// The empty state's ＋ is the biggest thing on an empty grid and the first thing a new user
+// clicks; it opens the same menu the titlebar's ＋ does (one channel, one handler).
+// 'click', not 'pointerdown', so keyboard activation (Enter/Space on the focused button)
+// works too.
+gridAddEl.addEventListener('click', () => window.loftGrid.addToGrid());
 
 window.loftGrid.onState(renderGrid);

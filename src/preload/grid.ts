@@ -9,6 +9,11 @@ export interface GridBridge {
   focusCell(service: string): void;
   /** Take this service out of the grid; it keeps running and stays in the rail. */
   removeCell(service: string): void;
+  /** Open the ＋ "add a service to the grid" menu — the empty state's own ＋ button. Sends
+   *  the TITLEBAR's channel on purpose: its handler pops the menu on the Loft window and
+   *  reads nothing off the sender, so the two ＋ affordances stay one behaviour rather than
+   *  two that can drift. */
+  addToGrid(): void;
   /** A header-handle drag began; main resolves the drop from the moves that follow. */
   cellDragBegin(service: string): void;
   /** A gutter drag began, identified by the split it resizes. */
@@ -40,6 +45,7 @@ export function buildGridBridge(ipc: IpcRenderer): GridBridge {
     },
     focusCell: (service) => ipc.send('grid:focusCell', service),
     removeCell: (service) => ipc.send('grid:removeCell', service),
+    addToGrid: () => ipc.send('titlebar:addToGrid'),
     cellDragBegin: (service) => ipc.send('grid:cellDragBegin', service),
     gutterDragBegin: (path, dir) => ipc.send('grid:gutterDragBegin', { path, dir }),
     dragMove: (x, y) => ipc.send('grid:dragMove', { x, y }),
