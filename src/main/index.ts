@@ -389,6 +389,11 @@ function setDetached(id: string, v: boolean): void {
       if (sw) { moved = sw.releaseView(); windows.delete(id); } // unmount + tear down shell, keep view
     }
     syncLoftWindows();                       // the open-window set changed
+  } else if (v) {
+    // A SLEEPING service has no view to take out, so it never reaches loft.detach and its
+    // prune. Its leaf would survive as a cell for a service that is now detached — the one
+    // state grid-view spec §7.1 forbids — so drop it through the same implementation.
+    loft?.dropFromGrid(id);
   }
 
   config.services[id] = { ...config.services[id], detached: v };

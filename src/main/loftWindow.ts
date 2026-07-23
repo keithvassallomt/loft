@@ -32,9 +32,17 @@ export interface LoftWindow {
   /** Unmount and hand the still-live view back for re-mounting elsewhere.
    *  ORDERING CONTRACT: call this BEFORE writing `detached: true` to config. It picks
    *  the next tab by locating `id` in the attached list, so a config flag flipped first
-   *  makes it show the manager instead of the next service. */
+   *  makes it show the manager instead of the next service.
+   *  SIDE EFFECT: mutates `deps.cfg.grid` in memory (drops this service's leaf — see
+   *  dropFromGrid). Nothing here saves config; callers that care must persist. */
   detach(id: string): ServiceView | undefined;
-  unload(id: string): void; // destroy the view; drop to sleeping
+  /** Destroy the view; drop to sleeping. Same `deps.cfg.grid` side effect as detach(). */
+  unload(id: string): void;
+  /** Drop a service's leaf from the grid tree without touching its view. For the teardown
+   *  paths that never reach detach/unload — a SLEEPING service being detached has no view
+   *  to unmount, but its leaf must still go, or it stays as a cell that nothing can clear.
+   *  In memory only, like detach/unload. */
+  dropFromGrid(id: string): void;
   select(id: string | undefined): void; // undefined = show the manager, GRID_ID = the grid
   activeId(): string | undefined;
   hostOf(id: string): ServiceHost | undefined;
@@ -349,13 +357,18 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
    * A leaf still naming the service therefore reads as "gridded, awake, but viewless" and
    * ensureAttached builds a SECOND live view of it — same partition, duplicate badge
    * scraper and notification relay. Pruning here makes "gridded and detached are mutually
-   * exclusive" (grid-view spec §7.1) hold by construction rather than by a caller's
-   * ordering, and an unloaded service stops being a cell, which §6's "grid membership
-   * means live" already requires.
+   * exclusive" (grid-view spec §7.1) hold for every path THROUGH this window without the
+   * caller having to order anything, and an unloaded service stops being a cell, which
+   * §6's "grid membership means live" already requires. It is not by construction: a
+   * SLEEPING service is detached without ever entering detach/unload, so index.ts's
+   * setDetached has to call dropFromGrid itself for that one case.
    *
    * In-memory only, like persist(): config is flushed on quit.
    */
   const pruneFromGrid = (id: string): void => {
+    // The zoom target is a cell reference, so it cannot outlive the cell — a stale one
+    // would aim the titlebar's zoom buttons at a service that is no longer on screen.
+    if (focusedCell === id) focusedCell = undefined;
     const tree = deps.cfg.grid ?? null;
     const next = removeFromGrid(tree, id);
     // remove() returns the same object when the service was not a leaf — leave config
@@ -516,6 +529,8 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       if (active === id) select(next);
       refreshAll();
     },
+
+    dropFromGrid: pruneFromGrid,
 
     select,
     activeId: () => active,
