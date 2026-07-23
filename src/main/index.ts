@@ -29,7 +29,8 @@ import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, rec
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
 import { RAIL_WIDTH, type Rect } from './layout';
-import { railDragOutcome, railGestureOutcome } from './railDrag';
+import { railDragOutcome } from './railDrag';
+import { railGestureAction, RAIL_SHOW } from './railGesture';
 import { railSlotIndex, type RailSlot } from './railSlots';
 import { moveInOrder } from './railOrder';
 import { orderedRailIds } from './railModel';
@@ -504,7 +505,9 @@ function buildServiceMenu(id: string): Electron.MenuItemConstructorOptions[] {
   const def = getService(id);
   const cfg = config.services[id] ?? {};
   return [
-    { label: `Go to ${def?.displayName ?? id}`, click: () => { if (def) showService(def); } },
+    // RAIL_SHOW: this menu hangs off a rail icon, so "Go to X" is the same intent as clicking
+    // that icon — full-size, grid merely deselected (spec D2) — not "reveal X in its cell".
+    { label: `Go to ${def?.displayName ?? id}`, click: () => { if (def) showService(def, RAIL_SHOW); } },
     { type: 'separator' },
     { label: 'Do Not Disturb', type: 'checkbox', checked: cfg.dnd === true,
       click: (mi) => setServiceSetting(id, { dnd: mi.checked }) },
@@ -748,12 +751,14 @@ if (!app.requestSingleInstanceLock()) {
 
   // Rail click = go to that service, loading it where it belongs if it is asleep and
   // raising its own window if it is detached. Right-click = the per-service menu.
-  // preferCell: false — a rail click is "switch to this service", so a gridded one goes
-  // full-size and the grid is merely deselected (spec D2). Its arrangement survives and
-  // repopulates when Grid is selected again.
+  // RAIL_SHOW (preferCell: false) — a rail click is "switch to this service", so a gridded one
+  // goes full-size and the grid is merely deselected (spec D2). Its arrangement survives and
+  // repopulates when Grid is selected again. This channel carries KEYBOARD activation only
+  // (rail.ts sends it when e.detail === 0); a mouse click is a zero-distance drag and ends at
+  // rail:dragEnd, which is why both have to read the rule from the same constant.
   ipcMain.on('rail:select', (_e, id: string) => {
     const d = getService(id);
-    if (d) showService(d, { preferCell: false });
+    if (d) showService(d, RAIL_SHOW);
   });
   ipcMain.on('rail:menu', (_e, id: string) => loft?.popServiceMenu(id));
   ipcMain.on('rail:showManager', () => loft?.showManager());
@@ -1021,7 +1026,10 @@ if (!app.requestSingleInstanceLock()) {
     // pull out; a sleeping or already-detached icon snaps back instead.
     const canDetach = loft?.has(m.id) === true && config.services[m.id]?.detached !== true;
     const toIndex = railSlotIndex(m.releaseY, slots);
-    switch (railGestureOutcome({
+    // One decision, made in railGestureAction; this switch only carries it out. The show
+    // intent rides along with the action for the same reason (spec D2 — a rail gesture shows
+    // full-size), so no branch here can quietly fall back to showService's default.
+    const action = railGestureAction({
       releaseX: m.releaseX,
       railWidth: RAIL_WIDTH,
       canDetach,
@@ -1037,7 +1045,8 @@ if (!app.requestSingleInstanceLock()) {
           && m.releaseX >= c.x && m.releaseX < c.x + c.width
           && m.releaseY >= c.y && m.releaseY < c.y + c.height;
       })(),
-    })) {
+    });
+    switch (action.kind) {
       case 'grid': {
         // The same call the preview drew with, so a release the preview refused to promise
         // does nothing at all — and one it DID promise commits exactly that rectangle.
@@ -1058,13 +1067,13 @@ if (!app.requestSingleInstanceLock()) {
       }
       case 'detach':
         setDetached(m.id, true);
-        showService(d);
+        showService(d, action.show);
         break;
       case 'reorder':
-        setRailOrder(moveInOrder(ids, m.id, toIndex));
+        setRailOrder(moveInOrder(ids, m.id, action.toIndex));
         break;
       case 'select':
-        showService(d);
+        showService(d, action.show);
         break;
       case 'none':
         break;
