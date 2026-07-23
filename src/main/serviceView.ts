@@ -25,6 +25,12 @@ export interface ServiceView {
   mount(window: BrowserWindow, rect: Rect): void;
   /** Remove from the current window WITHOUT destroying the page. */
   unmount(): void;
+  /** Raise to the top of the current host's stack, keeping any live recovery overlay
+   *  above the page. Electron has no raise/lower API — re-adding an existing child IS the
+   *  reorder — so a host that restacks (loftWindow's grid) must come through here rather
+   *  than re-adding `view` itself, which would bury the overlay under the blank page it
+   *  exists to rescue. No-op while unmounted. */
+  raise(): void;
   /** Set the single "page finished loading" host hook (re-push of DND/hidden). Replaces any
    *  previous one — the view's webContents outlives any one host now, so hosts must set this
    *  rather than each binding their own did-finish-load listener (which would leak per move). */
@@ -294,6 +300,18 @@ export function createServiceView(def: ServiceDef, cfg: LoftConfig): ServiceView
         w.contentView.addChildView(recoveryView);
         recoveryView.setBounds(r);
         recoveryView.setVisible(visible); // re-adding defaults to visible; match our own state
+      }
+    },
+    raise: () => {
+      if (!host || host.isDestroyed()) return;
+      host.contentView.addChildView(serviceView);
+      // Same re-assert as mount(): a re-add is not documented to carry setVisible(false)
+      // across, and the grid restacks views that are deliberately hidden (everything not
+      // in the tree), so a lost `false` would paint a non-gridded page over the grid.
+      serviceView.setVisible(visible);
+      if (recoveryView) {
+        host.contentView.addChildView(recoveryView);
+        recoveryView.setVisible(visible);
       }
     },
     unmount: () => {

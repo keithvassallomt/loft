@@ -82,6 +82,10 @@ export interface LoftWindowDeps {
    *  the page (DND, hidden), so main re-pushes it here — the shared-host twin of the
    *  per-service window's own did-finish-load binding. */
   onServiceLoad(id: string): void;
+  /** A grid cell needs a view that does not exist yet — build and attach it. Grid
+   *  membership means live (grid-view spec §6), so selecting the grid wakes its
+   *  sleeping leaves. Must be synchronous-safe: it may be called during select(). */
+  ensureAttached(id: string): void;
   railPreload: string;
   railHtml: string;
   gridPreload: string;
@@ -155,16 +159,21 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     return computeLayout(w, h, { railWidth: RAIL_WIDTH });
   };
 
+  // Reads placeGridCells/refreshGrid, both defined below — so its first CALL (and the
+  // resize binding) sits after them, near showGrid. `const` arrows are not hoisted:
+  // invoking this here would throw "Cannot access 'placeGridCells' before
+  // initialization", and tsc does not catch it.
   const relayout = (): void => {
     const r = rects();
     rail.setBounds(r.rail);
     titlebar.setBounds(r.titlebar);
     manager.setBounds(r.content);
     grid.setBounds(r.content);
+    // The grid owns the content rect while it is the selection: giving every view the
+    // full rect here would undo the cell placement one line later.
+    if (active === GRID_ID) { placeGridCells(); refreshGrid(); return; }
     for (const sv of views.values()) sv.setRect(r.content);
   };
-  relayout();
-  window.on('resize', relayout);
 
   // --- rail + titlebar state --------------------------------------------------
   const model = (): RailItem[] => buildRailModel({
@@ -205,6 +214,10 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   };
 
   const refreshGrid = (): void => {
+    // The tree may have changed (split, drop, close, resize) — the pages have to follow
+    // their cells, not just the chrome. placeGridCells re-enters this via attach()'s
+    // refreshAll when it wakes a leaf; its own re-entrancy guard breaks the cycle.
+    if (active === GRID_ID) placeGridCells();
     const content = rects().content;
     const layout = computeGridLayout(deps.cfg.grid ?? null, content);
     const names: Record<string, string> = {};
@@ -260,10 +273,64 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
   grid.webContents.on('did-finish-load', refreshAll);
 
   // --- selection --------------------------------------------------------------
-  /** Position the grid's service views over the chrome view. Task 8 fills this in;
-   *  for now the grid shows only its own chrome. */
+  /**
+   * Re-establish the grid's z-order: chrome at the bottom, service views above it.
+   * `addChildView` appends, and appending a view that is ALREADY a child re-raises it
+   * to topmost — that is the documented, maintainer-endorsed way to reorder, and there
+   * is no raise/lower API. Index-to-depth direction is not documented, so nothing here
+   * passes an index.
+   *
+   * Needed because attaching a service while the grid is on screen appends its view
+   * above everything, including views that must stay on top.
+   *
+   * Goes through ServiceView.raise rather than adding `sv.view` directly: a stuck cell's
+   * recovery overlay has to come back up with its page, or a badge tick would bury it.
+   */
+  const restack = (): void => {
+    window.contentView.addChildView(grid);
+    for (const sv of views.values()) sv.raise();
+  };
+
+  /**
+   * Waking a leaf calls out to index.ts, which attaches — and attach() ends in
+   * refreshAll() → refreshGrid() → back in here, once per sleeping leaf. It terminates
+   * (each round attaches one more service) but it re-places a half-built grid N times
+   * and fires N² chrome pushes on the way. The outermost call is the one that sees the
+   * complete view set, so let it finish the job alone.
+   */
+  let placingCells = false;
+
+  /**
+   * Put every gridded service's view in its cell's BODY rect — below that cell's header
+   * strip, which the chrome view underneath owns. Non-gridded views are hidden: the grid
+   * is the selection, so nothing else is on screen.
+   */
   const placeGridCells = (): void => {
-    for (const sv of views.values()) sv.setVisible(false);
+    if (placingCells) return;
+    placingCells = true;
+    try {
+      const content = rects().content;
+      const layout = computeGridLayout(deps.cfg.grid ?? null, content);
+      const inGrid = new Set(layout.cells.map((c) => c.service));
+
+      // Wake any leaf that has no view yet. Done before the placement loop so the view
+      // exists by the time we position it — attach() mounts synchronously.
+      for (const service of inGrid) {
+        if (!views.has(service)) deps.ensureAttached(service);
+      }
+
+      for (const [vid, sv] of views) sv.setVisible(inGrid.has(vid));
+      for (const c of layout.cells) {
+        const sv = views.get(c.service);
+        if (!sv) continue; // ensureAttached declined (service removed or detached)
+        // Also moves any live recovery overlay (ServiceView.setRect carries it), so a
+        // stuck cell recovers inside its own body rect with its header still on screen.
+        sv.setRect(c.body);
+      }
+      restack();
+    } finally {
+      placingCells = false;
+    }
   };
 
   const select = (id: string | undefined): void => {
@@ -294,6 +361,12 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     refreshAll();
     deps.onActiveChanged(id);
   };
+
+  // Deferred to here, past placeGridCells/refreshGrid, purely to stay out of their TDZ
+  // (see relayout's own comment). Still ahead of the `persist` resize binding below, so
+  // the handler order is unchanged: lay out first, then record the new size.
+  relayout();
+  window.on('resize', relayout);
 
   const showManager = (): void => select(undefined);
   const showGrid = (): void => select(GRID_ID);

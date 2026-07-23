@@ -884,6 +884,18 @@ if (!app.requestSingleInstanceLock()) {
       buildServiceMenu,
       onActiveChanged: syncActiveTab,
       onServiceLoad: (id) => notifications?.registerService(id),
+      ensureAttached: (id) => {
+        const def = getService(id);
+        // Refuse for an unknown, uninstalled or detached service — the grid tree is
+        // pruned on load, but config can change under a running grid. Detached and
+        // gridded are mutually exclusive: a service in its own window has no view here
+        // to tile, and stealing it back is the rail's job, not a repaint's.
+        if (!def || config.services[id] === undefined || isDetached(id)) return;
+        // `!loft` is unreachable today (nothing selects the grid before this assignment
+        // returns) but attachService dereferences it with `!`, so don't rely on that.
+        if (!loft || loft.has(id)) return;
+        attachService(def);
+      },
       railPreload: join(__dirname, '..', 'preload', 'rail.js'),
       railHtml: join(__dirname, '..', 'renderer', 'rail', 'index.html'),
       gridPreload: join(__dirname, '..', 'preload', 'grid.js'),
