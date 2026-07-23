@@ -7,7 +7,7 @@ import { createServiceView, type ServiceView } from './serviceView';
 import type { ServiceHost } from './serviceHost';
 import { buildRailModel, buildRailState, nextActiveId, type RailItem } from './railModel';
 import { computeGridLayout, type GridViewState } from './gridLayout';
-import { GRID_ID } from './gridTree';
+import { GRID_ID, remove as removeFromGrid } from './gridTree';
 
 /** The window's own display name — the key the GNOME helper and KWin match on. */
 export const LOFT_WINDOW_KEY = 'Loft';
@@ -310,14 +310,19 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     placingCells = true;
     try {
       const content = rects().content;
-      const layout = computeGridLayout(deps.cfg.grid ?? null, content);
-      const inGrid = new Set(layout.cells.map((c) => c.service));
-
       // Wake any leaf that has no view yet. Done before the placement loop so the view
       // exists by the time we position it — attach() mounts synchronously.
-      for (const service of inGrid) {
+      for (const service of new Set(
+        computeGridLayout(deps.cfg.grid ?? null, content).cells.map((c) => c.service),
+      )) {
         if (!views.has(service)) deps.ensureAttached(service);
       }
+
+      // Re-read the tree: waking a leaf re-enters index.ts, and that path can edit
+      // deps.cfg.grid (detach/unload prune). Placing from a pre-wake layout would put the
+      // pages where the nested refreshGrid has already told the chrome they are not.
+      const layout = computeGridLayout(deps.cfg.grid ?? null, content);
+      const inGrid = new Set(layout.cells.map((c) => c.service));
 
       for (const [vid, sv] of views) sv.setVisible(inGrid.has(vid));
       for (const c of layout.cells) {
@@ -331,6 +336,32 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     } finally {
       placingCells = false;
     }
+  };
+
+  /**
+   * Drop a service's leaf from the grid tree. Both teardown paths (detach, unload) call
+   * this before their own refreshAll().
+   *
+   * It cannot live in the caller instead. refreshAll → refreshGrid → placeGridCells runs
+   * MID-teardown, at the one moment index.ts's isDetached(id) is contractually still
+   * false: the view is already out of `views`, the service's own window does not exist
+   * yet, and detach's ordering contract forbids writing `detached: true` to config first.
+   * A leaf still naming the service therefore reads as "gridded, awake, but viewless" and
+   * ensureAttached builds a SECOND live view of it — same partition, duplicate badge
+   * scraper and notification relay. Pruning here makes "gridded and detached are mutually
+   * exclusive" (grid-view spec §7.1) hold by construction rather than by a caller's
+   * ordering, and an unloaded service stops being a cell, which §6's "grid membership
+   * means live" already requires.
+   *
+   * In-memory only, like persist(): config is flushed on quit.
+   */
+  const pruneFromGrid = (id: string): void => {
+    const tree = deps.cfg.grid ?? null;
+    const next = removeFromGrid(tree, id);
+    // remove() returns the same object when the service was not a leaf — leave config
+    // alone rather than writing a no-op edit over it.
+    if (next === tree) return;
+    deps.cfg.grid = next;
   };
 
   const select = (id: string | undefined): void => {
@@ -459,6 +490,10 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       sv.unmount();
       views.delete(id);
       hosts.delete(id);
+      // After the snapshot above (which needs `id` still in the attached list) and before
+      // anything repaints: a detached service is not a cell, and leaving the leaf up would
+      // have the very next refresh wake a duplicate view of it — see pruneFromGrid.
+      pruneFromGrid(id);
       if (active === id) select(next);
       refreshAll();
       return sv; // still live — the caller re-mounts it into its own window
@@ -474,6 +509,10 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       if (!sv.view.webContents.isDestroyed()) sv.view.webContents.close();
       views.delete(id);
       hosts.delete(id);
+      // Grid membership means live (grid-view spec §6), so an unloaded service is not a
+      // cell. Before the repaint, or refreshGrid resurrects it behind the caller's back —
+      // see pruneFromGrid.
+      pruneFromGrid(id);
       if (active === id) select(next);
       refreshAll();
     },

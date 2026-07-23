@@ -33,6 +33,7 @@ import { railDragOutcome, railGestureOutcome } from './railDrag';
 import { railSlotIndex, type RailSlot } from './railSlots';
 import { moveInOrder } from './railOrder';
 import { orderedRailIds } from './railModel';
+import { services as gridServicesOf } from './gridTree';
 import type { HubState, ServicePatch } from '../shared/hubTypes';
 
 app.setName('Loft');
@@ -891,6 +892,12 @@ if (!app.requestSingleInstanceLock()) {
         // gridded are mutually exclusive: a service in its own window has no view here
         // to tile, and stealing it back is the rail's job, not a repaint's.
         if (!def || config.services[id] === undefined || isDetached(id)) return;
+        // Wake only what the tree actually names. isDetached cannot carry this alone: it
+        // reads false mid-teardown (view gone, own window not built, flag not yet
+        // written), which is exactly when a stale leaf would make us build a duplicate
+        // view. loftWindow prunes the leaf on that path, so this is belt-and-braces —
+        // but it makes the wake path self-consistent instead of trusting the prune.
+        if (!gridServicesOf(config.grid ?? null).includes(id)) return;
         // `!loft` is unreachable today (nothing selects the grid before this assignment
         // returns) but attachService dereferences it with `!`, so don't rely on that.
         if (!loft || loft.has(id)) return;
