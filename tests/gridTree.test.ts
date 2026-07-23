@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  insert, remove, move, resize, services, prune, findPath,
+  insert, remove, move, resize, services, prune, findPath, validGridServices,
   type GridNode,
 } from '../src/main/gridTree';
 
@@ -181,5 +181,47 @@ describe('prune', () => {
     });
     expect(prune(tree, new Set())).toBeNull();
     expect(prune(null, new Set(['whatsapp']))).toBeNull();
+  });
+});
+
+describe('validGridServices', () => {
+  const registry = [{ id: 'whatsapp' }, { id: 'slack' }, { id: 'telegram' }, { id: 'element' }];
+  const configured = new Set(['whatsapp', 'slack', 'telegram']);
+  const detached = new Set(['telegram']);
+  const valid = () =>
+    validGridServices(registry, (id) => configured.has(id), (id) => detached.has(id));
+
+  it('keeps only configured, non-detached services', () => {
+    expect(valid()).toEqual(new Set(['whatsapp', 'slack']));
+  });
+
+  describe('as prune\'s valid set (the startup reconcile)', () => {
+    it('drops an uninstalled leaf and collapses its split into the sibling', () => {
+      // 'element' is in the registry but was never installed — a hand-edited or
+      // stale config.json can still name it.
+      const tree: GridNode = {
+        kind: 'split', dir: 'row', ratio: 0.6,
+        a: leaf('whatsapp'),
+        b: { kind: 'split', dir: 'col', ratio: 0.5, a: leaf('element'), b: leaf('slack') },
+      };
+      expect(prune(tree, valid())).toEqual({
+        kind: 'split', dir: 'row', ratio: 0.6, a: leaf('whatsapp'), b: leaf('slack'),
+      });
+    });
+
+    it('drops a detached service\'s leaf even though it is configured', () => {
+      const tree = insert(leaf('whatsapp'), 'telegram', 'whatsapp', 'right');
+      expect(prune(tree, valid())).toEqual(leaf('whatsapp'));
+    });
+
+    it('returns an all-valid tree by identity, so startup never rewrites config', () => {
+      const tree = insert(leaf('whatsapp'), 'slack', 'whatsapp', 'right');
+      expect(prune(tree, valid())).toBe(tree);
+    });
+
+    it('empties a tree whose every leaf is invalid', () => {
+      const tree = insert(leaf('element'), 'telegram', 'element', 'bottom');
+      expect(prune(tree, valid())).toBeNull();
+    });
   });
 });

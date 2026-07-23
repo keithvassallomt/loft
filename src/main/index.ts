@@ -33,7 +33,7 @@ import { railDragOutcome, railGestureOutcome } from './railDrag';
 import { railSlotIndex, type RailSlot } from './railSlots';
 import { moveInOrder } from './railOrder';
 import { orderedRailIds } from './railModel';
-import { services as gridServicesOf } from './gridTree';
+import { services as gridServicesOf, prune, validGridServices } from './gridTree';
 import type { HubState, ServicePatch } from '../shared/hubTypes';
 
 app.setName('Loft');
@@ -118,6 +118,32 @@ const allHosts = (): ServiceHost[] => [
 // detached service in the rail at startup (spec §7) without forgetting the flag.
 const wantsOwnWindow = (id: string): boolean =>
   config.services[id]?.detached === true && reopenDetachedEnabled(config);
+
+/**
+ * Reconcile the persisted grid against the registry, once, before anything can render it
+ * (grid-view spec §6). config.json is hand-editable and the tree names services by id, so a
+ * leaf outlives the service it names: removed, never installed, or since marked detached —
+ * whose view belongs to its own window, leaving nothing here to tile. Such a leaf comes back
+ * as a cell on every launch that the user cannot clear from the UI, so drop it here rather
+ * than let it reach a view. Registry-aware, which is exactly what config.ts's load-time
+ * validation cannot be: that pass knows the tree's shape, not which services exist.
+ *
+ * Persisted only on a real change — prune returns the tree by identity for a no-op, so a
+ * config with a clean grid (or no `grid` key at all) is never rewritten.
+ */
+const gridBefore = config.grid ?? null;
+const gridPruned = prune(
+  gridBefore,
+  validGridServices(SERVICES, (id) => config.services[id] !== undefined, wantsOwnWindow),
+);
+if (gridPruned !== gridBefore) {
+  config.grid = gridPruned;
+  console.log('Pruned grid leaves for removed or detached services');
+  // In-memory is what this launch renders; a failed write only costs the next launch the
+  // same prune, so an unwritable config must not take startup down with it.
+  try { saveConfig(configPath(), config); }
+  catch (err) { console.error('Failed to persist pruned grid:', err); }
+}
 
 // Does this service live in its own window? Answered from where it ACTUALLY is whenever
 // it's loaded, and only from config while it sleeps. Not the same as the config flag:

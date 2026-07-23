@@ -167,3 +167,18 @@ export function prune(tree: GridNode | null, valid: ReadonlySet<string>): GridNo
   if (a === tree.a && b === tree.b) return tree;
   return { ...tree, a, b };
 }
+
+/** The `valid` set prune expects, computed from the registry: a service may hold a cell
+ *  only while it is still configured (an uninstalled one has no view to tile) and not
+ *  detached (its view lives in its own window — detached and gridded are mutually
+ *  exclusive). Takes predicates rather than a config object so the rule stays testable on
+ *  its own and LoftConfig stays out of this file. */
+export function validGridServices(
+  services: readonly { id: string }[],
+  isConfigured: (id: string) => boolean,
+  isDetached: (id: string) => boolean,
+): Set<string> {
+  return new Set(
+    services.filter((s) => isConfigured(s.id) && !isDetached(s.id)).map((s) => s.id),
+  );
+}
