@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] - 2026-07-15
 
+### Added
+
+- Unified view
+- Grid view: a new **Grid** entry at the top of the service rail tiles several services on screen at once, so you can watch WhatsApp, Slack and Telegram together instead of switching between them. Add a service to the grid by dragging its rail icon into the grid, or from the ＋ menu in the titlebar; drop it against a cell's edge to choose which half it takes. Drag the dividers to resize, drag a cell by the handle in its header to move it, and remove one with its ✕ — the service keeps running and stays in the rail either way. The arrangement is remembered across restarts. Clicking a service in the rail still opens it full-size; the grid keeps its layout and comes back when you select it again. Calls, including video and screen-share, survive being tiled, resized and moved.
+- Multiple Accounts
+- Chat bubbles
+
 ### Changed
 
 - Loft is now a single self-contained application and no longer launches or depends on a separate Google Chrome installation. Voice and video calling, tray icons, badges, notifications, and close-to-tray all work as before, with improved GNOME and KDE Plasma integration.

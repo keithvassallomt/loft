@@ -21,7 +21,11 @@ Loft is **one Electron application** that hosts every installed service, not a m
 - **A hub window** (Svelte 5 + Vite renderer) is the manager UI — install/remove services, per-service and global settings, live running/badge status pushed over IPC (no polling).
 - **A frameless `BrowserWindow` per running service**, each with its own titlebar `WebContentsView` (icon + name + zoom controls + close-to-tray) stacked above the service's own `WebContentsView`, which renders the web app **in-process** — Electron's bundled Chromium, not an external browser. The service view is deliberately kept separate from the titlebar view (rather than merged into one window/view) so that a future unified/tabbed window can re-parent the same view objects.
 
+- **A grid view** (`src/main/gridTree.ts`, `gridLayout.ts`, `gridDrop.ts`, `src/renderer/grid/`) tiles several live services in the Loft window's content rect at once, selected from a pinned **Grid** entry at the top of the rail. The arrangement is a binary split tree persisted as `grid` in `config.json`. **This is the one place the "exactly one visible view in the content rect" invariant does not hold** — see the stacking note below, which is load-bearing rather than stylistic.
+
 There is no separate daemon process, no launching of a real Chrome binary, and no Chrome extension / native-messaging host — sandboxed preloads take over what the extension used to do (see Components below).
+
+> **Note:** the two bullets above about per-service `BrowserWindow`s describe the *detached* case. Since the unified-view work, services are attached to the single Loft window by default and detaching is the opt-out. Those bullets predate that change and are due a rewrite that is out of scope here.
 
 ### Components
 
@@ -53,7 +57,16 @@ There is no separate daemon process, no launching of a real Chrome binary, and n
 
 7. **KWin scripting** (`src/main/kde/kwin.ts`) — the KDE analog of the GNOME helper: drives `org.kde.kwin.Scripting` to focus/hide/skip-taskbar windows, matched the same way, by window caption.
 
-8. **Do Not Disturb** — a notification is shown only when none of: system DND, per-service DND, or "this service is both focused and visible" apply. System DND is detected live: GNOME via the `org.gnome.desktop.notifications` `show-banners` gsetting (negated), KDE via the `Inhibited` property on `org.freedesktop.Notifications` (used directly, not negated).
+8. **Grid view** (`src/main/gridTree.ts` / `gridLayout.ts` / `gridDrop.ts` / `gutterDrag.ts`, `src/renderer/grid/`, `src/renderer/gridOverlay/`) — tiles several live services in the Loft window at once, from a pinned **Grid** entry at the top of the rail.
+   - The arrangement is a **binary split tree** (`GridNode`: leaves are services, splits carry a direction and a ratio), persisted as `grid` in `config.json`. Holes and overlaps are unrepresentable: a split always has exactly two children, so removing a leaf collapses its parent into the sibling and the space is always reclaimed.
+   - **Chrome sits UNDER the pages, not over them, and this is load-bearing.** One grid chrome view fills the content rect drawing per-cell header strips and gutters; each service view mounts *on top of it* in its cell's **body** rect only. Headers and gutters are therefore simply the regions no page covers. A `WebContentsView` has no click-through — a transparent view over a live page swallows every pointer event in its rect ([electron#49039](https://github.com/electron/electron/issues/49039), open; [#23863](https://github.com/electron/electron/issues/23863) open since 2020) — so any design that paints chrome over a page buys a permanent input bug. Do not "simplify" this into an overlay.
+   - The one thing that must appear over a live page is the blue drop preview, drawn by a transparent overlay view (`setBackgroundColor('#00000000')` — alpha hex is `AARRGGBB`, and the string `"transparent"` is invalid and fails silently). It is created **once** at construction and toggled with `setVisible`, never per drag ([electron#47351](https://github.com/electron/electron/issues/47351): a freshly created view does not cover lower views until its page loads). It swallowing events is harmless — during a drag they are going to the rail via pointer capture.
+   - **Stacking**: `addChildView` appends, and re-adding an existing child raises it to topmost — the documented reorder, since there is no raise/lower API. Index-to-depth direction is undocumented, so nothing passes an index. A service view is *not one view*: a stuck cell has a recovery overlay above its page, so restacking goes through `ServiceView.raise()` (page, then overlay) rather than re-adding the page alone, which would bury the UI that exists to rescue it.
+   - Add by dragging a rail icon in (release region decides: rail = reorder, content rect with Grid selected = add/move, outside the window = detach as always), or from the titlebar's ＋. Resize by dragging gutters, move a cell by its header handle, remove with ✕ — the service keeps running and stays in the rail. `gridDropPlan` is the **single** source of the drop rule, returning both the preview rectangle and the resulting tree, so the preview cannot promise something the release will not produce.
+   - **Grid and detached are mutually exclusive**, enforced inside `LoftWindow.detach`/`unload` rather than by their callers: both call `refreshAll()` mid-transition, when `isDetached(id)` is briefly false in every term, and a caller-side prune runs too late to stop the grid rebuilding a second live view of the same service.
+   - Zoom acts on the **focused cell** (set by clicking a cell's page — via that view's `webContents` `focus` event — or its header), and writes to that service's existing `window.zoom`; there is no separate grid zoom.
+
+9. **Do Not Disturb** — a notification is shown only when none of: system DND, per-service DND, or "this service is both focused and visible" apply. In the grid, *every* visible cell counts as focused-and-visible while the Loft window has focus, so all of them suppress; cell focus is a zoom target and deliberately does not enter this gate. System DND is detected live: GNOME via the `org.gnome.desktop.notifications` `show-banners` gsetting (negated), KDE via the `Inhibited` property on `org.freedesktop.Notifications` (used directly, not negated).
 
 ### Window Behavior
 
@@ -121,7 +134,11 @@ Loft currently logs to stdout/stderr via plain `console.*` calls in the main pro
 ~/.config/loft/
   config.json                      # single JSON file: global settings + services map keyed by service id
                                     # (customUrl, dnd, badgesEnabled, openOnStartup, window bounds/zoom per service;
-                                    #  trayBackend and globalDnd at the top level)
+                                    #  trayBackend, globalDnd, railOrder and grid at the top level)
+                                    # `grid` is the grid view's split tree; absent or null = empty grid.
+                                    # Validated recursively on load (depth-capped, ratios clamped) and
+                                    # collapsed to null if malformed — a corrupt grid must cost you the
+                                    # arrangement, never the ability to start Loft.
 
 ~/.config/autostart/
   chat.loft.Loft.desktop           # one login-autostart entry (launches `loft --minimized`). DERIVED, not a
@@ -183,9 +200,11 @@ The integrated terminal in some editors (e.g. VS Code) exports `ELECTRON_RUN_AS_
 ```sh
 # Build + run for local testing
 npm run build
-env -u ELECTRON_RUN_AS_NODE electron .
-env -u ELECTRON_RUN_AS_NODE electron . --service=whatsapp
-env -u ELECTRON_RUN_AS_NODE electron . --service=whatsapp --minimized
+# `electron` is a devDependency, so it is only on PATH inside an npm script. From a bare
+# shell use `npx electron .` (or just `npm start`, which builds and launches).
+env -u ELECTRON_RUN_AS_NODE npx electron .
+env -u ELECTRON_RUN_AS_NODE npx electron . --service=whatsapp
+env -u ELECTRON_RUN_AS_NODE npx electron . --service=whatsapp --minimized
 
 # Equivalent one-shot npm scripts (build + run)
 npm start
