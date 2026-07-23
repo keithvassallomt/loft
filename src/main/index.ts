@@ -914,9 +914,7 @@ if (!app.requestSingleInstanceLock()) {
       const preview = outside
         ? planGridDrop(m.clientX, m.clientY, railDrag.id ?? '')?.rect ?? null
         : null;
-      const key = preview
-        ? `${preview.x},${preview.y},${preview.width},${preview.height}`
-        : 'none';
+      const key = previewKey(preview);
       if (key !== railDrag.lastPreview) {
         railDrag.lastPreview = key;
         loft.showDropPreview(preview);
