@@ -218,3 +218,23 @@ export function validGridServices(
     services.filter((s) => isConfigured(s.id) && !isDetached(s.id)).map((s) => s.id),
   );
 }
+
+/**
+ * Which cell the titlebar's zoom buttons should act on, given the current focus and the
+ * tree (grid-view spec §7.4).
+ *
+ * Focus is not persisted and not authoritative: a cell can be removed, detached, moved or
+ * pruned out from under it, and every one of those routes ends in refreshGrid. So rather
+ * than clearing focus at each of those call sites — and missing one — this is applied on
+ * every push, and a focus naming a service that is no longer a leaf falls back to the
+ * first leaf in tree order. Undefined only when the grid is genuinely empty, which is the
+ * one case where there is nothing to zoom.
+ */
+export function reseedFocus(
+  tree: GridNode | null,
+  current: string | undefined,
+): string | undefined {
+  const leaves = services(tree);
+  if (current !== undefined && leaves.includes(current)) return current;
+  return leaves[0];
+}

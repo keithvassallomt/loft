@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  insert, remove, move, resize, services, prune, findPath, validGridServices, autoPlace,
+  insert, remove, move, resize, services, prune, findPath, validGridServices, autoPlace, reseedFocus,
   type GridNode,
 } from '../src/main/gridTree';
 
@@ -266,5 +266,33 @@ describe('validGridServices', () => {
       const tree = insert(leaf('element'), 'telegram', 'element', 'bottom');
       expect(prune(tree, valid())).toBeNull();
     });
+  });
+});
+
+describe('reseedFocus', () => {
+  const tree: GridNode = {
+    kind: 'split', dir: 'row', ratio: 0.5,
+    a: leaf('whatsapp'),
+    b: { kind: 'split', dir: 'col', ratio: 0.5, a: leaf('slack'), b: leaf('telegram') },
+  };
+
+  it('keeps a focus that is still a leaf', () => {
+    expect(reseedFocus(tree, 'telegram')).toBe('telegram');
+  });
+
+  it('falls back to the first leaf in tree order when focus is unset', () => {
+    expect(reseedFocus(tree, undefined)).toBe('whatsapp');
+  });
+
+  it('falls back when the focused cell has left the grid', () => {
+    // The case that matters: ✕, detach, unload and the startup prune all end in a tree
+    // that no longer names the focused service. Zoom must not keep pointing at it.
+    expect(reseedFocus(tree, 'element')).toBe('whatsapp');
+    expect(reseedFocus(remove(tree, 'whatsapp'), 'whatsapp')).toBe('slack');
+  });
+
+  it('is undefined for an empty grid — nothing to zoom', () => {
+    expect(reseedFocus(null, 'whatsapp')).toBeUndefined();
+    expect(reseedFocus(null, undefined)).toBeUndefined();
   });
 });

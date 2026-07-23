@@ -60,7 +60,12 @@ function fakeView(id: string): ServiceView {
   const def = DEFS.find((d) => d.id === id)!;
   return {
     def,
-    view: { webContents: { id: 900, isDestroyed: () => false, close: () => {} } },
+    // `on` is here because attach() subscribes to the view's 'focus' to track which grid
+    // cell the zoom buttons act on. The fake records nothing — these tests are about the
+    // tree, not focus — but it must exist, or attach() throws before the prune under test.
+    view: {
+      webContents: { id: 900, isDestroyed: () => false, close: () => {}, on: () => {} },
+    },
     mount: () => {},
     unmount: () => {},
     raise: () => {},

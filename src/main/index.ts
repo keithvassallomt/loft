@@ -631,7 +631,9 @@ const isLoftChrome = (senderId: number): boolean =>
 // the Loft window's single titlebar acts on whichever service is SELECTED.
 function titlebarTarget(senderId: number): ServiceHost | undefined {
   if (!isLoftChrome(senderId)) return findBySenderId(senderId);
-  const id = loft!.activeId();
+  // In the grid, several services are on screen at once, so "the selection" is not a
+  // service — GRID_ID has no host. Zoom acts on the focused cell instead (spec §7.4).
+  const id = loft!.activeId() === GRID_ID ? loft!.focusedCellId() : loft!.activeId();
   return id ? loft!.hostOf(id) : undefined;
 }
 
@@ -692,6 +694,14 @@ if (!app.requestSingleInstanceLock()) {
   // identity-compare-and-write here: dropFromGrid is backed by pruneFromGrid, which also
   // clears the focused cell when it was the one removed. A second copy would drift, and
   // would miss that. It edits the tree in memory only, so persist it here.
+  // Clicking a cell's header picks it as the zoom target. The click inside a cell's PAGE
+  // is handled instead by that view's own webContents 'focus' event — a page swallows its
+  // own clicks, so the chrome never sees them.
+  ipcMain.on('grid:focusCell', (_e, service?: unknown) => {
+    if (typeof service !== 'string') return;
+    loft?.setFocusedCell(service);
+  });
+
   ipcMain.on('grid:removeCell', (_e, service?: unknown) => {
     if (typeof service !== 'string') return;
     loft?.dropFromGrid(service);

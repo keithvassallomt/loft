@@ -7,7 +7,7 @@ import { createServiceView, type ServiceView } from './serviceView';
 import type { ServiceHost } from './serviceHost';
 import { buildRailModel, buildRailState, nextActiveId, type RailItem } from './railModel';
 import { computeGridLayout, type GridViewState } from './gridLayout';
-import { GRID_ID, remove as removeFromGrid } from './gridTree';
+import { GRID_ID, remove as removeFromGrid, reseedFocus, services as gridServices } from './gridTree';
 
 /** The window's own display name — the key the GNOME helper and KWin match on. */
 export const LOFT_WINDOW_KEY = 'Loft';
@@ -55,6 +55,13 @@ export interface LoftWindow {
   showGrid(): void;
   /** Re-push the grid chrome state (layout, names, badges, focus). */
   refreshGrid(): void;
+  /** Make this cell the zoom target. Ignored for a service that is not a leaf, so a stale
+   *  id from the renderer cannot strand focus on a cell that no longer exists. */
+  setFocusedCell(service: string): void;
+  /** The focused cell, or undefined when the grid is not the selection or is empty. Zoom
+   *  reads this instead of activeId() while the grid is up — GRID_ID is not a service and
+   *  hostOf() would find nothing for it. */
+  focusedCellId(): string | undefined;
   /** Push to the manager view (the hub renderer). index.ts owns the `hub:*` IPC — those
    *  handlers drive main's own state (config, hosts, autostart), not this window's — but the
    *  manager is a view in here, so this is its way in. No-ops before the view has loaded;
@@ -272,6 +279,11 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     // their cells, not just the chrome. placeGridCells re-enters this via attach()'s
     // refreshAll when it wakes a leaf; its own re-entrancy guard breaks the cycle.
     if (active === GRID_ID) placeGridCells();
+    // Reseed here rather than at each of the routes that can invalidate focus (✕, detach,
+    // unload, move, the startup prune): they all end in this push, so one rule here cannot
+    // be the one someone forgets to call. pruneFromGrid still clears focus eagerly so the
+    // cleared value never reaches a consumer between the two.
+    focusedCell = reseedFocus(deps.cfg.grid ?? null, focusedCell);
     const content = rects().content;
     const layout = computeGridLayout(deps.cfg.grid ?? null, content);
     const names: Record<string, string> = {};
@@ -558,6 +570,18 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       // mount() appended this view above everything, the overlay included — the grid's
       // z-order has to be re-established before it next paints. See stackDirty.
       stackDirty = true;
+      // Which sibling view the user last clicked into. Electron documents this as the
+      // supported way to tell them apart: "The focus and blur events of WebContents should
+      // only be used to detect focus change between different WebContents ... in the same
+      // window." Its macOS caveat does not apply on Linux. Only meaningful while the grid
+      // is up — in single-view mode there is one visible page and zoom follows the
+      // selection, not the click.
+      sv.view.webContents.on('focus', () => {
+        if (active !== GRID_ID || focusedCell === def.id) return;
+        if (!gridServices(deps.cfg.grid ?? null).includes(def.id)) return;
+        focusedCell = def.id;
+        refreshGrid();
+      });
       hosts.delete(def.id);
       // Mirrors serviceWindow's binding: a load wipes whatever main pushed into the page,
       // so main gets told to push it again. Without this an attached service never hears
@@ -626,6 +650,14 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     showManager,
     showGrid,
     refreshGrid,
+
+    setFocusedCell: (service) => {
+      if (!gridServices(deps.cfg.grid ?? null).includes(service)) return;
+      if (focusedCell === service) return;
+      focusedCell = service;
+      refreshGrid();
+    },
+    focusedCellId: () => (active === GRID_ID ? focusedCell : undefined),
     sendManager: (channel, ...args) => safeSend(manager, channel, ...args),
     sendRail: (channel, ...args) => safeSend(rail, channel, ...args),
 
