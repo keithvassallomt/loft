@@ -152,6 +152,20 @@ if (gridPruned !== gridBefore) {
   catch (err) { console.error('Failed to persist pruned grid:', err); }
 }
 
+/**
+ * Say so when config.json names a service the registry has never heard of. sanitizeService-
+ * Config whitelists such an entry to `{}` — correct, and deliberately silent about it — so a
+ * typo'd or renamed id installs a service that has no icon, no URL and no rail entry, with
+ * nothing anywhere to say why. Naming the ids is the whole fix; nothing is removed, because
+ * the entry is harmless and a future/rolled-back registry may well claim it again.
+ */
+const phantomServices = Object.keys(config.services).filter((id) => !getService(id));
+if (phantomServices.length > 0) {
+  console.warn(
+    `Ignoring unknown service(s) in config.json: ${phantomServices.join(', ')} — no such service in the registry`,
+  );
+}
+
 // Does this service live in its own window? Answered from where it ACTUALLY is whenever
 // it's loaded, and only from config while it sleeps. Not the same as the config flag:
 // with reopenDetached off, a `detached: true` service sits in the rail, and claiming

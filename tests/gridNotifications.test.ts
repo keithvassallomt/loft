@@ -12,12 +12,27 @@ import { GRID_ID, isActiveSelection, type GridNode } from '../src/main/gridTree'
  * INTERPRETATION main feeds it, so a later change to the gate cannot silently mute a grid —
  * the failure mode has no error and no log, just missing banners.
  */
+/** A three-cell grid, shared by both halves of this file: the gate below is fed the `active`
+ *  this tree implies, so neither half can be right about a grid the other is wrong about. */
+const three: GridNode = {
+  kind: 'split', dir: 'row', ratio: 0.5,
+  a: { kind: 'leaf', service: 'whatsapp' },
+  b: {
+    kind: 'split', dir: 'col', ratio: 0.5,
+    a: { kind: 'leaf', service: 'slack' },
+    b: { kind: 'leaf', service: 'telegram' },
+  },
+};
+
 describe('the notification gate over a grid', () => {
   const quiet = { systemDnd: false, globalDnd: false, serviceDnd: false };
 
   it('suppresses every visible cell when the window is focused', () => {
-    for (const _cell of ['whatsapp', 'slack', 'telegram']) {
-      expect(shouldNotify({ ...quiet, focused: true, visible: true, active: true })).toBe(false);
+    for (const cell of ['whatsapp', 'slack', 'telegram']) {
+      // `active` comes from the tree, not a literal: the loop asserted one constant
+      // expression three times and pinned nothing about the cells it named.
+      const active = isActiveSelection(GRID_ID, three, cell);
+      expect(shouldNotify({ ...quiet, focused: true, visible: true, active })).toBe(false);
     }
   });
 
@@ -48,16 +63,6 @@ describe('the notification gate over a grid', () => {
  * failure has no error and no log either — so it is pinned here beside it.
  */
 describe('which services are active', () => {
-  const three: GridNode = {
-    kind: 'split', dir: 'row', ratio: 0.5,
-    a: { kind: 'leaf', service: 'whatsapp' },
-    b: {
-      kind: 'split', dir: 'col', ratio: 0.5,
-      a: { kind: 'leaf', service: 'slack' },
-      b: { kind: 'leaf', service: 'telegram' },
-    },
-  };
-
   it('makes every cell active when the grid is selected', () => {
     for (const id of ['whatsapp', 'slack', 'telegram']) {
       expect(isActiveSelection(GRID_ID, three, id)).toBe(true);

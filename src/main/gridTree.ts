@@ -36,6 +36,11 @@ export type GridNode =
 export const RATIO_MIN = 0.05;
 export const RATIO_MAX = 0.95;
 
+/** The split a new cell gets: an even one. Exported because gridDrop must draw the preview
+ *  on the very half `insert` will produce — this feature's worst bug was the drop rule
+ *  written twice and drifting, and this was the last number the two still restated. */
+export const INSERT_RATIO = 0.5;
+
 const clampRatioStructural = (r: number): number => {
   if (!Number.isFinite(r)) return 0.5;
   return Math.min(RATIO_MAX, Math.max(RATIO_MIN, r));
@@ -89,7 +94,7 @@ export function insert(
   return mapLeaf(tree, target, (existing) => ({
     kind: 'split',
     dir,
-    ratio: 0.5,
+    ratio: INSERT_RATIO,
     a: incomingFirst ? incoming : existing,
     b: incomingFirst ? existing : incoming,
   }));

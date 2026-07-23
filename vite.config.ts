@@ -10,7 +10,11 @@ export default defineConfig({
   define: {
     __LOFT_VERSION__: JSON.stringify(process.env.npm_package_version ?? '0.0.0-dev'),
   },
-  plugins: [svelte({ configFile: resolve(__dirname, 'svelte.config.js') })],
+  // .mjs, not .js: package.json has no "type": "module" (main is CommonJS, and it must stay
+  // that way — Electron would parse dist/main and the cjs-bundled preloads as ESM), so a .js
+  // file holding ESM made Node re-parse it and warn MODULE_TYPELESS_PACKAGE_JSON on every
+  // build and test run. The extension states the module type instead.
+  plugins: [svelte({ configFile: resolve(__dirname, 'svelte.config.mjs') })],
   build: {
     outDir: resolve(__dirname, 'dist/renderer/hub'),
     emptyOutDir: true,

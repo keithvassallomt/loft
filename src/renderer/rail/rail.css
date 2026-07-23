@@ -81,7 +81,10 @@ body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
   border: 0;
   border-radius: 9px;
   background: transparent;
-  color: #86868b;
+  /* One step darker than the .item grey: at #86868b the ⊞ glyph sat at 2.4–2.9:1 on this
+     rail's light backgrounds — under the 3:1 minimum for a non-text control — in every
+     state. #6e6e73 clears it on all three (4.03 plain, 3.33 hover, 3.57 active). */
+  color: #6e6e73;
   font-size: 17px;
   cursor: pointer;
 }

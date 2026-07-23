@@ -1,5 +1,5 @@
 import { canSplit, cellRect, computeGridLayout, splitRects, type GridCell } from './gridLayout';
-import { findPath, insert, remove, type Edge, type GridNode } from './gridTree';
+import { findPath, insert, INSERT_RATIO, remove, type Edge, type GridNode } from './gridTree';
 import type { Rect } from './layout';
 
 /** `'root'` = drop into an empty grid; `null` = no legal target, hide the preview. */
@@ -42,10 +42,13 @@ export interface GridDropPlan {
 }
 
 /** The half `insert` would give the newcomer: `left`/`top` take the `a` slot, `right`/
- *  `bottom` the `b` slot, at insert's own ratio of 0.5. splitRects, not local arithmetic, so
- *  the rect is the one computeGridLayout will hand the new cell down to the pixel. */
+ *  `bottom` the `b` slot, at INSERT_RATIO — insert's own number, imported rather than
+ *  restated, so the preview cannot promise a half the release will not produce. splitRects,
+ *  not local arithmetic, so the rect is the one computeGridLayout will hand the new cell
+ *  down to the pixel. */
 function droppedHalf(rect: Rect, edge: Edge): Rect {
-  const [a, b] = splitRects(rect, edge === 'left' || edge === 'right' ? 'row' : 'col', 0.5);
+  const dir = edge === 'left' || edge === 'right' ? 'row' : 'col';
+  const [a, b] = splitRects(rect, dir, INSERT_RATIO);
   return edge === 'left' || edge === 'top' ? a : b;
 }
 
@@ -77,7 +80,14 @@ export function gridDropPlan(
   const at = gridDropTarget(point, cells, content);
   if (at === null) return null;
   // An empty grid takes the whole content rect: the first service is the root leaf.
-  if (at === 'root') return { rect: content, next: { kind: 'leaf', service: draggedId } };
+  // Except for an empty id — the cross-window drag's preview path passes '' because the
+  // browser withholds the dragged id until 'drop'. Everywhere else that is harmlessly "not
+  // in the grid", but here it would build a leaf NAMED '', which names no service and
+  // renders as a cell nothing can fill. Unreachable today (the preview only asks for a rect,
+  // never commits `next`); refused at the source so it stays that way.
+  if (at === 'root') {
+    return draggedId ? { rect: content, next: { kind: 'leaf', service: draggedId } } : null;
+  }
 
   const relocating = findPath(tree, draggedId) !== undefined;
   // A self-drop is a no-op (move() returns the tree by identity), so it must not promise a

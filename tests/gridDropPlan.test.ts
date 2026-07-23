@@ -60,6 +60,13 @@ describe('gridDropPlan — refusals and the empty grid', () => {
     expect(plan).toEqual({ rect: content, next: leaf('slack') });
   });
 
+  it('refuses to root an EMPTY dragged id', () => {
+    // The cross-window HTML5 drag's preview path passes '' — the browser withholds the id
+    // until 'drop'. Everywhere else that reads as "not in the grid", which is right; on the
+    // root branch it would have produced a leaf named '', a cell no service can fill.
+    expect(gridDropPlan({ x: 500, y: 300 }, null, content, '')).toBeNull();
+  });
+
   it('returns null in a gutter and outside the content rect', () => {
     const tree = row(leaf('whatsapp'), leaf('slack'));
     expect(gridDropPlan({ x: 499, y: 300 }, tree, content, 'element')).toBeNull();
