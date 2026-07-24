@@ -22,7 +22,7 @@ import { createKwinClient, type KwinClient } from './kde/kwin';
 import { startBackgroundStatus } from './gnome/backgroundStatus';
 import { buildHubState } from './hubState';
 import { registerHubIpc } from './hubIpc';
-import { addService, removeService } from './install';
+import { addInstance, removeInstance } from './install';
 import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
 import { createSignalShutdown } from './shutdown';
 import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath } from './desktop';
@@ -322,12 +322,12 @@ function attachService(def: ServiceKind, view?: ServiceView): ServiceHost {
 /** Load a service into the host its config asks for. THE one place that decides where a
  *  service lives (spec §7); everything else asks hostOf where it ended up. */
 function placeService(def: ServiceKind, minimized: boolean): ServiceHost {
-  // First launch of a service implicitly Adds it (marks it configured, per opt-in-off
-  // launcher default — no launcher/icon write here) so a directly-launched service shows
-  // up as Installed in the hub (spec §6f). Here rather than in openService so an attached
-  // first launch installs itself too.
+  // First launch of a service implicitly Adds it (marks it configured and deploys its
+  // icon, per opt-in-off launcher default — no launcher write here) so a directly-launched
+  // service shows up as Installed in the hub (spec §6f). Here rather than in openService so
+  // an attached first launch installs itself too.
   if (!config.services[def.id]) {
-    addService(def, config);
+    addInstance(def, config, { iconSourceDir });
     saveConfig(configPath(), config);
   }
   // No Loft window yet ⇒ its own window is the only host that exists. Reachable for real:
@@ -1131,7 +1131,7 @@ if (!app.requestSingleInstanceLock()) {
     openService: (id) => { const d = getService(id); if (d) showService(d); },
     addService: (id, customUrl) => {
       const d = getService(id); if (!d) return;
-      addService(d, config, { customUrl });
+      addInstance(d, config, { customUrl, iconSourceDir });
       saveConfig(configPath(), config);
       loft?.refreshRail();
       notifyHub();
@@ -1145,7 +1145,11 @@ if (!app.requestSingleInstanceLock()) {
       // service keeps its leaf, it is persisted, and opening Grid draws a header strip for a
       // service that no longer exists with no page behind it. No-op by identity otherwise.
       loft?.dropFromGrid(id);
-      removeService(d, config, deleteData);
+      // TEMPORARY (Task 6 → replaced in Task 10): removeService's `id` is a config key,
+      // which may already name a 2nd+ account, but `d` is still a bare kind — asInstance
+      // fakes up account #1 rather than resolving `id`'s real instance. Fine today because
+      // nothing upstream of this hub IPC can produce an id for a 2nd+ account yet.
+      removeInstance(asInstance(d), config, deleteData);
       saveConfig(configPath(), config);
       reconcileAutostart();
       loft?.refreshRail();
