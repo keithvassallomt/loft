@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { HubState } from '../../../shared/hubTypes';
   import Modal from './Modal.svelte';
+  import IconPicker from './IconPicker.svelte';
   // NOTE: destructured local is renamed from `state` to `hubState` (the public
   // prop name is still `state`, matching App.svelte's `<ServiceDetail state=...>`).
   // A local binding literally named `state` collides with the `$state` rune below
@@ -15,6 +16,19 @@
   }
   let urlDraft = $state('');
   $effect(() => { urlDraft = svc?.customUrl ?? ''; });
+
+  let nameDraft = $state('');
+  let nameError = $state('');
+  $effect(() => { nameDraft = svc?.displayName ?? ''; });
+
+  async function commitName() {
+    nameError = '';
+    if (nameDraft.trim() === svc.displayName) return;
+    const res = await window.loftHub.renameService(id, nameDraft);
+    // On rejection the field KEEPS what the user typed and says why — silently
+    // reverting it reads as the app eating the keystrokes.
+    if (!res.ok) nameError = res.error ?? 'Could not rename.';
+  }
 
   let showRemove = $state(false);
   let deleteData = $state(false);
@@ -32,6 +46,14 @@
          onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
     {svc.displayName}
   </h2>
+
+  <label class="field">
+    <span>Name</span>
+    <input bind:value={nameDraft} onchange={commitName} />
+    {#if nameError}<small class="err">{nameError}</small>{/if}
+  </label>
+
+  <IconPicker {svc} />
 
   {#if svc.selfHosted}
     <label class="field">
@@ -103,4 +125,5 @@
   .trouble h3 { font-size: 13px; margin-bottom: 8px; }
   .trouble button { border: 1px solid var(--divider); background: var(--card); color: var(--fg); border-radius: 999px; padding: 8px 18px; cursor: pointer; }
   .hint { color: var(--muted, #777); font-size: 12px; margin-top: 8px; }
+  .err { color: #c01c28; font-size: 12px; }
 </style>

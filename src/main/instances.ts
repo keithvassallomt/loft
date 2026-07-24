@@ -150,3 +150,14 @@ export function validateInstanceName(
   }
   return undefined;
 }
+
+/** The sentence the Name field shows. Lives beside the rule it describes so the two
+ *  cannot drift — a message that no longer matches its check is worse than none. */
+export function nameErrorMessage(err: NameError): string {
+  switch (err) {
+    case 'empty': return 'Enter a name.';
+    case 'too-long': return `Use ${MAX_NAME_LENGTH} characters or fewer.`;
+    case 'duplicate': return 'Another service already uses that name.';
+    case 'reserved': return '“Loft” is reserved for the main window.';
+  }
+}

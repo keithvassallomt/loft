@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveInstance, listInstances, allocateInstanceId, allocateInstanceName,
   defaultInstanceName, instanceNumber, dbusSegmentFor, validateInstanceName, kindOf,
+  nameErrorMessage,
 } from '../src/main/instances';
 import type { LoftConfig } from '../src/main/config';
 
@@ -141,5 +142,14 @@ describe('name validation', () => {
     // whichever window matched first.
     expect(validateInstanceName(' work ', 'slack', c)).toBe('duplicate');
     expect(validateInstanceName('slack', 'whatsapp', c)).toBe('duplicate');
+  });
+});
+
+describe('nameErrorMessage', () => {
+  it('says what is wrong in the user\'s terms', () => {
+    expect(nameErrorMessage('empty')).toBe('Enter a name.');
+    expect(nameErrorMessage('too-long')).toBe('Use 64 characters or fewer.');
+    expect(nameErrorMessage('duplicate')).toBe('Another service already uses that name.');
+    expect(nameErrorMessage('reserved')).toBe('“Loft” is reserved for the main window.');
   });
 });

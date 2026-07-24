@@ -28,6 +28,9 @@ export interface ServiceWindow extends ServiceHost {
   /** Route the host's page-load hook to the underlying view's single slot (see
    *  ServiceView.setOnLoad) — so re-adopting a moved view never stacks listeners. */
   setOnLoad(fn: () => void): void;
+  /** Re-render the titlebar and the OS caption after a rename. The caption is not
+   *  cosmetic — the GNOME helper and KWin both match windows by it. */
+  refreshIdentity(name: string): void;
 }
 
 export function createServiceWindow(
@@ -128,6 +131,10 @@ export function createServiceWindow(
   let released = false;
   window.on('closed', () => { if (!released) sv.dispose(); });
 
+  // The last count setBadge formatted the title with — refreshIdentity re-renders the
+  // caption after a rename, and needs it to rebuild the same title rather than reset to 0.
+  let currentCount = 0;
+
   const api: ServiceWindow = {
     def,
     window,
@@ -152,9 +159,15 @@ export function createServiceWindow(
     },
     setOnLoad: (fn) => sv.setOnLoad(fn),
     setBadge: (count: number) => {
+      currentCount = count;
       const title = formatWindowTitle(def.displayName, count);
       window.setTitle(title); // OS window title (alt-tab / taskbar / overview)
       safeSend(titlebar, 'titlebar:set-service', title); // our visible titlebar strip
+    },
+    refreshIdentity: (name: string) => {
+      def = { ...def, displayName: name };
+      api.def = def;
+      api.setBadge(currentCount); // the one place that formats and pushes the title
     },
     pushDnd: (enabled: boolean) => sv.pushDnd(enabled),
     pushHidden: (hidden: boolean) => sv.pushHidden(hidden),

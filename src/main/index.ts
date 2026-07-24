@@ -1,6 +1,6 @@
-import { app, ipcMain, Menu, protocol, session } from 'electron';
+import { app, dialog, ipcMain, Menu, nativeImage, protocol, session } from 'electron';
 import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
@@ -25,9 +25,12 @@ import { registerHubIpc } from './hubIpc';
 import { addInstance, removeInstance } from './install';
 import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
 import { createSignalShutdown } from './shutdown';
-import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath } from './desktop';
-import { dbusSegmentFor, listInstances, resolveInstance, type ServiceInstance } from './instances';
-import { scanVariants, iconCandidates } from './icons';
+import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath, deployInstanceIcon } from './desktop';
+import {
+  dbusSegmentFor, listInstances, resolveInstance, validateInstanceName, nameErrorMessage,
+  BRAND_ICON, CUSTOM_ICON, type ServiceInstance,
+} from './instances';
+import { scanVariants, iconCandidates, variantPngPath } from './icons';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
 import { RAIL_WIDTH, type Rect } from './layout';
@@ -1144,6 +1147,56 @@ if (!app.requestSingleInstanceLock()) {
     showService(d);
   });
 
+  /**
+   * Push a service's new name/icon everywhere it is already displayed. A rename that only
+   * reached config.json would leave the rail, the tray and the window caption disagreeing
+   * with the settings page — and the caption is what the GNOME helper and KWin match on.
+   *
+   * The D-Bus object path is deliberately NOT touched: it is pinned to the kind's default
+   * name so a rename cannot relocate a scriptable object (spec §5.2).
+   */
+  function applyIdentityChange(id: string): void {
+    const inst = getService(id);
+    if (!inst) return;
+    tray?.setDisplayName(id, inst.displayName);
+    // Rewrite the launcher only when the user asked for one; writeServiceLauncher no-ops
+    // under a dev run, and re-deploys the icon on the way through.
+    if (config.services[id]?.launcher === true) {
+      try { writeServiceLauncher(inst, { execPath: process.execPath, iconSourceDir }); }
+      catch (err) { console.error(`Failed to rewrite ${id}'s launcher:`, err); }
+    }
+    windows.get(id)?.refreshIdentity(inst.displayName);
+    loft?.refreshRail();
+    loft?.refreshGrid();
+    syncLoftWindows(); // the caption set the GNOME helper hides just changed
+    notifyHub();
+  }
+
+  /**
+   * Ask for an image and install it as this account's icon.
+   *
+   * Raster only: nativeImage cannot rasterise SVG, and shelling out to a converter the
+   * user may not have turns "pick an icon" into a silent failure on some machines.
+   */
+  async function pickCustomIcon(id: string): Promise<{ error?: string } | undefined> {
+    const res = await dialog.showOpenDialog({
+      title: 'Choose an icon',
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+    });
+    if (res.canceled || res.filePaths.length === 0) return undefined;
+    const img = nativeImage.createFromPath(res.filePaths[0]);
+    if (img.isEmpty()) return { error: 'That file is not an image Loft can read.' };
+    try {
+      mkdirSync(iconsDir(), { recursive: true });
+      writeFileSync(join(iconsDir(), `${id}.png`), img.resize({ width: 512, height: 512 }).toPNG());
+      return {};
+    } catch (err) {
+      console.error('Failed to write custom icon:', err);
+      return { error: 'Could not save that icon.' };
+    }
+  }
+
   // --- hub:* — the manager view (src/renderer/hub). Wiring lives in hubIpc.ts so it's
   // unit-testable; the deps below are index.ts's own operations, unchanged. hub:openService
   // does exactly what rail:select does (showService(getService(id))) — the old version
@@ -1189,9 +1242,33 @@ if (!app.requestSingleInstanceLock()) {
       notifyHub();
     },
     setServiceSetting: (id, patch) => { setServiceSetting(id, patch); notifyHub(); },
-    // Implemented in Task 12 (rename + icon picker).
-    renameService: async () => ({ ok: false, error: 'not implemented' }),
-    setServiceIcon: async () => ({ ok: false, error: 'not implemented' }),
+    renameService: async (id, name) => {
+      const inst = getService(id);
+      if (!inst) return { ok: false, error: 'No such service.' };
+      const err = validateInstanceName(name, id, config);
+      if (err) return { ok: false, error: nameErrorMessage(err) };
+      config.services[id] = { ...config.services[id], name: name.trim() };
+      saveConfig(configPath(), config);
+      applyIdentityChange(id);
+      return { ok: true };
+    },
+    setServiceIcon: async (id, choice) => {
+      const inst = getService(id);
+      if (!inst) return { ok: false, error: 'No such service.' };
+      if (choice === CUSTOM_ICON) {
+        const picked = await pickCustomIcon(id);
+        if (!picked) return { ok: true }; // cancelled — not an error
+        if (picked.error) return { ok: false, error: picked.error };
+      } else if (choice !== BRAND_ICON && !(variantIndex[inst.kind] ?? []).includes(choice)) {
+        return { ok: false, error: 'Unknown icon.' };
+      }
+      config.services[id] = { ...config.services[id], icon: choice };
+      saveConfig(configPath(), config);
+      const next = getService(id);
+      if (next) deployInstanceIcon(next, { iconSourceDir });
+      applyIdentityChange(id);
+      return { ok: true };
+    },
     setGlobal: (patch) => {
       if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; saveConfig(configPath(), config); }
       notifyHub();
@@ -1235,12 +1312,17 @@ if (!app.requestSingleInstanceLock()) {
     // (available/not-yet-added services + the 'loft' app icon). Read from disk and
     // return the bytes: the main-process global fetch() does NOT support file://.
     protocol.handle('loft', async (req) => {
-      const name = new URL(req.url).pathname.replace(/^\/+/, '') || 'loft';
+      const url = new URL(req.url);
+      const name = url.pathname.replace(/^\/+/, '') || 'loft';
+      const variant = url.searchParams.get('v') ?? undefined;
       const c = config.services[name];
-      for (const file of iconCandidates({
-        iconsDir: iconsDir(), assetsDir: iconSourceDir, id: name,
-        kind: c?.kind ?? (getKind(name) ? name : undefined), icon: c?.icon,
-      })) {
+      const kind = c?.kind ?? (getKind(name) ? name : undefined);
+      // `?v=<colour>` asks for a specific variant of a KIND — the swatch row, which must
+      // show colours this account is not currently wearing.
+      const candidates = variant && kind
+        ? [variantPngPath(iconSourceDir, kind, variant)]
+        : iconCandidates({ iconsDir: iconsDir(), assetsDir: iconSourceDir, id: name, kind, icon: c?.icon });
+      for (const file of candidates) {
         try {
           return new Response(await readFile(file), { headers: { 'content-type': 'image/png' } });
         } catch { /* try the next candidate */ }
