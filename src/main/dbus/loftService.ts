@@ -79,35 +79,66 @@ export interface LoftDbus {
   unexportInstance(inst: ServiceInstance): void;
 }
 
-export async function startLoftDbusService(deps: LoftServiceDeps): Promise<LoftDbus> {
-  const bus = dbus.sessionBus();
-  await bus.requestName(BUS, 0);
-  bus.export('/chat/loft/Loft', new LoftRootObject(deps));
+/** Where createExportRegistry sends the objects it decides to (un)export. Real callers
+ *  hand it the live bus; tests hand it a recorder, since dbus-next can't be touched
+ *  without a session bus to talk to. */
+export interface ExportSink<T> {
+  export(path: string, obj: T): void;
+  unexport(path: string, obj: T): void;
+}
 
-  // Exported object per path, so a duplicate segment is reported rather than silently
-  // replacing a live object. Segments are unique by construction; this catches a
-  // hand-edited config that made two ids derive the same one. Keyed by path (not a bare
-  // Set) because dbus-next's unexport wants the same Interface instance back, not just
-  // the path.
-  const exported = new Map<string, LoftServiceObject>();
+/** Pure export/unexport bookkeeping, split out from startLoftDbusService so the
+ *  duplicate-path guard (and the ownership check that keeps unexport from undoing it)
+ *  can be driven by a fake sink under Vitest — no real bus required.
+ *
+ *  Keyed by path and, per entry, by owning instance id: segments are unique by
+ *  construction, but a hand-edited config can make two ids derive the same one. When
+ *  that happens the second export is refused (below), and without the id check here the
+ *  second instance's later *unexport* would still find the first instance's live object
+ *  at that path and tear it down out from under it — the duplicate guard would protect
+ *  export but not removal. */
+export function createExportRegistry<T>(sink: ExportSink<T>) {
+  const exported = new Map<string, { id: string; obj: T }>();
 
-  const api: LoftDbus = {
-    exportInstance(inst) {
+  return {
+    exportInstance(inst: ServiceInstance, makeObj: () => T): void {
       const path = objectPathFor(inst.dbusSegment);
       if (exported.has(path)) {
         console.warn(`Not exporting ${inst.id}: ${path} is already taken`);
         return;
       }
-      const obj = new LoftServiceObject(inst.id, deps);
-      exported.set(path, obj);
-      bus.export(path, obj);
+      const obj = makeObj();
+      exported.set(path, { id: inst.id, obj });
+      sink.export(path, obj);
+    },
+    unexportInstance(inst: ServiceInstance): void {
+      const path = objectPathFor(inst.dbusSegment);
+      const entry = exported.get(path);
+      // Not this instance's path to give up — either nothing is exported there, or the
+      // live object belongs to whichever instance won the duplicate-path race above.
+      if (!entry || entry.id !== inst.id) return;
+      exported.delete(path);
+      sink.unexport(path, entry.obj);
+    },
+  };
+}
+
+export async function startLoftDbusService(deps: LoftServiceDeps): Promise<LoftDbus> {
+  const bus = dbus.sessionBus();
+  await bus.requestName(BUS, 0);
+  bus.export('/chat/loft/Loft', new LoftRootObject(deps));
+
+  const registry = createExportRegistry<LoftServiceObject>({
+    export: (path, obj) => bus.export(path, obj),
+    unexport: (path, obj) => bus.unexport(path, obj),
+  });
+
+  const api: LoftDbus = {
+    exportInstance(inst) {
+      registry.exportInstance(inst, () => new LoftServiceObject(inst.id, deps));
     },
     unexportInstance(inst) {
-      const path = objectPathFor(inst.dbusSegment);
-      const obj = exported.get(path);
-      if (!obj) return;
-      exported.delete(path);
-      bus.unexport(path, obj);
+      registry.unexportInstance(inst);
     },
   };
 
