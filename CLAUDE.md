@@ -22,6 +22,7 @@ Loft is **one Electron application** that hosts every installed service, not a m
 - **A frameless `BrowserWindow` per running service**, each with its own titlebar `WebContentsView` (icon + name + zoom controls + close-to-tray) stacked above the service's own `WebContentsView`, which renders the web app **in-process** — Electron's bundled Chromium, not an external browser. The service view is deliberately kept separate from the titlebar view (rather than merged into one window/view) so that a future unified/tabbed window can re-parent the same view objects.
 
 - **A grid view** (`src/main/gridTree.ts`, `gridLayout.ts`, `gridDrop.ts`, `src/renderer/grid/`) tiles several live services in the Loft window's content rect at once, selected from a pinned **Grid** entry at the top of the rail. The arrangement is a binary split tree persisted as `grid` in `config.json`. **This is the one place the "exactly one visible view in the content rect" invariant does not hold** — see the stacking note below, which is load-bearing rather than stylistic.
+- **Multiple accounts** (`src/main/registry.ts`, `src/main/instances.ts`) — the registry lists **kinds** (`ServiceKind`, `KINDS`): the app itself (URL, badge parser, brand icon), not an account. A `config.services` entry is an **instance**, one account of a kind. Instance 1 of a kind keeps the bare kind id (`whatsapp`); later ones are `<kind>-<N>` (`whatsapp-2`). `kind`/`name`/`icon` are optional per-service config fields — absent means default (the id itself, the kind's display name, the brand icon) — so an existing `config.json` needs no migration and `configVersion` stays unchanged. The service preload argument (`--loft-service=`) carries the **kind**, never the instance id: it selects the badge parser, the Messenger/Telegram scrape-only notification rule, the Slack/Talk avatar scanners and the Messenger de-chroming — all properties of the app, not the account. Everything else (the session partition, the `loft://icon/<id>` lookup, the `.desktop` launcher, `railOrder`, the grid tree) already keyed on the instance id before multiple accounts existed, so none of that plumbing changed.
 
 There is no separate daemon process, no launching of a real Chrome binary, and no Chrome extension / native-messaging host — sandboxed preloads take over what the extension used to do (see Components below).
 
@@ -53,7 +54,7 @@ There is no separate daemon process, no launching of a real Chrome binary, and n
 
 5. **Notifications** (`src/main/notifications/`) — a hand-rolled `dbus-next` client for `org.freedesktop.Notifications`, kept on a persistent connection (KDE closes notifications when the sender disconnects). Avatars are resolved in the main process via each service's own partition session (`session.fetch(url)`, so authenticated Element/Talk avatars work), cached on disk for about an hour. Clicking a notification (`ActionInvoked`) focuses the service window and navigates to the conversation.
 
-6. **GNOME Shell helper** (`gnome-shell-extension/`, UUID `loft-shell-helper@loft.chat`) — unlike the old Rust build, Loft no longer bundles and deploys this extension itself. On GNOME, Loft checks whether the helper is installed (`org.gnome.Shell.Extensions.GetExtensionInfo`) and, if not, prompts the user and installs it **from extensions.gnome.org** via `InstallRemoteExtension` — GNOME's own dialog downloads, installs, and enables it in-process. D-Bus interface (`chat.loft.ShellHelper` at `/chat/loft/ShellHelper`): `FocusWindow`/`HideWindow` (bypasses focus-stealing prevention via `meta_window.activate()`), `SetLoftWindows` (the set of open windows to hide from alt-tab/overview/dock while minimized), and the combined-panel methods (`RegisterCombined`/`UpdateCombinedService`/`RemoveCombinedService`/`UpdateAvailableService`/`RemoveAvailableService`/`UnregisterCombined`/`UpdateGlobalDnd`). Global DND sits outside the per-service push, so it gets its own method — the helper needs it to render the switch and to grey the panel icon. The panel menu mirrors the SNI menu's layout (`src/main/tray/dbusMenu.ts`) — global DND, running service rows (Show/Hide + DND + Quit), then a launch row per *available* (configured-but-not-running) service, then Settings + Quit Loft. Running and available services are pushed on separate channels (`UpdateCombinedService` vs `UpdateAvailableService`); a launch/quit flips a service between them, and the helper keeps each service in exactly one section. A launch row calls the service's `Show()` (which opens the window). Its whole-app items call the `chat.loft.Loft` root object; its per-service items the per-service objects. Its whole-app items call the `chat.loft.Loft` root object; its per-service items the per-service objects. Because every Loft window now shares one app identity (one WM_CLASS), the helper matches windows **by title** (`caption === key || caption.startsWith(key + ' (')`, key = the service's display name) instead of by per-service WM_CLASS. Helper JS changes still only take effect after a GNOME session restart (logout/login on Wayland) — but that's now Keith's/a contributor's concern when updating the extension, not something every end user hits on every Loft update.
+6. **GNOME Shell helper** (`gnome-shell-extension/`, UUID `loft-shell-helper@loft.chat`) — unlike the old Rust build, Loft no longer bundles and deploys this extension itself. On GNOME, Loft checks whether the helper is installed (`org.gnome.Shell.Extensions.GetExtensionInfo`) and, if not, prompts the user and installs it **from extensions.gnome.org** via `InstallRemoteExtension` — GNOME's own dialog downloads, installs, and enables it in-process. D-Bus interface (`chat.loft.ShellHelper` at `/chat/loft/ShellHelper`): `FocusWindow`/`HideWindow` (bypasses focus-stealing prevention via `meta_window.activate()`), `SetLoftWindows` (the set of open windows to hide from alt-tab/overview/dock while minimized), and the combined-panel methods (`RegisterCombined`/`UpdateCombinedService`/`RemoveCombinedService`/`UpdateAvailableService`/`RemoveAvailableService`/`UnregisterCombined`/`UpdateGlobalDnd`). Global DND sits outside the per-service push, so it gets its own method — the helper needs it to render the switch and to grey the panel icon. The panel menu mirrors the SNI menu's layout (`src/main/tray/dbusMenu.ts`) — global DND, running service rows (Show/Hide + DND + Quit), then a launch row per *available* (configured-but-not-running) service, then Settings + Quit Loft. Running and available services are pushed on separate channels (`UpdateCombinedService` vs `UpdateAvailableService`); a launch/quit flips a service between them, and the helper keeps each service in exactly one section. A launch row calls the service's `Show()` (which opens the window). Its whole-app items call the `chat.loft.Loft` root object; its per-service items the per-service objects. Its whole-app items call the `chat.loft.Loft` root object; its per-service items the per-service objects. Because every Loft window now shares one app identity (one WM_CLASS), the helper matches windows **by title** (`caption === key || caption.startsWith(key + ' (')`, key = the service's display name) instead of by per-service WM_CLASS. The `name` argument on `RegisterCombined`/`UpdateCombinedService`/`RemoveCombinedService`/`UpdateAvailableService`/`RemoveAvailableService` is the D-Bus segment main already computed for that account, not re-derived by the helper from the display name — the segment is the stable key the helper indexes its panel rows by. Window matching, however, is still by caption (the display name), which is why display names must stay unique: two accounts sharing one would make focus/hide land on whichever window matched first. Helper JS changes still only take effect after a GNOME session restart (logout/login on Wayland) — but that's now Keith's/a contributor's concern when updating the extension, not something every end user hits on every Loft update.
 
 7. **KWin scripting** (`src/main/kde/kwin.ts`) — the KDE analog of the GNOME helper: drives `org.kde.kwin.Scripting` to focus/hide/skip-taskbar windows, matched the same way, by window caption.
 
@@ -80,7 +81,7 @@ Loft exports **one** D-Bus service (not one bus name per service, as in the old 
 
 - **Bus name**: `chat.loft.Loft`
 - **Root object** `/chat/loft/Loft`, interface `chat.loft.Loft`: `Quit()` (quit the whole app), `ShowHub()` (open/focus the hub window), `SetGlobalDnd(b)` (toggle global Do Not Disturb, persisted to config). These three are the whole-app actions the GNOME panel menu's footer drives.
-- **Per-service objects**: `/chat/loft/<DbusName>` (display name with whitespace stripped, e.g. `/chat/loft/WhatsApp`, `/chat/loft/NextCloudTalk`), interface `chat.loft.Service`:
+- **Per-service objects**: `/chat/loft/<DbusSegment>`, where the segment is derived from the kind's *default* display name plus the instance number — never the account's current (renameable) display name — so it is stable across renames (`/chat/loft/WhatsApp`, `/chat/loft/WhatsApp2`, `/chat/loft/NextCloudTalk`). Each installed account exports its own object at startup (or on add) and unexports it on removal. Interface `chat.loft.Service`:
 
 | Method                 | Signature   | Description                                          |
 |------------------------|-------------|-------------------------------------------------------|
@@ -155,9 +156,11 @@ Loft currently logs to stdout/stderr via plain `console.*` calls in the main pro
     element/
     talk/
   icons/
-    whatsapp.png                   # per-service PNGs deployed for .desktop entries / tray / notifications
-    messenger.png
-    ...
+    whatsapp.png                   # per-INSTANCE PNGs, keyed by instance id (whatsapp.png,
+    whatsapp-2.png                 # whatsapp-2.png, ...) — deployed on add and on every icon
+    messenger.png                  # change, for .desktop entries / tray / notifications. A second
+    ...                            # instance has no bundled fallback of its own, so this copy is
+                                    # what keeps its icon from going blank.
   avatars/                         # cached notification avatar images (~1hr TTL)
 
 ~/.local/share/applications/
@@ -168,6 +171,8 @@ Loft currently logs to stdout/stderr via plain `console.*` calls in the main pro
 ~/.local/share/gnome-shell/extensions/
   loft-shell-helper@loft.chat/     # GNOME Shell helper — installed from extensions.gnome.org, not bundled/deployed by Loft
 ```
+
+Build-time icon assets (repo, not runtime): `assets/icons/variants/<kind>-<colour>.png` (e.g. `whatsapp-rose.png`) are the pastel swatches the hub's icon picker offers, regenerated from the checked-in SVGs by `npm run icons` (needs ImageMagick) — only needed when adding or changing an icon, never for an ordinary build.
 
 ## Packaging
 
@@ -213,6 +218,9 @@ npm run whatsapp   # also: messenger, slack, telegram, element, talk
 # Tests and renderer type-checking
 npm test
 npm run check
+
+# Regenerate the icon variant PNGs (needs ImageMagick; only when adding/changing an icon)
+npm run icons
 
 # Packaging (heavier; only for distribution or packaged-behavior verification)
 npm run dist                 # electron-builder: deb/rpm/AppImage

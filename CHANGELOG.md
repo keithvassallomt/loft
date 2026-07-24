@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Unified view
 - Grid view: a new **Grid** entry at the top of the service rail tiles several services on screen at once, so you can watch WhatsApp, Slack and Telegram together instead of switching between them. Add a service to the grid by dragging its rail icon into the grid, or from the ＋ menu in the titlebar; drop it against a cell's edge to choose which half it takes. Drag the dividers to resize, drag a cell by the handle in its header to move it, and remove one with its ✕ — the service keeps running and stays in the rail either way. The arrangement is remembered across restarts. Clicking a service in the rail still opens it full-size; the grid keeps its layout and comes back when you select it again. Calls, including video and screen-share, survive being tiled, resized and moved.
-- Multiple Accounts
+- Multiple accounts: Loft can now hold more than one account of the same service — two WhatsApps, two Slacks, two NextCloud Talk servers — each with its own login, badges, and notifications. Add another from the **Add another** gallery in the manager. Give each account its own name and icon (a brand icon, a set of pastel colour variants, or a custom image file) so they're easy to tell apart in the rail, the tray, and the window titlebar.
 - Chat bubbles
 
 ### Changed
@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Note
 
 - **You'll need to sign in to each service again after upgrading.** Logins were previously stored in Chrome's profile; Loft now keeps its own per-service sessions.
+- **For packagers/GNOME users**: renaming an account now works correctly on the GNOME panel (rather than losing or duplicating its row) only once the Shell helper is updated to the version that ships alongside this release.
 
 ## [0.2.0] - 2026-06-15
 
