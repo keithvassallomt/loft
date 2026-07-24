@@ -1,43 +1,109 @@
 app-id: chat.loft.Loft
-runtime: org.gnome.Platform
-runtime-version: '50'
-sdk: org.gnome.Sdk
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+base: org.electronjs.Electron2.BaseApp
+base-version: '24.08'
 sdk-extensions:
-  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.node22
 command: loft
 
 finish-args:
+  # Display / GPU / IPC — Electron + Chromium.
   - --share=ipc
   - --socket=fallback-x11
   - --socket=wayland
-  - --device=dri
+  # Audio in/out. REQUIRED: Chromium's audio process renders INSIDE this sandbox now.
+  # Without it ALSA's pulse plugin can't reach the sound server ("Connection refused"),
+  # and libpulse's error path close()s FDs Chromium owns -> "Crashing due to FD ownership
+  # violation". It also silently kills call audio, the mic, and notification sounds.
+  # (Maps to the PulseAudio socket, which pipewire-pulse provides on PipeWire systems.)
+  # The old Rust build never needed this: it ran Chrome on the HOST via flatpak-spawn,
+  # so audio/camera came from outside the sandbox. Removing that escape moved rendering
+  # in here, and these permissions have to be requested explicitly.
+  - --socket=pulseaudio
+  # Devices: GPU (/dev/dri) AND the camera (/dev/video*) for video calls. `all` covers
+  # both — flatpak has no camera-specific device, and it's what Chrome and other
+  # Electron calling apps (e.g. teams_for_linux) use.
+  - --device=all
+  # The messaging web apps need the network.
   - --share=network
+  # Tray icons (SNI), KDE window control, and desktop notifications.
   - --talk-name=org.kde.StatusNotifierWatcher
   - --talk-name=org.kde.KWin
   - --talk-name=org.freedesktop.Notifications
-  - --own-name=chat.loft.*
-  - --talk-name=org.freedesktop.Flatpak
+  # GNOME Shell extension helper (install via EGO + drive FocusWindow/HideWindow).
+  - --talk-name=org.gnome.Shell.Extensions
+  # XDG portals (file chooser, open-uri, screencast for screen sharing).
   - --talk-name=org.freedesktop.portal.Desktop
-  - --talk-name=org.gnome.SessionManager
-  - --filesystem=home
+  # Per-service D-Bus names (chat.loft.WhatsApp, chat.loft.Tray, …).
+  - --own-name=chat.loft.*
+  # Autostart .desktop files and per-service launcher .desktop files.
+  # The Background portal writes OUR autostart entry (chat.loft.Loft.desktop) — this
+  # grant is deliberately NOT used for that, and must not be. Flatpak bind-mounts the
+  # host ~/.config/autostart over $XDG_CONFIG_HOME/autostart, so the app's computed
+  # path sees the real host dir. Three things need it, none of which a portal covers:
+  #   1. read back whether autostart is actually in effect (isAutostartEnabled)
+  #   2. delete our OWN v1-era leftovers (loft-<service>.desktop) — the portal only
+  #      manages its own <app-id>.desktop, and deleting needs a writable PARENT dir,
+  #      so no narrower grant works (verified: :ro gives EROFS on unlink)
+  #   3. :create (not :rw) guarantees the dir exists — Flatpak cannot bind a source
+  #      that is missing at launch, and without the bind isAutostartEnabled() reads
+  #      false all session and the hub shows a spurious "not allowed to start at login"
+  - --filesystem=xdg-config/autostart:create
+  - --filesystem=xdg-data/applications:create
 
 build-options:
-  append-path: /usr/lib/sdk/rust-stable/bin
+  append-path: /usr/lib/sdk/node22/bin
   env:
-    CARGO_HOME: /run/build/loft/cargo
-    CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+    npm_config_nodedir: /usr/lib/sdk/node22
 
 modules:
   - name: loft
     buildsystem: simple
+    build-options:
+      env:
+        # flatpak-node-generator lays the offline caches under the build root:
+        #   flatpak-node/npm-cache  -> npm's _cacache (registry tarballs)
+        #   flatpak-node/cache      -> XDG cache (electron zip, node-gyp headers, esbuild)
+        XDG_CACHE_HOME: /run/build/loft/flatpak-node/cache
+        npm_config_cache: /run/build/loft/flatpak-node/npm-cache
+        npm_config_offline: 'true'
     build-commands:
-      - cargo --offline fetch --manifest-path Cargo.toml --verbose
-      - cargo --offline build --release --verbose
-      - install -Dm755 target/release/loft /app/bin/loft
+      # Clean, reproducible install straight from the offline cache (every npm
+      # tarball is seeded into flatpak-node/npm-cache by generated-sources.json).
+      - npm ci --offline
+      # Electron 43 has NO postinstall: its index.js downloads the prebuilt
+      # binary lazily on the first `require('electron')`. Nothing in the build
+      # below (tsc/esbuild/vite, all with electron marked external) requires
+      # electron, so npm ci alone never materialises the binary. Run the
+      # installer explicitly: it resolves electron-v43…-linux-<arch>.zip from the
+      # seeded @electron/get cache ($XDG_CACHE_HOME/electron, populated by
+      # generated-sources.json) with no network and unpacks it into
+      # node_modules/electron/dist/ (also writing path.txt).
+      - node node_modules/electron/install.js
+      - npm run build
+      # Assemble the app tree that the launcher runs (package.json "main" ->
+      # dist/main/index.js; the Electron binary lives in node_modules/electron/dist).
+      - mkdir -p /app/main
+      - cp -r dist package.json node_modules /app/main/
+      # zypak launcher, exposed as the `loft` command.
+      - install -Dm755 flatpak/loft-launcher.sh /app/bin/loft
+      # Desktop integration metadata.
       - install -Dm644 data/chat.loft.Loft.desktop /app/share/applications/chat.loft.Loft.desktop
       - install -Dm644 data/chat.loft.Loft.metainfo.xml /app/share/metainfo/chat.loft.Loft.metainfo.xml
-      - install -Dm644 assets/icons/loft.svg /app/share/icons/hicolor/scalable/apps/chat.loft.Loft.svg
+      - install -Dm644 build/icon.png /app/share/icons/hicolor/512x512/apps/chat.loft.Loft.png
     sources:
       - type: dir
         path: .
-      - cargo-sources.json
+        # Force a clean offline install and keep the copy small: skip VCS,
+        # local build artifacts, and any host-built node_modules/dist.
+        skip:
+          - .git
+          - build-dir
+          - .flatpak-repo
+          - target
+          - node_modules
+          - dist
+          - dist-electron
+      - flatpak/generated-sources.json

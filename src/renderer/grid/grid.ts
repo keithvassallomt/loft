@@ -1,0 +1,306 @@
+// Inline `import()` type queries only: tsc emits CJS module boilerplate for a real
+// top-level import, and that boilerplate throws under `<script type="module">`.
+type GridLayout = import('../../main/gridLayout').GridLayout;
+type GridViewState = import('../../main/gridLayout').GridViewState;
+
+// Every top-level name here is grid-prefixed for the same reason titlebar.ts renamed its
+// drag MIME: with no import/export, tsc treats each renderer script as a global script,
+// so a bare `root`/`render` collides with rail.ts's at compile time (TS2451/TS2393).
+const gridRoot = document.getElementById('grid')!;
+const gridEmptyEl = document.getElementById('empty')!;
+const gridAddEl = document.getElementById('add')!;
+
+let gridDragging = false;
+/** A grid:state that arrived mid-drag; applied once the gesture ends (see renderGrid). */
+let gridPendingState: GridViewState | null = null;
+/** Where the pointer was released, recorded by pointerup and consumed by
+ *  lostpointercapture — the one place a gesture ends. Null means "no release seen", i.e.
+ *  the gesture was cancelled rather than finished. */
+let gridDragRelease: { x: number; y: number } | null = null;
+/** The pointer that captured the dragged element. Every later event has to be matched
+ *  against it: a second finger tapping the same gutter has its pointerdown refused (one
+ *  gesture at a time), but its pointerup would otherwise pass the .dragging check and record
+ *  a release at ITS coordinates — so a system pan that then steals the first finger ends as
+ *  a dragEnd at the tap point instead of the dragCancel it is. */
+let gridDragPointer: number | null = null;
+/** Pointerdown point, and whether the gesture has since travelled far enough to count as a
+ *  drag rather than a click. */
+let gridDragFrom: { x: number; y: number } | null = null;
+let gridDragPastSlop = false;
+/** How far, in CSS px on either axis, the pointer must travel before a gesture stops being
+ *  a click. A bare click on a divider must not resize (main's GutterDrag.end enforces that
+ *  from `moved`), and a single device pixel of hand tremor would otherwise latch `moved`
+ *  and turn the click into a resize after all. The ⠿ handle shares it so that a click on the
+ *  handle cannot flash a drop preview either — its release is a no-op regardless (a drop on
+ *  the cell's own rect is refused), but a preview that blinks on a click still reads as one. */
+const GRID_DRAG_SLOP = 3;
+
+/** One owner of "the gesture is over" on this side: drop the guard and apply whatever we
+ *  refused to render while it was up. */
+function endGridDrag(): void {
+  gridDragging = false;
+  if (gridPendingState) {
+    const s = gridPendingState;
+    gridPendingState = null;
+    renderGrid(s);
+  }
+}
+
+/**
+ * Latch the state one pointer-capture gesture needs. Both grid gestures — a divider resize
+ * and a ⠿ cell move — run through here, so there is exactly one answer to "is a drag under
+ * way", which is what the one-gesture-at-a-time guard and renderGrid's deferral both read.
+ *
+ * setPointerCapture keeps the whole gesture on this element even once the cursor leaves it,
+ * which it does immediately: a divider is 6px wide and a handle barely bigger.
+ *
+ * Callers guard on `gridDragging` before calling: main tracks a single drag, so a second
+ * pointer grabbing another gutter or handle would silently retarget the first one's moves.
+ */
+function beginGridGesture(el: HTMLElement, e: PointerEvent): void {
+  el.setPointerCapture(e.pointerId);
+  el.classList.add('dragging');
+  gridDragging = true;
+  gridDragPointer = e.pointerId;
+  gridDragFrom = { x: e.clientX, y: e.clientY };
+  gridDragPastSlop = false;
+  gridDragRelease = null;
+}
+
+/** Is this move part of the tracked gesture, and has it travelled far enough to count as a
+ *  drag rather than a click? Held back until the pointer has left the click slop, and
+ *  unconditional after that: once this is a drag it stays one, so a drag that wanders back
+ *  over its start point behaves exactly as it did before the threshold existed. */
+function gridGestureMoved(el: HTMLElement, e: PointerEvent): boolean {
+  if (!el.classList.contains('dragging') || e.pointerId !== gridDragPointer) return false;
+  if (gridDragPastSlop) return true;
+  const from = gridDragFrom;
+  if (!from) return false;
+  if (Math.abs(e.clientX - from.x) < GRID_DRAG_SLOP
+    && Math.abs(e.clientY - from.y) < GRID_DRAG_SLOP) return false;
+  gridDragPastSlop = true;
+  return true;
+}
+
+/** Record the release point and nothing else. Ending the gesture here too would send main
+ *  both an end and (later) a cancel for one gesture. */
+function gridGestureRelease(el: HTMLElement, e: PointerEvent): void {
+  if (!el.classList.contains('dragging') || e.pointerId !== gridDragPointer) return;
+  gridDragRelease = { x: e.clientX, y: e.clientY };
+}
+
+/**
+ * The single "gesture is over" signal, wired to lostpointercapture: it fires for a release,
+ * for a cancel, and for this node being removed from the DOM alike. Ending only on
+ * pointerup/pointercancel would let a lost capture latch gridDragging true for the rest of
+ * the session — no further grid drag would start, and the chrome would never fully
+ * re-render again.
+ *
+ * No release recorded ⇒ the gesture was cancelled, which is an end main never hears about
+ * otherwise: it keeps the drag tracked, so every later pointermove over this element — a
+ * plain hover — goes on resizing the split or moving the drop preview, and the preview
+ * overlay swallows every click in the content rect while it is up. Touch makes that
+ * reachable in practice: preventDefault on pointerdown does not stop the gesture being
+ * stolen for a pan.
+ *
+ * Deliberately not gated on the pointer id: this fires only for the pointer that held
+ * capture on this element, and adding a second condition to the ONE signal that ends a
+ * gesture could only ever make it fire zero times.
+ */
+function endGridGesture(el: HTMLElement): void {
+  if (!el.classList.contains('dragging')) return;
+  el.classList.remove('dragging');
+  const release = gridDragRelease;
+  gridDragRelease = null;
+  gridDragPointer = null;
+  gridDragFrom = null;
+  gridDragPastSlop = false;
+  endGridDrag();
+  if (release) window.loftGrid.dragEnd(release.x, release.y);
+  else window.loftGrid.dragCancel();
+}
+
+/** Position an absolutely-placed element from a main-computed Rect. Every rect arrives
+ *  in window coordinates; the grid view's own origin is the content rect's origin, so
+ *  each one is offset by the layout's origin before use. */
+function placeGridEl(el: HTMLElement, r: { x: number; y: number; width: number; height: number },
+                     origin: { x: number; y: number }): void {
+  el.style.left = `${r.x - origin.x}px`;
+  el.style.top = `${r.y - origin.y}px`;
+  el.style.width = `${r.width}px`;
+  el.style.height = `${r.height}px`;
+}
+
+/** Add, update or drop a header's unread pill. One owner, so a header built from scratch
+ *  and one refreshed in place cannot disagree about where the pill sits or when it shows. */
+function setGridBadge(el: HTMLElement, count: number): void {
+  const existing = el.querySelector('.badge');
+  if (count <= 0) { existing?.remove(); return; }
+  const text = count > 99 ? '99+' : String(count);
+  if (existing) { existing.textContent = text; return; }
+  const n = document.createElement('span');
+  n.className = 'badge';
+  n.textContent = text;
+  el.insertBefore(n, el.querySelector('.spacer'));
+}
+
+function gridCellHeader(cell: GridLayout['cells'][number], state: GridViewState): HTMLElement {
+  const el = document.createElement('div');
+  el.className = 'chead';
+  el.classList.toggle('focused', state.focused === cell.service);
+  el.dataset.service = cell.service;
+  placeGridEl(el, cell.header, state.origin);
+
+  const img = document.createElement('img');
+  img.className = 'icon';
+  img.src = `loft://icon/${cell.service}`;
+  img.alt = '';
+  el.append(img);
+
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = state.names[cell.service] ?? cell.service;
+  el.append(name);
+
+  const spacer = document.createElement('span');
+  spacer.className = 'spacer';
+  el.append(spacer);
+  setGridBadge(el, state.badges[cell.service] ?? 0); // lands before the spacer
+
+  const handle = document.createElement('button');
+  handle.className = 'handle';
+  handle.title = 'Move this cell';
+  handle.setAttribute('aria-label', `Move ${name.textContent}`);
+  handle.textContent = '⠿';
+  // Drag the handle to move this cell somewhere else in the grid. Exactly the gesture the
+  // gutters use — same capture, same slop, same single end-or-cancel signal — and main tells
+  // the two apart by which *DragBegin it saw, not by anything sent per move.
+  handle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return; // primary button only — middle/right fall through
+    if (gridDragging) return; // one gesture at a time; see beginGridGesture
+    e.preventDefault();
+    // The header's own pointerdown focuses the cell. A drag is not a focus click, and letting
+    // both run would make every abandoned drag also steal the zoom target.
+    e.stopPropagation();
+    beginGridGesture(handle, e);
+    window.loftGrid.cellDragBegin(cell.service);
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (gridGestureMoved(handle, e)) window.loftGrid.dragMove(e.clientX, e.clientY);
+  });
+  handle.addEventListener('pointerup', (e) => gridGestureRelease(handle, e));
+  handle.addEventListener('lostpointercapture', () => endGridGesture(handle));
+  el.append(handle);
+
+  const close = document.createElement('button');
+  close.className = 'close';
+  close.title = 'Remove from grid';
+  close.setAttribute('aria-label', `Remove ${name.textContent} from the grid`);
+  close.textContent = '✕';
+  close.addEventListener('click', () => window.loftGrid.removeCell(cell.service));
+  el.append(close);
+
+  // Clicking anywhere in the header focuses the cell — the target the titlebar's zoom
+  // buttons act on. Handled on the header, not the buttons, so ✕ and ⠿ still work.
+  el.addEventListener('pointerdown', (e) => {
+    if ((e.target as HTMLElement).closest('button') === close) return;
+    window.loftGrid.focusCell(cell.service);
+  });
+
+  return el;
+}
+
+function gridGutter(g: GridLayout['gutters'][number], state: GridViewState): HTMLElement {
+  const el = document.createElement('div');
+  el.className = `gutter ${g.dir}`;
+  el.dataset.path = g.path;
+  el.dataset.dir = g.dir;
+  placeGridEl(el, g.rect, state.origin);
+
+  // Drag the divider to resize the split it belongs to. The renderer reports the pointer
+  // and nothing else — main owns the tree, so it owns the ratio (see grid:gutterDragBegin).
+  el.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return; // primary button only — middle/right fall through
+    // One gesture at a time (see beginGridGesture): the second gutter simply never enters
+    // .dragging, so its own moves and release are ignored.
+    if (gridDragging) return;
+    e.preventDefault();
+    beginGridGesture(el, e);
+    window.loftGrid.gutterDragBegin(g.path, g.dir);
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (gridGestureMoved(el, e)) window.loftGrid.dragMove(e.clientX, e.clientY);
+  });
+  el.addEventListener('pointerup', (e) => gridGestureRelease(el, e));
+  el.addEventListener('lostpointercapture', () => endGridGesture(el));
+  return el;
+}
+
+/**
+ * Does the mounted DOM already have exactly this state's shape — the same gutters at the
+ * same paths on the same axes, and the same cells for the same services, in the same order?
+ * True for every push during a resize, which moves rects and changes nothing else.
+ *
+ * Both lists are emitted in the tree's own walk order by computeGridLayout, and this
+ * renderer mounts them in that order, so comparing by index is exact.
+ */
+function gridStructureMatches(state: GridViewState): boolean {
+  const gutters = gridRoot.querySelectorAll<HTMLElement>('.gutter');
+  const heads = gridRoot.querySelectorAll<HTMLElement>('.chead');
+  if (gutters.length !== state.layout.gutters.length) return false;
+  if (heads.length !== state.layout.cells.length) return false;
+  for (let i = 0; i < gutters.length; i += 1) {
+    const g = state.layout.gutters[i];
+    if (gutters[i].dataset.path !== g.path || gutters[i].dataset.dir !== g.dir) return false;
+  }
+  for (let i = 0; i < heads.length; i += 1) {
+    if (heads[i].dataset.service !== state.layout.cells[i].service) return false;
+  }
+  return true;
+}
+
+/** Re-place and re-label the nodes that are already mounted. Creates and removes nothing, so
+ *  the element holding pointer capture is untouched — which is the whole point.
+ *  Display names are not refreshed: they come from the static service registry and cannot
+ *  change without a restart, whereas rects, focus and badges all change under a live drag. */
+function updateGridInPlace(state: GridViewState): void {
+  const gutters = gridRoot.querySelectorAll<HTMLElement>('.gutter');
+  state.layout.gutters.forEach((g, i) => placeGridEl(gutters[i], g.rect, state.origin));
+  const heads = gridRoot.querySelectorAll<HTMLElement>('.chead');
+  state.layout.cells.forEach((c, i) => {
+    placeGridEl(heads[i], c.header, state.origin);
+    heads[i].classList.toggle('focused', state.focused === c.service);
+    setGridBadge(heads[i], state.badges[c.service] ?? 0);
+  });
+}
+
+function renderGrid(state: GridViewState): void {
+  // Mid-drag, replaceChildren would destroy the very gutter holding pointer capture, and the
+  // replacement node never receives the pointerup — orphaning the gesture. But that hazard
+  // is about REMOVAL, not about rendering: when the incoming state has the shape already on
+  // screen (always, during a resize — it moves rects and nothing else) every node it
+  // describes is mounted, so re-placing them in place is both safe and what makes the
+  // dragged divider actually follow the pointer instead of freezing until release.
+  // Only a genuine structural change has to wait; endGridDrag() flushes it.
+  if (gridDragging) {
+    if (!gridStructureMatches(state)) { gridPendingState = state; return; }
+    updateGridInPlace(state);
+    // The DOM is now this state, which is newer than anything held back — so whatever was
+    // deferred is stale and must not be replayed over it at the end of the gesture.
+    gridPendingState = null;
+    return;
+  }
+  gridEmptyEl.classList.toggle('show', state.layout.cells.length === 0);
+  gridRoot.replaceChildren(
+    ...state.layout.gutters.map((g) => gridGutter(g, state)),
+    ...state.layout.cells.map((c) => gridCellHeader(c, state)),
+  );
+}
+
+// The empty state's ＋ is the biggest thing on an empty grid and the first thing a new user
+// clicks; it opens the same menu the titlebar's ＋ does (one channel, one handler).
+// 'click', not 'pointerdown', so keyboard activation (Enter/Space on the focused button)
+// works too.
+gridAddEl.addEventListener('click', () => window.loftGrid.addToGrid());
+
+window.loftGrid.onState(renderGrid);

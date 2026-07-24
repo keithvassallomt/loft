@@ -1,9 +1,18 @@
-/target
 /dev
 /dev_local
 
-# Flatpak build artifacts (created by `just build-flatpak` / `just release`)
+# Node / Electron build output
+node_modules/
+dist/
+dist-electron/
+*.log
+
+# Flatpak build artifacts (flatpak-builder cache + bundle)
 /.flatpak-builder/
-/flatpak-build/
-/flatpak-repo/
-/cargo-sources.json
+/build-dir/
+/.flatpak-repo/
+/flatpak-node/
+*.flatpak
+
+# Brainstorming visual companion (superpowers)
+.superpowers/

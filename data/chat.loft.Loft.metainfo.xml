@@ -14,14 +14,16 @@
 
   <description>
     <p>
-      Loft provides full desktop integration for WhatsApp, Facebook Messenger,
-      Slack, Telegram, Element (Matrix), and NextCloud Talk on Linux, including voice and video calling, system tray
-      icons, badge counts, and close-to-tray behavior.
+      Loft gives your favourite messaging web apps a proper place on your Linux
+      desktop. WhatsApp, Facebook Messenger, Slack, Telegram, Element (Matrix),
+      and NextCloud Talk each run in their own dedicated window — with full voice
+      and video calling, system tray icons, unread badge counts, desktop
+      notifications, and close-to-tray behaviour.
     </p>
     <p>
-      Unlike Electron wrappers, Loft uses your real Google Chrome installation
-      for full WebRTC and codec support, whilst a backend daemon ensures functional
-      system integration on both GNOME and KDE Plasma.
+      Loft integrates natively with both GNOME and KDE Plasma: window show/hide
+      and focus, panel or tray icons with per-service Do Not Disturb, and
+      notifications that take you straight to the conversation.
     </p>
   </description>
 
@@ -72,6 +74,19 @@
   </screenshots>
 
   <releases>
+    <release version="1.0.0" date="2026-07-15">
+      <description>
+        <p>
+          A ground-up rewrite. Loft is now a single self-contained application —
+          it no longer needs a separate Google Chrome installation — with the same
+          full voice and video calling, and improved GNOME and KDE Plasma integration.
+        </p>
+        <p>
+          One-time change: you'll need to sign in to each service again after
+          upgrading, as logins are no longer shared with Chrome.
+        </p>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-06-15">
       <description>
         <ul>

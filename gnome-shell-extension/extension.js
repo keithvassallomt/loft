@@ -34,6 +34,9 @@ const DBUS_IFACE = `<node>
       <arg name="wm_class" type="s" direction="in"/>
       <arg name="success" type="b" direction="out"/>
     </method>
+    <method name="SetLoftWindows">
+      <arg name="keys" type="as" direction="in"/>
+    </method>
     <method name="RegisterService">
       <arg name="name" type="s" direction="in"/>
       <arg name="display_name" type="s" direction="in"/>
@@ -70,6 +73,16 @@ const DBUS_IFACE = `<node>
     <method name="RemoveCombinedService">
       <arg name="name" type="s" direction="in"/>
     </method>
+    <method name="UpdateAvailableService">
+      <arg name="name" type="s" direction="in"/>
+      <arg name="display_name" type="s" direction="in"/>
+    </method>
+    <method name="RemoveAvailableService">
+      <arg name="name" type="s" direction="in"/>
+    </method>
+    <method name="UpdateGlobalDnd">
+      <arg name="enabled" type="b" direction="in"/>
+    </method>
   </interface>
 </node>`;
 
@@ -97,9 +110,26 @@ function _isMinimizedLoftWindow(win, wmClasses) {
     return wmClasses.has(wmClass) && win.minimized;
 }
 
+function _titleMatchesKey(title, key) {
+    return title === key || title.startsWith(key + ' (');
+}
+function _isLoftTitleWindow(meta, titleKeys) {
+    const title = meta.get_title?.() ?? '';
+    for (const key of titleKeys)
+        if (_titleMatchesKey(title, key)) return true;
+    return false;
+}
+function _isMinimizedLoftTitleWindow(win, titleKeys) {
+    return win.minimized && _isLoftTitleWindow(win, titleKeys);
+}
+
 export default class LoftShellHelper extends Extension {
     enable() {
         this._loftWmClasses = new Set();
+        // Display-name title-keys for the single-app model. A window belongs to
+        // Loft iff its title === key or startsWith(key + ' ('). Fed by
+        // SetLoftWindows (window mgmt, any tray backend) + UpdateCombinedService.
+        this._loftTitleKeys = new Set();
         // wm_class → whether the daemon considers the service's window visible.
         // Used to keep a start-hidden window (which maps briefly before being
         // minimized) out of the overview. Default-absent is treated as hidden.
@@ -107,7 +137,13 @@ export default class LoftShellHelper extends Extension {
         this._panelIcons = new Map();
         this._combinedIndicator = null;
         this._combinedServices = new Map();
+        // Configured-but-not-running services (name -> displayName), pushed via
+        // UpdateAvailableService. Rendered as launch rows below the running ones.
+        this._combinedAvailable = new Map();
         this._combinedWatchId = null;
+        // Global DND, pushed by the app via UpdateGlobalDnd. Mirrors the SNI
+        // menu's "Do Not Disturb": it mutes every service at once.
+        this._combinedGlobalDnd = false;
         this._pendingDashTimeouts = new Set();
 
         // D-Bus interface — window focus/hide + panel icon management.
@@ -131,6 +167,7 @@ export default class LoftShellHelper extends Extension {
 
         // Hide minimized Loft windows from alt-tab, overview, and dock.
         const wmClasses = this._loftWmClasses;
+        const titleKeys = this._loftTitleKeys;
         const overviewVisible = this._loftOverviewVisible;
 
         // Alt-tab: drop minimized Loft windows from the switcher, and drop
@@ -144,7 +181,7 @@ export default class LoftShellHelper extends Extension {
             for (const item of [...this._items]) {
                 const before = item.cachedWindows.length;
                 item.cachedWindows = item.cachedWindows.filter(
-                    w => !_isMinimizedLoftWindow(w, wmClasses)
+                    w => !_isMinimizedLoftTitleWindow(w, titleKeys)
                 );
                 if (before > 0 && item.cachedWindows.length === 0)
                     this._switcherList._removeIcon(item.app);
@@ -406,6 +443,7 @@ export default class LoftShellHelper extends Extension {
 
         this._unregisterCombined();
         this._combinedServices = null;
+        this._combinedAvailable = null;
 
         for (const name of [...this._panelIcons.keys()])
             this._unregisterService(name);
@@ -599,7 +637,7 @@ export default class LoftShellHelper extends Extension {
     }
 
     _callDaemonMethod(dbusName, method, signature, args) {
-        const busName = `chat.loft.${dbusName}`;
+        const busName = 'chat.loft.Loft';
         const objPath = `/chat/loft/${dbusName}`;
         const iface = 'chat.loft.Service';
 
@@ -622,6 +660,26 @@ export default class LoftShellHelper extends Extension {
         }
     }
 
+    // Root-object calls (whole-app scope: ShowHub, Quit, SetGlobalDnd), as
+    // opposed to _callDaemonMethod's per-service objects. NO_AUTO_START: these
+    // only make sense against the running app that owns the name — never launch
+    // a second one (in a dev checkout the .desktop resolves to a different install).
+    _callLoftRootMethod(method, signature, args) {
+        try {
+            Gio.DBus.session.call(
+                'chat.loft.Loft', '/chat/loft/Loft', 'chat.loft.Loft', method,
+                signature ? new GLib.Variant(signature, args) : null,
+                null,
+                Gio.DBusCallFlags.NO_AUTO_START,
+                -1,
+                null,
+                null
+            );
+        } catch (e) {
+            console.error(`Loft: Failed to call chat.loft.Loft.${method}: ${e}`);
+        }
+    }
+
     _registerCombined(iconName) {
         if (this._combinedIndicator) {
             this._combinedIndicator.destroy();
@@ -632,6 +690,7 @@ export default class LoftShellHelper extends Extension {
             this._combinedWatchId = null;
         }
         this._combinedServices.clear();
+        this._combinedAvailable.clear();
 
         const indicator = new PanelMenu.Button(0.0, 'loft-combined', false);
 
@@ -690,7 +749,7 @@ export default class LoftShellHelper extends Extension {
         let nameAppeared = false;
         this._combinedWatchId = Gio.bus_watch_name(
             Gio.BusType.SESSION,
-            'chat.loft.Tray',
+            'chat.loft.Loft',
             Gio.BusNameWatcherFlags.NONE,
             () => { nameAppeared = true; },
             () => {
@@ -700,9 +759,19 @@ export default class LoftShellHelper extends Extension {
         );
 
         this._rebuildCombinedMenu();
+        // The badge widgets above are born hidden, so they must be reconciled
+        // against current state here — the app pushes UpdateCombinedService only
+        // for *running* services, and at startup there usually are none, so this
+        // is the only thing that renders the global-DND dash on a fresh icon.
+        this._updateCombinedBadges();
     }
 
     _unregisterCombined() {
+        // The flag describes an icon that no longer exists. Leaving it set would
+        // make the app's next post-register push look like a no-op change, and
+        // the dash would never render (enable() doesn't re-run on a Loft restart,
+        // only on a shell restart).
+        this._combinedGlobalDnd = false;
         if (this._combinedWatchId) {
             Gio.bus_unwatch_name(this._combinedWatchId);
             this._combinedWatchId = null;
@@ -716,6 +785,7 @@ export default class LoftShellHelper extends Extension {
         this._combinedIndicator?.destroy();
         this._combinedIndicator = null;
         this._combinedServices?.clear();
+        this._combinedAvailable?.clear();
     }
 
     _updateCombinedService(name, displayName, visible, badge, dnd, wmClass) {
@@ -724,6 +794,8 @@ export default class LoftShellHelper extends Extension {
         // daemon's visibility so the overview can exclude hidden windows.
         if (wmClass) {
             this._loftWmClasses?.add(wmClass);
+            if (wmClass) this._loftTitleKeys?.add(wmClass);
+            // TODO(3d): re-key _loftOverviewVisible when the overview patch is re-keyed to titles (currently keyed by display-name, read by WM_CLASS — inert today).
             this._loftOverviewVisible?.set(wmClass, visible);
         }
 
@@ -736,7 +808,11 @@ export default class LoftShellHelper extends Extension {
             existing.wmClass === wmClass) {
             return;
         }
-        this._combinedServices.set(name, { displayName, visible, badge, dnd, wmClass });
+        // `name` is the D-Bus segment main pushed (Task 8) — stash it on the row so the
+        // menu builder below can call back on it without re-deriving it from displayName.
+        this._combinedServices.set(name, { name, displayName, visible, badge, dnd, wmClass });
+        // A service is running now — it can't also be in the available section.
+        this._combinedAvailable.delete(name);
         this._rebuildCombinedMenu();
         this._updateCombinedBadges();
     }
@@ -750,33 +826,63 @@ export default class LoftShellHelper extends Extension {
         this._updateCombinedBadges();
     }
 
+    _updateAvailableService(name, displayName) {
+        // A service can't be both running and available; running wins its own push,
+        // so drop any stale running entry when it's declared available. If that
+        // actually removed a running row, the menu MUST rebuild even when the
+        // available display name is unchanged — hence wasRunning gates the no-op.
+        const wasRunning = this._combinedServices.delete(name);
+        if (!wasRunning && this._combinedAvailable.get(name)?.displayName === displayName) return;
+        // Same reasoning as _updateCombinedService: keep `name` (the segment) on the row
+        // itself so the launch-row loop below doesn't have to re-derive it.
+        this._combinedAvailable.set(name, { name, displayName });
+        this._rebuildCombinedMenu();
+        this._updateCombinedBadges();
+    }
+
+    _removeAvailableService(name) {
+        if (!this._combinedAvailable.delete(name)) return;
+        this._rebuildCombinedMenu();
+        this._updateCombinedBadges();
+    }
+
     _rebuildCombinedMenu() {
         if (!this._combinedIndicator) return;
 
         const menu = this._combinedIndicator.menu;
         menu.removeAll();
 
-        const settingsItem = new PopupMenu.PopupMenuItem('Loft Settings\u2026');
-        settingsItem.connect('activate', () => {
-            const appInfo = Gio.DesktopAppInfo.new('chat.loft.Loft.desktop')
-                ?? Gio.DesktopAppInfo.new('chat.loft.Manager.desktop');
-            if (appInfo) {
-                try {
-                    appInfo.launch([], null);
-                } catch (e) {
-                    console.error(`Loft: Failed to launch manager: ${e}`);
-                }
-            } else {
-                console.error('Loft: No .desktop file found for manager');
-            }
+        // Layout, matching the SNI backend's menu (src/main/tray/dbusMenu.ts)
+        //   Show Window
+        //   Do Not Disturb
+        //   \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        //   <service rows>            (running only \u2014 the app pushes no others,
+        //   \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500                 so there's no launch section as SNI has)
+        //   Loft Settings\u2026
+        //   Quit Loft
+        // Show the Loft window as it was left. Deliberately NOT 'ShowHub' — that switches
+        // to the manager first, so it could never bring you back to the tab you were on.
+        const showWindowItem = new PopupMenu.PopupMenuItem('Show Window');
+        showWindowItem.connect('activate', () => {
+            this._callLoftRootMethod('ShowWindow');
         });
-        menu.addMenuItem(settingsItem);
+        menu.addMenuItem(showWindowItem);
+
+        const globalDndItem = new PopupMenu.PopupSwitchMenuItem(
+            'Do Not Disturb', this._combinedGlobalDnd
+        );
+        globalDndItem.connect('toggled', (_item, state) => {
+            this._callLoftRootMethod('SetGlobalDnd', '(b)', [state]);
+        });
+        menu.addMenuItem(globalDndItem);
         menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         // One compact row per service: name + unread dot + [Show/Hide] [DND] [Quit]
         for (const [name, svc] of this._combinedServices) {
-            // dbus_name == display name with whitespace stripped (see service.rs).
-            const dbusName = svc.displayName.replace(/\s+/g, '');
+            // The D-Bus segment main pushed as `name`. Deriving it from the display
+            // name (as this used to) breaks the moment a user renames an account:
+            // the object path is pinned to the kind's default name, not the label.
+            const dbusName = svc.name;
 
             const item = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
 
@@ -794,8 +900,9 @@ export default class LoftShellHelper extends Extension {
             });
             row.add_child(label);
 
-            // Unread dot
-            if (svc.badge > 0 && !svc.dnd) {
+            // Unread dot (global DND mutes every service, so it hides every dot —
+            // matching TrayModel.menuModel()'s `unread` for the SNI backend).
+            if (svc.badge > 0 && !svc.dnd && !this._combinedGlobalDnd) {
                 const dot = new St.Label({
                     text: ' \u2022',
                     style: 'color: #e01b24; font-size: 16px;',
@@ -850,10 +957,52 @@ export default class LoftShellHelper extends Extension {
             menu.addMenuItem(item);
         }
 
-        if (this._combinedServices.size === 0) {
-            const noServices = new PopupMenu.PopupMenuItem('No services running', { reactive: false });
-            menu.addMenuItem(noServices);
+        // Available (configured-but-not-running) services: a plain launch row each —
+        // no DND/Quit — that calls the service's Show() to start it. Parity with the
+        // SNI menu's available section (src/main/tray/dbusMenu.ts).
+        if (this._combinedAvailable.size > 0) {
+            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            for (const [, avail] of this._combinedAvailable) {
+                // The D-Bus segment main pushed as `name` (see the running-service loop above).
+                const dbusName = avail.name;
+                const launchItem = new PopupMenu.PopupMenuItem(avail.displayName);
+                launchItem.connect('activate', () => {
+                    this._callDaemonMethod(dbusName, 'Show');
+                    menu.close();
+                });
+                menu.addMenuItem(launchItem);
+            }
         }
+
+        if (this._combinedServices.size === 0 && this._combinedAvailable.size === 0) {
+            const none = new PopupMenu.PopupMenuItem('No services configured', { reactive: false });
+            menu.addMenuItem(none);
+        }
+
+        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        // Tell the RUNNING Loft app (which owns chat.loft.Loft) to open its hub
+        // window, via the root object's ShowHub method.
+        const settingsItem = new PopupMenu.PopupMenuItem('Loft Settings…');
+        settingsItem.connect('activate', () => {
+            this._callLoftRootMethod('ShowHub');
+        });
+        menu.addMenuItem(settingsItem);
+
+        // Whole-app quit (every window + the process), not a per-service quit —
+        // that's the ✕ button on each service row above.
+        const quitItem = new PopupMenu.PopupMenuItem('Quit Loft');
+        quitItem.connect('activate', () => {
+            this._callLoftRootMethod('Quit');
+        });
+        menu.addMenuItem(quitItem);
+    }
+
+    _updateGlobalDnd(enabled) {
+        if (this._combinedGlobalDnd === enabled) return;
+        this._combinedGlobalDnd = enabled;
+        this._rebuildCombinedMenu();
+        this._updateCombinedBadges();
     }
 
     _updateCombinedBadges() {
@@ -868,6 +1017,11 @@ export default class LoftShellHelper extends Extension {
             if (!svc.dnd)
                 allDnd = false;
         }
+
+        // Global DND mutes everything, so it shows the dash regardless of how
+        // many services are running (TrayModel.iconOverlay(), same rule).
+        if (this._combinedGlobalDnd)
+            allDnd = true;
 
         this._combinedBadge.visible = anyBadge && !allDnd;
         this._combinedDndBadge.visible = allDnd;
@@ -890,14 +1044,24 @@ export default class LoftShellHelper extends Extension {
         this._pendingDashTimeouts?.add(id);
     }
 
-    _findWindow(wmClass) {
+    _findWindow(key) {
+        let fallback = null;
         for (const actor of global.get_window_actors()) {
             const win = actor.meta_window;
-            if (win.get_wm_class() === wmClass &&
-                win.get_window_type() === Meta.WindowType.NORMAL)
+            if (win.get_window_type() !== Meta.WindowType.NORMAL)
+                continue;
+            const title = win.get_title?.() ?? '';
+            if (_titleMatchesKey(title, key))
                 return win;
         }
-        return null;
+        // Spike diagnostic: log candidate titles so a keying mismatch is visible
+        // in `journalctl --user -f -o cat /usr/bin/gnome-shell` during Keith's test.
+        if (!fallback) {
+            const titles = global.get_window_actors()
+                .map(a => `${a.meta_window.get_wm_class?.() ?? '?'}::${a.meta_window.get_title?.() ?? '?'}`);
+            console.log(`Loft: _findWindow('${key}') no match; windows=[${titles.join(', ')}]`);
+        }
+        return fallback;
     }
 
     _onMethodCall(method, params, invocation) {
@@ -937,6 +1101,14 @@ export default class LoftShellHelper extends Extension {
                     invocation.return_value(GLib.Variant.new('(b)', [false]));
                 }
             }
+            return;
+        }
+
+        if (method === 'SetLoftWindows') {
+            const [keys] = params.deep_unpack();
+            this._loftTitleKeys.clear();
+            for (const k of keys) this._loftTitleKeys.add(k);
+            invocation.return_value(null);
             return;
         }
 
@@ -999,6 +1171,27 @@ export default class LoftShellHelper extends Extension {
         if (method === 'RemoveCombinedService') {
             const [name] = params.deep_unpack();
             this._removeCombinedService(name);
+            invocation.return_value(null);
+            return;
+        }
+
+        if (method === 'UpdateAvailableService') {
+            const [name, displayName] = params.deep_unpack();
+            this._updateAvailableService(name, displayName);
+            invocation.return_value(null);
+            return;
+        }
+
+        if (method === 'RemoveAvailableService') {
+            const [name] = params.deep_unpack();
+            this._removeAvailableService(name);
+            invocation.return_value(null);
+            return;
+        }
+
+        if (method === 'UpdateGlobalDnd') {
+            const [enabled] = params.deep_unpack();
+            this._updateGlobalDnd(enabled);
             invocation.return_value(null);
             return;
         }

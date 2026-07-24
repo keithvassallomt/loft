@@ -1,0 +1,20 @@
+{
+  // Keep VS Code's file watcher and search out of the large node_modules/dist
+  // trees (the build output — node_modules/, dist/ — and dev_local/). Indexing
+  // them drove a ripgrep/CPU storm during the Electron rewrite build. Reversible.
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true
+  },
+  // files.exclude hides these from the Explorer AND from extensions' workspace.findFiles
+  // scans (which respect files.exclude) — the thing the watcher/search excludes did not stop.
+  // Reversible; does not affect npm/tsc (they read the filesystem directly).
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/dist": true
+  }
+}

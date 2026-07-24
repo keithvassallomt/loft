@@ -1,0 +1,106 @@
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
+
+#rail {
+  width: 52px; height: 100vh;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 7px 0;
+  background: #e5e5e7; border-right: 1px solid #d1d1d6;
+  overflow-y: auto; scrollbar-width: none;
+}
+#rail::-webkit-scrollbar { display: none; }
+
+.item {
+  position: relative; flex: none;
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid #d1d1d6; border-radius: 8px;
+  background: #fff; color: #86868b;
+  font: 700 10px/1 system-ui, sans-serif;
+  cursor: pointer; padding: 0;
+}
+.item:hover { border-color: #86868b; }
+.item.active { border-color: #0071e3; color: #0071e3; box-shadow: inset 3px 0 0 #0071e3; }
+.item .icon { width: 22px; height: 22px; border-radius: 5px; display: block; }
+.item.sleeping { opacity: .45; filter: grayscale(1); }
+.item.dragging { opacity: .5; cursor: grabbing; }
+
+.home {
+  flex: none; width: 34px; height: 34px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 8px;
+  background: transparent; cursor: pointer;
+}
+.home img { width: 26px; height: 26px; border-radius: 6px; }
+.home:hover { background: #d1d1d6; }
+.home.active { box-shadow: inset 3px 0 0 #0071e3; background: #d8d8dd; }
+.divider { flex: none; width: 24px; height: 1px; background: #c7c7cc; margin: 1px 0; }
+
+.badge {
+  position: absolute; top: -4px; right: -4px;
+  background: #ff3b30; color: #fff;
+  border-radius: 8px; padding: 0 3px;
+  font: 700 8px/1.5 system-ui, sans-serif;
+}
+.mark { position: absolute; bottom: -2px; right: -2px; font-size: 8px; }
+
+@media (prefers-color-scheme: dark) {
+  #rail { background: #3d3d3f; border-right-color: #424245; }
+  .item { background: #2d2d2f; border-color: #424245; }
+  .item.active { border-color: #0a84ff; color: #0a84ff; box-shadow: inset 3px 0 0 #0a84ff; }
+  .home:hover { background: #4a4a4c; }
+  .home.active { box-shadow: inset 3px 0 0 #0a84ff; background: #48484a; }
+  .divider { background: #545456; }
+  .grid { color: #98989d; }
+  .grid:hover { background: #4a4a4c; }
+  .grid.active { box-shadow: inset 3px 0 0 #0a84ff; background: #48484a; }
+  .grid .count { background: #0a84ff; }
+}
+
+/* Insertion indicator: where a dragged icon would land. Fixed-position so it is not a
+   child of #rail, whose children are replaced on every render. */
+#slot {
+  position: fixed; left: 5px; width: 42px; height: 3px;
+  background: #0071e3; border-radius: 2px;
+  display: none; pointer-events: none;
+}
+#slot.show { display: block; }
+@media (prefers-color-scheme: dark) {
+  #slot { background: #0a84ff; }
+}
+
+.grid {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin: 2px auto 0;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  /* One step darker than the .item grey: at #86868b the ⊞ glyph sat at 2.4–2.9:1 on this
+     rail's light backgrounds — under the 3:1 minimum for a non-text control — in every
+     state. #6e6e73 clears it on all three (4.03 plain, 3.33 hover, 3.57 active). */
+  color: #6e6e73;
+  font-size: 17px;
+  cursor: pointer;
+}
+.grid:hover { background: #d1d1d6; }
+.grid.active { box-shadow: inset 3px 0 0 #0071e3; background: #d8d8dd; }
+.grid .count {
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  min-width: 13px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: #0071e3;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+}

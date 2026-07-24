@@ -1,0 +1,49 @@
+{
+  "name": "loft",
+  "version": "1.0.0",
+  "description": "Linux desktop integration for messaging web apps",
+  "author": "Keith Vassallo <keith@icemalta.com>",
+  "homepage": "https://github.com/keithvassallomt/loft",
+  "license": "GPL-3.0-or-later",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && npm run bundle-preload && npm run bundle-hub-preload && npm run bundle-rail-preload && npm run bundle-grid-preload && npm run bundle-renderer && npm run copy-assets",
+    "bundle-preload": "esbuild src/preload/service.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/service.js",
+    "bundle-hub-preload": "esbuild src/preload/hub.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/hub.js",
+    "bundle-rail-preload": "esbuild src/preload/rail.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/rail.js",
+    "bundle-grid-preload": "esbuild src/preload/grid.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/grid.js",
+    "bundle-renderer": "vite build",
+    "copy-assets": "mkdir -p dist/renderer/titlebar dist/renderer/recovery dist/renderer/rail dist/renderer/grid dist/renderer/gridOverlay dist/assets/icons/variants && cp src/renderer/titlebar/index.html src/renderer/titlebar/titlebar.css dist/renderer/titlebar/ && cp src/renderer/recovery/index.html src/renderer/recovery/recovery.css dist/renderer/recovery/ && cp src/renderer/rail/index.html src/renderer/rail/rail.css dist/renderer/rail/ && cp src/renderer/grid/index.html src/renderer/grid/grid.css dist/renderer/grid/ && cp src/renderer/gridOverlay/index.html src/renderer/gridOverlay/overlay.css dist/renderer/gridOverlay/ && cp assets/loft.png dist/assets/ && cp assets/icons/*.png dist/assets/icons/ && cp assets/icons/variants/*.png dist/assets/icons/variants/ && cp assets/icons/loft-symbolic.svg dist/assets/loft-symbolic.svg",
+    "icons": "scripts/rasterize-icons.sh",
+    "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
+    "dist": "npm run build && electron-builder --linux",
+    "whatsapp": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=whatsapp",
+    "messenger": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=messenger",
+    "slack": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=slack",
+    "telegram": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=telegram",
+    "element": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=element",
+    "talk": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=talk",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "svelte-check --tsconfig ./tsconfig.json --workspace src/renderer/hub"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/svelte": "^5.4.2",
+    "@types/jsdom": "^21.1.7",
+    "@types/node": "^22.20.1",
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.1",
+    "jsdom": "^25.0.1",
+    "svelte": "^5.56.4",
+    "svelte-check": "^4.7.2",
+    "typescript": "~5.9",
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "dbus-next": "^0.10.2"
+  }
+}

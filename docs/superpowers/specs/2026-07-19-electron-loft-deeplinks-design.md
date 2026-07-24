@@ -1,0 +1,136 @@
+# Electron Loft — Per-service deep links: let the app route itself
+
+**Status:** implemented (2026-07-19). Plan: `docs/superpowers/plans/2026-07-19-deeplinks.md`.
+
+> **Amended after the final review.** Three defects found in the built feature changed two decisions below: notification ids are now scoped by a per-page-life **epoch** (they restart at 1 on every document load, so without it a click on a pre-reload banner routed to the WRONG conversation), and `close()` deliberately does **not** drop the entry. Both are described in place.
+
+Clicking a notification should land you in the conversation it came from. Today that works for Messenger and Telegram only. This makes it work for **WhatsApp, Slack, Element and NextCloud Talk** through one mechanism: invoke the web app's *own* notification click handler and let it route itself.
+
+## Why
+
+The routing plumbing already exists — notification click → `ActionInvoked` → focus the service window → `service:navigate` → the preload acts. What was missing is a conversation identifier for the four services whose notifications arrive through the `Notification`-override path. `bridge.ts` sends them with an empty href:
+
+```js
+ipc.send('service:notify', { title: n.title, body: n.body, icon, href: '' });
+```
+
+So `navigateAction` falls to `{ kind: 'none' }` and the click focuses the window but goes nowhere.
+
+The obvious fix — recover the conversation id and build a URL per service — is not viable, and a spike proved it rather than us assuming it.
+
+### Spike evidence (`dev_local/`, captured live from real sessions)
+
+| service | path | own click handler | `tag` | `data` |
+|---|---|---|---|---|
+| WhatsApp | `page` | `options.onClick` **+** `addEventListener('click')` | JID `262135…@lid` | undefined |
+| Slack | `page` | `.onclick` | `saved-for-later_…` | undefined |
+| Talk | `page` | `.onclick` | `167` (numeric room) | undefined |
+| Element | `page` | `.onclick` | **empty** | undefined |
+
+Four conclusions, each load-bearing:
+
+1. **No service uses the service worker.** Every one is `path: "page"`. A click dispatched to a page object could not reach a service-worker `notificationclick` handler, so this was the one finding that could have killed the approach outright.
+2. **Every service attaches its own click handler**, so one mechanism covers all four.
+3. **Routing from `tag`/`data` is not possible.** `data` is undefined everywhere and **Element supplies no `tag` at all** — there is nothing identifying the room. Designing around tag/data would have left Element unimplementable.
+4. **WhatsApp is not the hard case.** It has the richest hooks of the four. The previous plan ("no URL routing; needs sender-matching by scrape") rested on an assumption that proved backwards, and WhatsApp is folded into this slice rather than deferred.
+
+## Decisions
+
+### Invoke the app's own handler
+
+`SilentNotification` currently discards the object it creates, so a handler the app attaches can never fire. Instead: retain the instance, capture whatever handler the app attaches, and on click invoke it. The app then routes using its own internal logic — no URL construction, no DOM matching, no per-service knowledge.
+
+### Identify notifications by our own token
+
+The preload assigns each relayed notification a monotonically increasing `notifyId` and sends it with `service:notify`. Main already keeps a per-notification record from creation to click:
+
+```ts
+const pending = new Map<number, { id: string; href?: string }>();
+```
+
+That record gains the token, and `ActionInvoked` gains a branch: a `notifyId` sends `service:notify-click` back to that service's view; an `href` keeps today's `service:navigate` behaviour. Keying on our own token — not `tag` — is what makes Element work despite having none.
+
+### Invoke handlers directly, never `dispatchEvent`
+
+The retained object is **not a real `EventTarget`**. It carries `Notification.prototype` (which Slack inspects, and which must not change) but was never constructed by the real `Notification`, so it has no internal EventTarget slots — calling `dispatchEvent` on it throws *"Illegal invocation"*. That is precisely the error Slack already provokes when setting properties on the current dud object.
+
+So we call the captured handlers ourselves, passing a synthetic click-shaped event with working `preventDefault`/`stopPropagation` (apps commonly call them and must not throw).
+
+### Handler precedence, and the one thing the spike did not settle
+
+Three handler forms are in evidence, so all three are captured: the `onclick` property, `addEventListener('click', …)` listeners, and WhatsApp's non-standard `options.onClick`.
+
+WhatsApp registers **both** a click listener and `options.onClick`, and the spike established that both *exist*, not which one actually routes. Invoking both risks double-routing. The rule is therefore:
+
+> Invoke the standard handlers (`onclick` plus any `click` listeners). Only if **no** standard handler was registered, fall back to `options.onClick`.
+
+This yields exactly one invocation and prefers the standard path. **If WhatsApp's click turns out not to route, the fix is to call `options.onClick` as well** — recorded here so the smoke test checks it deliberately rather than discovering it later.
+
+### Bounded retention
+
+Retained instances are capped at the **50** most recent per view, evicted oldest-first. A service view lives for the whole session, so unbounded retention would be a slow leak. Main's `pending` map is capped the same way, at **200**.
+
+`close()` deliberately does **not** drop the entry. Our desktop banner outlives the page's object — it is posted with no expiry and persists in the notification list — and apps routinely auto-close their `Notification` seconds after showing it, or clear everything on `visibilitychange`, which our own focus-before-click ordering fires on the same FIFO IPC pipe. Evicting on close would make the click that immediately follows find nothing. The banner is ours, not the page's; the cap bounds lifetime instead.
+
+### Ids are scoped to a page life
+
+`notifyId` restarts at 1 on every document load, because the preload re-runs — while main's `pending` map is process-lifetime and pruned only on click. A banner posted before a reload would therefore collide with a new notification's id and replay the wrong handler. Each page life mints an **epoch**, carried out with the notification and required back as a parameter of `click(notifyId, epoch)`. Making it a required parameter rather than a separate check is the point: it cannot be forgotten at a call site. A mismatched epoch is inert — the same outcome as clicking an evicted notification.
+
+## Non-goals
+
+- **Migrating Messenger and Telegram.** They are DOM-scraped, carry real hrefs, and their deep links already work. The `navigateAction` path stays exactly as it is.
+- **Constructing URLs per service.** Ruled out by the spike, not by preference.
+- **Service-worker notification support.** No service uses it. If one ever does, it needs its own mechanism and this design does not pretend to cover it.
+- **Changing what a notification looks like** — title, body, avatar handling are untouched.
+
+## Components
+
+| Unit | Change |
+|---|---|
+| `src/preload/notify/override.ts` | Return a retained instance; capture `onclick`, `click` listeners and `options.onClick`; shim `onshow`/`onclose`/`onerror` so assigning them cannot throw and abort the app's setup; expose `click(notifyId, epoch)`. Keeps `Notification.prototype` and the `permission`/`requestPermission` shims exactly as they are. |
+| `src/preload/notify/notifyRegistry.ts` **(new, pure)** | The retention map: `remember`, `take`, eviction at 50. Pure and unit-testable, so the leak-prevention rule is covered by a test rather than by hope. |
+| `src/preload/notify/bridge.ts` | Assign `notifyId`, send it with `service:notify`, handle `service:notify-click` by invoking the retained handlers. |
+| `src/main/notifications/index.ts` | `pending` records carry `notifyId`; `ActionInvoked` routes to a new `click(serviceId, notifyId)` dep when present, else today's `navigate`. |
+| `src/main/index.ts` | Wire `click` to `host.notifyClick(notifyId, epoch)`; pass both through from `service:notify`. |
+| `src/main/serviceView.ts` | `notifyClick(notifyId, epoch)` → `safeSend('service:notify-click', { notifyId, epoch })`, beside the existing `navigate`. |
+
+## Data flow
+
+**Create** — page calls `new Notification(...)` → override captures the instance and any handler, `notifyRegistry.remember()` returns a `notifyId` → `service:notify { title, body, icon, href: '', notifyId, epoch }` → main shows the desktop notification and records `pending[dbusId] = { id, href, notifyId, epoch }`.
+
+**Click** — `ActionInvoked(dbusId)` → main focuses the service window (existing behaviour) → `notifyId` present ⇒ `service:notify-click { notifyId, epoch }` → preload takes the retained entry and invokes its handlers → **the app navigates itself**.
+
+Messenger and Telegram are unchanged: no `notifyId`, an `href`, today's `service:navigate`.
+
+## Error handling and edge cases
+
+- **A handler that throws** is caught and logged; one bad handler must never break the click path or leak an exception into the page.
+- **No handler was ever attached** — nothing to invoke. The window is still focused, which is today's behaviour, so this is a no-op rather than a regression.
+- **The notification was already evicted** (older than the 50 most recent): the click focuses the window and does nothing else. Acceptable — clicking a very old banner is rare, and the alternative is an unbounded map.
+- **`close()` called by the page** drops the entry immediately.
+- **Both `href` and `notifyId` present** cannot happen (the scrape path sets no `notifyId`), but main prefers `notifyId` and ignores `href`, so the newer mechanism wins deterministically if it ever does.
+- **Focus ordering**: the window is focused *before* the handlers run, since an app handler commonly calls `window.focus()` itself and should not race ours.
+- **The `Notification.prototype` invariant is preserved.** Slack inspects the prototype before calling the constructor, and a synthetic prototype makes it skip notifications entirely. The returned object must keep `Orig.prototype`.
+
+## Testing
+
+**Unit** — this slice has a real seam, unlike the last one: `override.ts` is already covered by `tests/notifyOverride.test.ts`.
+
+- `notifyRegistry`: remember/take round-trip, eviction at the cap (oldest first), `take` of an evicted or unknown id, `forget`.
+- `override`: captures an `onclick` assignment; captures `addEventListener('click')`; captures `options.onClick`; **invokes standard handlers in preference to `options.onClick`**; invokes `options.onClick` only when no standard handler exists; a throwing handler is contained; the existing relay payload and `Notification.prototype` invariant are unchanged (regression guard).
+- `notifications`: `ActionInvoked` with a `notifyId` calls `click` and not `navigate`; with an `href` calls `navigate`; with both prefers `click`.
+
+**Manual smoke (Keith)** — one inbound message per service, app unfocused, then click the banner:
+- **Slack, Element, Talk** — lands in the right conversation.
+- **WhatsApp** — lands in the right chat. *Check this one deliberately:* if the window focuses but does not navigate, the standard-handler-first rule needs relaxing to also call `options.onClick` (see Decisions).
+- **Messenger and Telegram** — still work exactly as before (regression check; they take a different path).
+- Clicking a **stale** notification (after ~50 newer ones) focuses the window and does nothing, rather than misrouting.
+
+**Added after the final review** — the original list above would have passed while three real defects were live, because every item clicks a fresh banner immediately:
+
+- **Wait ~60s before clicking.** Apps routinely auto-close their own `Notification` seconds after showing it; our banner persists. Catches the click arriving after the page discarded its object.
+- **Reload, then click an OLD banner.** Notify once, Ctrl+R the service, notify twice more, then click the *first* banner. It must do nothing — it must NOT open the wrong conversation. Ids restart at 1 on every page load, so this is the misroute case the epoch guard exists to prevent.
+- **Click after Unload + relaunch, and after quitting and restarting Loft**, for the same reason.
+- **Run from a terminal and read stderr.** Every failure mode here is a swallowed exception logged as `Loft: notification click handler threw`. Without the console, a handler that throws is indistinguishable from an app that attached no handler — which is exactly the wrong conclusion to draw about WhatsApp.
+- **Both host kinds**: click a banner for a service in its own window *and* one attached in the rail, plus once after a detach → re-attach.
+- **Two notifications from the same conversation**, then click the older one.

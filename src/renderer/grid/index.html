@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src loft:; script-src 'self'" />
+    <link rel="stylesheet" href="grid.css" />
+  </head>
+  <body>
+    <div id="grid"></div>
+    <div id="empty" class="empty">
+      <button id="add" class="plus" type="button" title="Add a service to the grid"
+              aria-label="Add a service to the grid">＋</button>
+      <p>Drag a service here from the rail<br /><span>or click ＋ to add one</span></p>
+    </div>
+    <script type="module" src="grid.js"></script>
+  </body>
+</html>

@@ -1,0 +1,57 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install packaging tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm appstream flatpak flatpak-builder
+
+      - name: Validate AppStream metainfo
+        if: github.ref_type == 'tag'
+        run: appstreamcli validate --no-net data/chat.loft.Loft.metainfo.xml
+
+      - name: Install, test, build (electron)
+        run: |
+          npm ci
+          npm test
+          npm run check
+          npm run build
+
+      - name: Package deb/rpm/AppImage
+        run: npx electron-builder --linux deb rpm AppImage
+
+      - name: Set up Flatpak runtimes
+        run: |
+          flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install -y --user flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08 \
+            org.electronjs.Electron2.BaseApp//24.08 org.freedesktop.Sdk.Extension.node22//24.08
+
+      - name: Build Flatpak bundle
+        run: |
+          flatpak-builder --user --force-clean --repo=.flatpak-repo build-dir chat.loft.Loft.yml
+          flatpak build-bundle .flatpak-repo Loft.flatpak chat.loft.Loft
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'preview' }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || 'Preview build' }}
+          prerelease: ${{ github.ref_type != 'tag' }}
+          files: |
+            dist-electron/*.deb
+            dist-electron/*.rpm
+            dist-electron/*.AppImage
+            Loft.flatpak

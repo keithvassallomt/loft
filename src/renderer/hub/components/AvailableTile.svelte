@@ -1,0 +1,53 @@
+<script lang="ts">
+  import type { HubKind } from '../../../shared/hubTypes';
+  import Modal from './Modal.svelte';
+  let { kind }: { kind: HubKind } = $props();
+
+  let showUrlModal = $state(false);
+  let urlDraft = $state('');
+
+  function add() {
+    if (kind.selfHosted) { urlDraft = ''; showUrlModal = true; }
+    else window.loftHub.addService(kind.id);
+  }
+  function confirmAdd() {
+    showUrlModal = false;
+    window.loftHub.addService(kind.id, urlDraft.trim() || undefined);
+  }
+</script>
+
+<div class="tile">
+  <img class="icon" src={`loft://icon/${kind.id}`} alt="" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')} />
+  <span class="name">{kind.displayName}</span>
+  <button class="pill" onclick={add}>Add</button>
+</div>
+
+{#if showUrlModal}
+  <Modal
+    title={`Add ${kind.displayName}`}
+    confirmLabel="Add"
+    confirmDisabled={kind.serverRequired && urlDraft.trim() === ''}
+    onConfirm={confirmAdd}
+    onCancel={() => (showUrlModal = false)}
+  >
+    <label class="field">
+      <span>Server URL{kind.serverRequired ? '' : ' (optional)'}</span>
+      <input bind:value={urlDraft} placeholder="cloud.example.com" />
+      <!-- A service with a real default (Element) must be addable in one click; only a
+           service with no central instance (Talk) can insist on a server. -->
+      {#if !kind.serverRequired}
+        <small class="hint">Leave blank to use {kind.defaultUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')}</small>
+      {/if}
+    </label>
+  </Modal>
+{/if}
+
+<style>
+  .tile { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px; background: var(--card); border-radius: 12px; }
+  .icon { width: 44px; height: 44px; border-radius: 10px; }
+  .name { font-weight: 600; }
+  .pill { border: 0; border-radius: 999px; padding: 5px 16px; background: var(--accent); color: #fff; cursor: pointer; font: inherit; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field input { padding: 8px; border-radius: 8px; border: 1px solid var(--divider); background: var(--bg); color: var(--fg); }
+  .field .hint { opacity: 0.6; font-size: 0.85em; }
+</style>

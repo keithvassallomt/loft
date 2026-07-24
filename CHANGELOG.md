@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-07-15
+
+> [!IMPORTANT]
+> Version 1.0.0 of Loft isn't an update, it's a **total re-write!** The bad news is that you'll have
+> to login again to your services. The good news is:
+> - You get a fantastic unified view.
+> - You get proper titlebars, no longer needing to hover and wait to hide services.
+> - You get great new (entirely optional!) features like grid view, logging into multiple accounts, and more control over auto-open modes.
+> - You no longer need to have Google Chrome installed.
+> - Rich notifications, video and voice call support, and everything that made Loft great to
+> start with still work, of course.
+
+### Added
+
+- Unified view: every service now lives in a single Loft window with a sidebar rail of service icons, instead of opening a separate window for each one. Click an icon in the rail to switch to that service full-size; each has its own titlebar showing its name and unread count, with zoom controls and a close button that hides it to the tray while it keeps running in the background. Drag the rail icons to reorder them. Prefer a service in its own window? Turn on **Open in its own window** in its settings and Loft remembers the choice. Moving a service between the shared window, its own window, and the grid keeps its page live, so scroll position, half-typed drafts, and ongoing calls (including video and screen-share) all survive the move.
+- Grid view: a new **Grid** entry at the top of the service rail tiles several services on screen at once, so you can watch WhatsApp, Slack and Telegram together instead of switching between them. Add a service to the grid by dragging its rail icon into the grid, or from the ＋ menu in the titlebar; drop it against a cell's edge to choose which half it takes. Drag the dividers to resize, drag a cell by the handle in its header to move it, and remove one with its ✕ — the service keeps running and stays in the rail either way. The arrangement is remembered across restarts. Clicking a service in the rail still opens it full-size; the grid keeps its layout and comes back when you select it again. Calls, including video and screen-share, survive being tiled, resized and moved.
+- Multiple accounts: Loft can now hold more than one account of the same service — two WhatsApps, two Slacks, two NextCloud Talk servers — each with its own login, badges, and notifications. Add another from the **Add another** gallery in the manager. Give each account its own name and icon (a brand icon, a set of pastel colour variants, or a custom image file) so they're easy to tell apart in the rail, the tray, and the window titlebar.
+- Developer mode: a new toggle in **Settings** enables a developer context menu for troubleshooting a service's web page. With it on, **Shift+right-click** inside a service opens a Chromium menu with Inspect Element, DevTools, Reload and back/forward — while a plain right-click still uses the web app's own menu. Off by default.
+- Auto Open modes: each service's per-service settings now offer a three-way **Auto Open** choice instead of a single "open on startup" checkbox — **Disabled**, **On login** (runs in the background from login, starting Loft automatically), or **On launching Loft** (loads only when you actually open Loft, not at login). Existing "open on startup" services become **On login**, so nothing changes unless you want it to.
+
+### Changed
+
+- Loft is now a single self-contained application and no longer launches or depends on a separate Google Chrome installation. Voice and video calling, tray icons, badges, notifications, and close-to-tray all work as before, with improved GNOME and KDE Plasma integration.
+- The GNOME Shell helper is now installed from extensions.gnome.org on request (Loft asks first) instead of being bundled, so it updates independently of the app and no longer requires logging out to finish an update.
+
+### Note
+
+- **You'll need to sign in to each service again after upgrading.** Logins were previously stored in Chrome's profile; Loft now keeps its own per-service sessions.
+- **For packagers/GNOME users**: renaming an account now works correctly on the GNOME panel (rather than losing or duplicating its row) only once the Shell helper is updated to the version that ships alongside this release.
+
 ## [0.2.0] - 2026-06-15
 
 ### Added
