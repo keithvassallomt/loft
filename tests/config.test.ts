@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig, saveConfig, defaultConfig, reopenDetachedEnabled } from '../src/main/config';
+import { loadConfig, saveConfig, defaultConfig, reopenDetachedEnabled, effectiveAutoOpen } from '../src/main/config';
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'loft-cfg-')); });
@@ -64,6 +64,35 @@ describe('config', () => {
     const p = join(dir, 'new-globals.json');
     saveConfig(p, cfg);
     expect(loadConfig(p)).toEqual(cfg);
+  });
+
+  it('round-trips autoOpen and preserves a legacy openOnStartup', () => {
+    const cfg = defaultConfig();
+    cfg.services.slack = { autoOpen: 'launch' };
+    cfg.services.whatsapp = { openOnStartup: true };
+    const p = join(dir, 'auto-open.json');
+    saveConfig(p, cfg);
+    expect(loadConfig(p)).toEqual(cfg);
+  });
+
+  it('drops a bogus autoOpen value', () => {
+    const p = join(dir, 'bad-auto.json');
+    writeFileSync(p, '{"services":{"slack":{"autoOpen":"whenever"}}}', 'utf8');
+    expect(loadConfig(p).services.slack.autoOpen).toBeUndefined();
+  });
+
+  it('preserves debug:true and, like other "absent means false" flags, drops it when false', () => {
+    const on = join(dir, 'debug-on.json');
+    writeFileSync(on, '{"services":{},"debug":true}', 'utf8');
+    expect(loadConfig(on).debug).toBe(true);
+
+    const off = join(dir, 'debug-off.json');
+    writeFileSync(off, '{"services":{},"debug":false}', 'utf8');
+    expect(loadConfig(off).debug).toBeUndefined();
+
+    const bogus = join(dir, 'debug-bogus.json');
+    writeFileSync(bogus, '{"services":{},"debug":"yes"}', 'utf8');
+    expect(loadConfig(bogus).debug).toBeUndefined();
   });
 
   it('drops a service window whose bounds are not numbers', () => {
@@ -173,5 +202,23 @@ describe('reopenDetachedEnabled', () => {
   it('is false only when explicitly false', () => {
     expect(reopenDetachedEnabled({ services: {}, reopenDetached: false })).toBe(false);
     expect(reopenDetachedEnabled({ services: {}, reopenDetached: true })).toBe(true);
+  });
+});
+
+describe('effectiveAutoOpen', () => {
+  it('is disabled when nothing is set', () => {
+    expect(effectiveAutoOpen({})).toBe('disabled');
+    expect(effectiveAutoOpen(undefined)).toBe('disabled');
+  });
+  it('reads a legacy openOnStartup:true as login', () => {
+    expect(effectiveAutoOpen({ openOnStartup: true })).toBe('login');
+    expect(effectiveAutoOpen({ openOnStartup: false })).toBe('disabled');
+  });
+  it('returns the explicit autoOpen value', () => {
+    expect(effectiveAutoOpen({ autoOpen: 'login' })).toBe('login');
+    expect(effectiveAutoOpen({ autoOpen: 'launch' })).toBe('launch');
+  });
+  it('prefers autoOpen over the legacy boolean', () => {
+    expect(effectiveAutoOpen({ autoOpen: 'launch', openOnStartup: true })).toBe('launch');
   });
 });

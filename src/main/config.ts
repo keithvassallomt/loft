@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { TrayBackend } from './trayBackend';
+import type { AutoOpen } from '../shared/hubTypes';
 import { clampZoom } from './zoom';
 import { services as gridServices, RATIO_MIN, RATIO_MAX, type GridNode } from './gridTree';
 
@@ -29,6 +30,14 @@ export interface ServiceConfig {
   icon?: string;
   customUrl?: string;
   window?: WindowState;
+  /**
+   * Auto-open mode. Absent = disabled. Supersedes the legacy `openOnStartup` boolean, which
+   * is still read (as 'login') for back-compat and retired on the first `autoOpen` write —
+   * see effectiveAutoOpen. 'disabled' is never written; it is represented by the field's
+   * absence, keeping the config free of no-op keys.
+   */
+  autoOpen?: 'login' | 'launch';
+  /** @deprecated Legacy pre-tri-state flag; read via effectiveAutoOpen, never written anew. */
   openOnStartup?: boolean;
   /** Per-service Do Not Disturb; persisted + reflected in the tray menu. */
   dnd?: boolean;
@@ -68,6 +77,17 @@ export function defaultConfig(): LoftConfig {
 /** Absent means enabled — the setting is ticked by default (spec 09 §2). */
 export function reopenDetachedEnabled(cfg: LoftConfig): boolean {
   return cfg.reopenDetached !== false;
+}
+
+/**
+ * The single place a service's auto-open mode is decided. An explicit `autoOpen` wins; a
+ * legacy `openOnStartup: true` means 'login' (so pre-tri-state configs behave exactly as
+ * before); anything else is 'disabled'. No code should branch on the raw fields.
+ */
+export function effectiveAutoOpen(c?: ServiceConfig): AutoOpen {
+  if (c?.autoOpen === 'login' || c?.autoOpen === 'launch') return c.autoOpen;
+  if (c?.openOnStartup === true) return 'login';
+  return 'disabled';
 }
 
 export function configPath(): string {
@@ -118,6 +138,7 @@ export function sanitizeServiceConfig(v: unknown): ServiceConfig {
   if (typeof s.customUrl === 'string') out.customUrl = s.customUrl;
   const w = sanitizeWindowState(s.window);
   if (w) out.window = w;
+  if (s.autoOpen === 'login' || s.autoOpen === 'launch') out.autoOpen = s.autoOpen;
   if (typeof s.openOnStartup === 'boolean') out.openOnStartup = s.openOnStartup;
   if (typeof s.dnd === 'boolean') out.dnd = s.dnd;
   if (typeof s.badgesEnabled === 'boolean') out.badgesEnabled = s.badgesEnabled;

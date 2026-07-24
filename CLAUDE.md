@@ -33,8 +33,8 @@ There is no separate daemon process, no launching of a real Chrome binary, and n
 1. **Hub window** (`src/main/hubWindow.ts`, `src/renderer/hub/` — Svelte 5 + Vite) — the manager UI, opened by `loft` with no `--service` flag (or a second launch with no service and no `--minimized`)
    - Installed services: icon, name, live running/badge status, Open button, per-service settings (gear)
    - Available services: not-yet-added services, shown as tiles to Add
-   - Per-service settings: custom URL (Element/Talk), open-on-startup, badges on/off, DND, remove (with an explicit "also delete login data" option)
-   - Global settings: tray backend, appearance (follows the system theme). There is deliberately no "start at login" toggle — autostart is derived from the per-service open-on-startup flags (see the File Layout note). When autostart is blocked, the warning is rendered next to that service's own "Open on startup" checkbox in the per-service settings, **not** here: a warning on a page reached via a menu the user has no reason to open is the same silent failure the derived model exists to remove
+   - Per-service settings: custom URL (Element/Talk), **Auto Open** (a three-way choice — Disabled / On login / On launching Loft), badges on/off, DND, remove (with an explicit "also delete login data" option)
+   - Global settings: tray backend, appearance (follows the system theme), developer mode. There is deliberately no "start at login" toggle — autostart is derived from the per-service Auto Open flags (a service set to **On login**; see the File Layout note). When autostart is blocked, the warning is rendered next to that service's own Auto Open control in the per-service settings, **not** here: a warning on a page reached via a menu the user has no reason to open is the same silent failure the derived model exists to remove
    - Add/remove writes/removes that service's `.desktop` launcher and (on remove, if requested) deletes its partition data
 
 2. **Per-service window** (`src/main/serviceWindow.ts`) — one frameless window per running service
@@ -134,7 +134,8 @@ Loft currently logs to stdout/stderr via plain `console.*` calls in the main pro
 ```
 ~/.config/loft/
   config.json                      # single JSON file: global settings + services map keyed by service id
-                                    # (customUrl, dnd, badgesEnabled, openOnStartup, window bounds/zoom per service;
+                                    # (customUrl, dnd, badgesEnabled, autoOpen ('login'|'launch'; absent=disabled,
+                                    #  superseding the legacy openOnStartup bool), window bounds/zoom per service;
                                     #  trayBackend, globalDnd, railOrder and grid at the top level)
                                     # `grid` is the grid view's split tree; absent or null = empty grid.
                                     # Validated recursively on load (depth-capped, ratios clamped) and
@@ -143,9 +144,12 @@ Loft currently logs to stdout/stderr via plain `console.*` calls in the main pro
 
 ~/.config/autostart/
   chat.loft.Loft.desktop           # one login-autostart entry (launches `loft --minimized`). DERIVED, not a
-                                    # setting: it exists iff some service has openOnStartup. Written by the XDG
-                                    # Background portal under Flatpak (so the manifest needs only :ro here) and
-                                    # directly otherwise; read back with existsSync in both cases.
+                                    # setting: it exists iff some service is Auto Open = On login
+                                    # (effectiveAutoOpen === 'login'). An "On launching Loft" service loads only
+                                    # when the user opens Loft (the --minimized login launch skips it), so it does
+                                    # NOT create this entry. Written by the XDG Background portal under Flatpak (so
+                                    # the manifest needs only :ro here) and directly otherwise; read back with
+                                    # existsSync in both cases.
 
 ~/.local/share/loft/
   Partitions/

@@ -89,6 +89,12 @@ describe('autostart', () => {
     expect(wantsAutostart({ slack: { openOnStartup: false }, whatsapp: { openOnStartup: true } })).toBe(true);
     expect(wantsAutostart({ a: { openOnStartup: true }, b: { openOnStartup: true } })).toBe(true);
   });
+  it('wantsAutostart tracks autoOpen: only On-login pulls Loft into login autostart', () => {
+    expect(wantsAutostart({ a: { autoOpen: 'login' } })).toBe(true);
+    // "On launching Loft" must NOT autostart the app at login.
+    expect(wantsAutostart({ a: { autoOpen: 'launch' } })).toBe(false);
+    expect(wantsAutostart({ a: { autoOpen: 'launch' }, b: { autoOpen: 'login' } })).toBe(true);
+  });
   // M1: reconcileAutostart() (src/main/index.ts) gates on
   // `wantsAutostart(services) === isAutostartEnabled()` before doing anything.
   // reconcileAutostart itself isn't unit-testable (it lives in index.ts, which

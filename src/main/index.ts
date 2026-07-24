@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
 import { getKind, KINDS, ServiceKind, effectiveUrl } from './registry';
-import { loadConfig, saveConfig, configPath, LoftConfig, reopenDetachedEnabled } from './config';
+import { loadConfig, saveConfig, configPath, LoftConfig, reopenDetachedEnabled, effectiveAutoOpen } from './config';
 import { createServiceWindow, ServiceWindow } from './serviceWindow';
 import { createLoftWindow, LOFT_WINDOW_KEY, type LoftWindow } from './loftWindow';
 import type { ServiceHost } from './serviceHost';
@@ -404,6 +404,35 @@ function showService(def: ServiceKind, opts: { preferCell?: boolean } = {}): Ser
   return host;
 }
 
+// --- Auto-open on startup -------------------------------------------------------------
+// "On login" services load on every launch; "On launching Loft" services load only the
+// first time the Loft window is opened non-minimized this session — the silent
+// `loft --minimized` login-autostart launch does not count. Guarded so an explicit Unload
+// within a session is not undone the next time the window is revealed.
+let launchSetLoaded = false;
+
+function loadAutoOpen(kind: 'login' | 'launch'): void {
+  for (const id of Object.keys(config.services)) {
+    if (effectiveAutoOpen(config.services[id]) !== kind) continue;
+    const d = getService(id);
+    if (d && !hostOf(id)) placeService(d, true); // load into the rail, don't pop a window
+  }
+}
+
+/**
+ * Load the "On launching Loft" set, once per process. Fired whenever the user manually
+ * engages Loft: any reveal of the Loft window (loftWindow's onOpen — tray, D-Bus, rail,
+ * notification click, second-instance) and every non-`--minimized` process launch
+ * (whenReady + second-instance, which also cover launching a *detached* service directly,
+ * where the Loft window never opens). All idempotent via launchSetLoaded, so an explicit
+ * Unload within a session is not undone by a later reveal.
+ */
+function loadLaunchServices(): void {
+  if (launchSetLoaded) return;
+  launchSetLoaded = true;
+  loadAutoOpen('launch');
+}
+
 // Tray menu "Show/Hide" for a service: show if hidden, hide if visible.
 function toggleService(id: string): void {
   const host = hostOf(id);
@@ -431,7 +460,16 @@ function setServiceDnd(id: string, enabled: boolean): void {
  *  Shared by the hub's IPC and the rail's context menu, so the two cannot drift: a menu
  *  that only wrote config would leave the tray icon and the notification gate stale. */
 function setServiceSetting(id: string, patch: ServicePatch): void {
-  config.services[id] = { ...config.services[id], ...patch };
+  // autoOpen is kept out of the generic spread: it needs normalising (retire the legacy
+  // openOnStartup boolean on first write; 'disabled' is stored as the field's absence, not
+  // a literal), and its type on disk ('login'|'launch') is narrower than the patch's.
+  const { autoOpen, ...rest } = patch;
+  config.services[id] = { ...config.services[id], ...rest };
+  if (autoOpen !== undefined) {
+    const c = config.services[id];
+    delete c.openOnStartup;
+    if (autoOpen === 'disabled') delete c.autoOpen; else c.autoOpen = autoOpen;
+  }
   saveConfig(configPath(), config);
   // No hostOf(id)?.pushDnd(patch.dnd) here: setServiceDnd already pushes the EFFECTIVE
   // value (system || global || this service) into the page, and re-pushing the raw flag
@@ -459,7 +497,7 @@ function setServiceSetting(id: string, patch: ServicePatch): void {
     const d = getService(id); const host = hostOf(id);
     if (d && host) host.loadUrl(effectiveUrl(d, patch.customUrl || undefined));
   }
-  if (patch.openOnStartup !== undefined) reconcileAutostart();
+  if (autoOpen !== undefined) reconcileAutostart();
   loft?.refreshRail();
   notifyHub();
 }
@@ -764,6 +802,10 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', (_e, argv) => {
+    // A manual second launch loads the "On launching Loft" set (unless it is itself
+    // --minimized). Most reveals below funnel through loft.open()'s onOpen, but a launch that
+    // opens only a *detached* service's own window never calls open(), so trigger it here too.
+    if (!parseArgs(argv).minimized) loadLaunchServices();
     const def = resolveServiceFromArgs(argv);
     // Same two branches as the CLI below — a second launch must never build a duplicate
     // window for a service that is already living somewhere.
@@ -1540,6 +1582,12 @@ if (!app.requestSingleInstanceLock()) {
       buildServiceMenu,
       buildGridAddMenu,
       onActiveChanged: syncActiveTab,
+      // The user opened the Loft window (any reveal path — tray, D-Bus, rail, second-instance,
+      // notification click). That is the moment "On launching Loft" services should come up,
+      // and it is the one signal every reveal shares; the --minimized login launch places
+      // services without ever calling open(), so it correctly never fires this. Idempotent
+      // (loadLaunchServices guards on launchSetLoaded), so firing on every open is harmless.
+      onOpen: () => loadLaunchServices(),
       // Everything main has pushed into this service's page, plus the gate axes that
       // describe where the page now is. Two callers, one silent failure between them: a
       // real page load drops the DND/hidden pushes, and a view MOVED into or out of a grid
@@ -1617,16 +1665,13 @@ if (!app.requestSingleInstanceLock()) {
     // out-of-sync (see its comment), so this costs one existsSync on the common
     // already-in-sync path.
     reconcileAutostart();
-    // Load every service flagged open-on-startup, each into the host its config asks for.
-    // DELIBERATE CHANGE (spec §6f): this loop used to live in the `--service`-less branch, so
-    // launching WhatsApp from its own launcher started only WhatsApp. The Loft window now
-    // exists on every launch path, so its startup set loads on every launch path too.
-    // Users who relied on a per-service launcher starting only that service will notice.
-    for (const id of Object.keys(config.services)) {
-      if (!config.services[id]?.openOnStartup) continue;
-      const d = getService(id);
-      if (d && !hostOf(id)) placeService(d, true);
-    }
+    // Auto-open (spec §6f). "On login" services load on EVERY launch path, each into the host
+    // its config asks for — the Loft window exists on every path now, so a per-service launcher
+    // starts the whole On-login set, not just that one service. "On launching Loft" services
+    // load only when this launch is not the silent `--minimized` login-autostart one, i.e. when
+    // the user is actually opening Loft.
+    loadAutoOpen('login');
+    if (!args.minimized) loadLaunchServices();
     if (def) {
       // "Go to X", not "open a window for X" — X may already be a tab in the rail.
       if (!hostOf(def.id)) placeService(def, args.minimized);

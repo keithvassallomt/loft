@@ -1,6 +1,6 @@
 import type { ServiceKind } from './registry';
 import type { ServiceInstance } from './instances';
-import type { LoftConfig } from './config';
+import { effectiveAutoOpen, type LoftConfig } from './config';
 import type { HubState, TrayBackend } from '../shared/hubTypes';
 
 export interface HubStateDeps {
@@ -32,7 +32,7 @@ export function buildHubState(deps: HubStateDeps): HubState {
       badge: deps.badge(inst.id),
       badgesEnabled: c.badgesEnabled !== false,
       dnd: c.dnd ?? false,
-      openOnStartup: c.openOnStartup ?? false,
+      autoOpen: effectiveAutoOpen(c),
       customUrl: c.customUrl ?? '',
       launcher: c.launcher === true,
       icon: inst.icon,

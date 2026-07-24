@@ -241,6 +241,12 @@ X keeps today's implicit install (`index.ts:111-114`) and attaches by default.
 always exists, `openOnStartup` services always load regardless of `--service`. More consistent — but users who
 relied on a per-service launcher starting only that service will get their whole startup set.
 
+> **Superseded 2026-07-24 by the Auto Open modes feature** (`docs/superpowers/plans/2026-07-24-auto-open-modes.md`).
+> `openOnStartup` became the tri-state `autoOpen` (`effectiveAutoOpen` in `config.ts`): **On login** services still
+> load on every launch path as described here; **On launching Loft** services load only when the user actually opens
+> Loft (a non-`--minimized` launch or a tray reveal), so the "whole startup set on every launch" rule now applies to
+> the On-login set only.
+
 ## 7. Interaction
 
 **Drag.** Within the rail: reorder, persisted to `railOrder`. Out of it: past a threshold the rail sends

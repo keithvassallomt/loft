@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ServiceConfig } from './config';
+import { effectiveAutoOpen, type ServiceConfig } from './config';
 import { autostartDir, iconsDir } from './paths';
 import { desktopExec, isDevExec, isFlatpak } from './desktop';
 import { requestAutostart, defaultPortalDeps, type PortalDeps } from './portal/background';
@@ -13,11 +13,11 @@ const FILE = 'chat.loft.Loft.desktop';
  * Remove v1's per-service autostart entries (`loft-<id>.desktop`).
  *
  * v1 (the Rust build) wrote ONE autostart entry PER SERVICE; v1.0.0 writes a single
- * `chat.loft.Loft.desktop` derived from the per-service openOnStartup flags. Left in
- * place, the leftovers actively lie: v1's `Exec=… --service whatsapp --minimized` is
- * still parsed by today's CLI (cli.ts accepts the space form), so the service launches
- * at login **even with "Open on startup" unticked** — the exact silent-failure this
- * model exists to remove, just inverted.
+ * `chat.loft.Loft.desktop` derived from the per-service Auto Open flags (any service set
+ * to On login). Left in place, the leftovers actively lie: v1's
+ * `Exec=… --service whatsapp --minimized` is still parsed by today's CLI (cli.ts accepts
+ * the space form), so the service launches at login **even with Auto Open set to Disabled**
+ * — the exact silent-failure this model exists to remove, just inverted.
  *
  * Idempotent and cheap (one existsSync per known service), so it runs every start
  * rather than being gated on a first-run flag: that also repairs a restored backup.
@@ -89,11 +89,13 @@ export function setAutostart(
 
 /**
  * The desired autostart state, derived from config — there is no separate
- * "start at login" setting. Loft autostarts iff at least one service asked to
- * open at login; the per-service flags are the single source of truth.
+ * "start at login" setting. Loft autostarts iff at least one service is set to
+ * open **On login** (effectiveAutoOpen === 'login'); an "On launching Loft"
+ * service deliberately does not — it loads only when the user opens Loft, so it
+ * must not drag the whole app into login autostart.
  */
 export function wantsAutostart(services: Record<string, ServiceConfig | undefined>): boolean {
-  return Object.values(services).some((s) => s?.openOnStartup === true);
+  return Object.values(services).some((s) => effectiveAutoOpen(s) === 'login');
 }
 
 /**

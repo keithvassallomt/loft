@@ -6,7 +6,7 @@ const svc = (id: string) => ({
   id, kind: id, displayName: id[0].toUpperCase() + id.slice(1), selfHosted: false,
   serverRequired: false, defaultUrl: '',
   running: false, visible: false, badge: 0, badgesEnabled: true,
-  dnd: false, openOnStartup: false, customUrl: '', launcher: false,
+  dnd: false, autoOpen: 'disabled' as const, customUrl: '', launcher: false,
   icon: 'brand', variants: [],
 });
 const kind = (id: string, instanceCount: number) => ({

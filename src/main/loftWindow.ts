@@ -110,6 +110,10 @@ export interface LoftWindowDeps {
   buildGridAddMenu(): Electron.MenuItemConstructorOptions[];
   /** Selection changed (or the manager took over, id undefined). */
   onActiveChanged(id: string | undefined): void;
+  /** The Loft window was shown/focused (open()). Fires on every reveal — tray, D-Bus, rail,
+   *  second-instance — and is the choke point for "the user opened Loft". Never fires on the
+   *  silent --minimized login launch, which places services without ever showing the window. */
+  onOpen?(): void;
   /** This service's page finished loading. A navigation drops everything main pushed into
    *  the page (DND, hidden), so main re-pushes it here — the shared-host twin of the
    *  per-service window's own did-finish-load binding. */
@@ -594,7 +598,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
 
   const api: LoftWindow = {
     window,
-    open: () => { window.show(); window.focus(); },
+    open: () => { window.show(); window.focus(); deps.onOpen?.(); },
     hide: () => window.hide(),
 
     attach: (def, view) => {

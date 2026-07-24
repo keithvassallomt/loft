@@ -70,14 +70,25 @@
     </label>
   {/if}
 
-  <label class="toggle">
-    <input type="checkbox" checked={svc.openOnStartup} onchange={(e) => set({ openOnStartup: e.currentTarget.checked })} />
-    <span>Open on startup</span>
-  </label>
+  <fieldset class="autoopen">
+    <legend>Auto Open</legend>
+    {#each [
+      { v: 'disabled', label: 'Disabled', hint: 'Never opens on its own.' },
+      { v: 'login', label: 'On login', hint: 'Runs in the background from login — Loft starts automatically.' },
+      { v: 'launch', label: 'On launching Loft', hint: 'Loads only when you open Loft, not at login.' },
+    ] as o (o.v)}
+      <label class="radio">
+        <input type="radio" name={`autoopen-${id}`} value={o.v}
+          checked={svc.autoOpen === o.v}
+          onchange={() => set({ autoOpen: o.v as 'disabled' | 'login' | 'launch' })} />
+        <span><strong>{o.label}</strong><em>{o.hint}</em></span>
+      </label>
+    {/each}
+  </fieldset>
   <!-- Right here, not on the Settings page: the whole point of this feature is that
-       ticking the box above never again claims something that isn't happening. Gated on
-       this service's own flag so it only appears to someone it actually affects. -->
-  {#if svc.openOnStartup && hubState.globals.autostartBlocked}
+       choosing "On login" never claims something that isn't happening. Gated on this
+       service's own mode so it only appears to someone it actually affects. -->
+  {#if svc.autoOpen === 'login' && hubState.globals.autostartBlocked}
     <!-- "Run in Background" is the real control: GNOME's Apps panel has no autostart
          row (cc-applications-panel only exposes the portal's `background` permission),
          and the Background portal bundles the autostart grant into it. -->
@@ -122,6 +133,12 @@
   .field input { padding: 8px; border-radius: 8px; border: 1px solid var(--divider); background: var(--bg); color: var(--fg); }
   .toggle { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
   .toggle span { flex: 1; }
+  .autoopen { border: 1px solid var(--divider); border-radius: 8px; padding: 4px 12px 8px; margin: 12px 0; }
+  .autoopen legend { padding: 0 6px; font-size: 0.85em; opacity: 0.7; }
+  .radio { display: flex; align-items: flex-start; gap: 10px; padding: 6px 0; }
+  .radio input { margin-top: 3px; }
+  .radio span { display: flex; flex-direction: column; gap: 1px; }
+  .radio em { opacity: 0.6; font-style: normal; font-size: 0.85em; }
   .warn { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid #e5a50a; background: #e5a50a1a; font-size: 0.9em; }
   .danger { margin-top: 24px; border: 0; border-radius: 999px; padding: 8px 18px; background: #c01c28; color: #fff; cursor: pointer; }
   .remove-msg { margin: 0 0 12px; }

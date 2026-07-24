@@ -2,6 +2,9 @@ import type { TrayBackend } from '../main/trayBackend';
 
 export type { TrayBackend };
 
+/** Per-service auto-open mode. Absent on disk = 'disabled'. */
+export type AutoOpen = 'disabled' | 'login' | 'launch';
+
 export interface HubService {
   id: string;
   /** Registry kind — what the icon swatches and the badge parser belong to. */
@@ -18,7 +21,7 @@ export interface HubService {
   badge: number;
   badgesEnabled: boolean;
   dnd: boolean;
-  openOnStartup: boolean;
+  autoOpen: AutoOpen;
   customUrl: string;
   launcher: boolean;
   /** 'brand' | a variant colour key | 'custom'. */
@@ -45,7 +48,7 @@ export interface HubState { services: HubService[]; kinds: HubKind[]; globals: H
 export interface OpResult { ok: boolean; error?: string }
 
 export interface ServicePatch {
-  openOnStartup?: boolean;
+  autoOpen?: AutoOpen;
   badgesEnabled?: boolean;
   dnd?: boolean;
   customUrl?: string;

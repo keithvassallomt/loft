@@ -58,16 +58,20 @@ describe('buildHubState', () => {
     expect(wa.badgesEnabled).toBe(false);
   });
 
-  it('derives running/visible/dnd/openOnStartup/customUrl + globals', () => {
+  it('derives running/visible/dnd/autoOpen/customUrl + globals', () => {
     const config: LoftConfig = {
-      services: { telegram: { dnd: true, openOnStartup: true, customUrl: 'https://t' } },
+      services: {
+        telegram: { dnd: true, openOnStartup: true, customUrl: 'https://t' }, // legacy → 'login'
+        slack: { autoOpen: 'launch' },
+      },
     };
     const s = buildHubState({
       ...base(config), trayBackend: 'sni', autostartBlocked: true,
       running: (id) => id === 'telegram', visible: (id) => id === 'telegram',
     });
     const tg = s.services.find((x) => x.id === 'telegram')!;
-    expect(tg).toMatchObject({ running: true, visible: true, dnd: true, openOnStartup: true, customUrl: 'https://t' });
+    expect(tg).toMatchObject({ running: true, visible: true, dnd: true, autoOpen: 'login', customUrl: 'https://t' });
+    expect(s.services.find((x) => x.id === 'slack')!.autoOpen).toBe('launch');
     expect(s.globals).toEqual({ trayBackend: 'sni', autostartBlocked: true, debug: false });
   });
 
