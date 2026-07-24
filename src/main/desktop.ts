@@ -1,6 +1,8 @@
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ServiceKind } from './registry';
+import type { ServiceInstance } from './instances';
+import { BRAND_ICON, CUSTOM_ICON } from './instances';
+import { variantPngPath } from './icons';
 import { applicationsDir, iconsDir } from './paths';
 
 type Env = NodeJS.ProcessEnv;
@@ -34,13 +36,13 @@ export function isDevExec(exec: string, env: Env = process.env): boolean {
   return !env.APPIMAGE && (exec.includes('/node_modules/') || exec.endsWith('/electron'));
 }
 
-export function serviceLauncherContent(def: ServiceKind, exec: string, iconPath: string): string {
+export function serviceLauncherContent(inst: ServiceInstance, exec: string, iconPath: string): string {
   return (
     `[Desktop Entry]\n` +
     `Type=Application\n` +
-    `Name=${def.displayName}\n` +
-    `Comment=Open ${def.displayName} via Loft\n` +
-    `Exec=${exec} --service=${def.id}\n` +
+    `Name=${inst.displayName}\n` +
+    `Comment=Open ${inst.displayName} via Loft\n` +
+    `Exec=${exec} --service=${inst.id}\n` +
     `Icon=${iconPath}\n` +
     `Terminal=false\n` +
     `Categories=Network;InstantMessaging;\n`
@@ -60,14 +62,36 @@ export function hubDesktopContent(exec: string, iconPath: string): string {
   );
 }
 
-/** Copy the bundled per-service PNG into the user's loft icons dir; return the dest path. */
-export function deployServiceIcon(def: ServiceKind, opts: { env?: Env; iconSourceDir: string }): string {
+/**
+ * Put this instance's icon where everything that needs a real file can find it:
+ * `~/.local/share/loft/icons/<id>.png`. Returns that path either way.
+ *
+ * Not just for launchers any more. A second instance has no bundled `<id>.png`, so
+ * without this its rail icon, its notification avatar and its `.desktop` all point at
+ * nothing — which is why every add and every icon change calls it.
+ *
+ * A custom icon is left untouched: main wrote that file from the user's own image, and
+ * there is no source left to re-copy from.
+ */
+export function deployInstanceIcon(
+  inst: ServiceInstance,
+  opts: { env?: Env; iconSourceDir: string },
+): string {
   const dir = iconsDir(opts.env);
+  const dst = join(dir, `${inst.id}.png`);
+  if (inst.icon === CUSTOM_ICON) return dst;
   mkdirSync(dir, { recursive: true });
-  const dst = join(dir, `${def.id}.png`);
-  const srcFile = join(opts.iconSourceDir, `${def.id}.png`);
-  if (existsSync(srcFile)) copyFileSync(srcFile, dst);
+  const src = inst.icon === BRAND_ICON
+    ? join(opts.iconSourceDir, `${inst.kind}.png`)
+    : variantPngPath(opts.iconSourceDir, inst.kind, inst.icon);
+  if (existsSync(src)) copyFileSync(src, dst);
   return dst;
+}
+
+/** Drop a removed instance's deployed icon. Absent is fine — the deploy may never have run. */
+export function removeInstanceIcon(id: string, env: Env = process.env): void {
+  const p = join(iconsDir(env), `${id}.png`);
+  if (existsSync(p)) rmSync(p, { force: true });
 }
 
 /** Where a service's launcher lives. Keyed by id: config keys are ids, and may
@@ -76,8 +100,8 @@ export function serviceLauncherPath(id: string, env?: Env): string {
   return join(applicationsDir(env), `loft-${id}.desktop`);
 }
 
-function launcherPath(def: ServiceKind, env?: Env): string {
-  return serviceLauncherPath(def.id, env);
+function launcherPath(inst: ServiceInstance, env?: Env): string {
+  return serviceLauncherPath(inst.id, env);
 }
 
 /**
@@ -92,24 +116,24 @@ function launcherPath(def: ServiceKind, env?: Env): string {
  * doing it here covers every caller at once.
  */
 export function writeServiceLauncher(
-  def: ServiceKind,
+  inst: ServiceInstance,
   opts: { env?: Env; execPath?: string; iconSourceDir: string },
 ): void {
   const env = opts.env ?? process.env;
   const exec0 = opts.execPath ?? process.execPath;
   if (isDevExec(exec0, env)) {
-    console.debug(`Dev run (${exec0}) — not writing ${def.id}'s launcher`);
+    console.debug(`Dev run (${exec0}) — not writing ${inst.id}'s launcher`);
     return;
   }
-  const icon = deployServiceIcon(def, { env: opts.env, iconSourceDir: opts.iconSourceDir });
+  const icon = deployInstanceIcon(inst, { env: opts.env, iconSourceDir: opts.iconSourceDir });
   const dir = applicationsDir(opts.env);
   mkdirSync(dir, { recursive: true });
   const exec = desktopExec({ env: opts.env, execPath: opts.execPath });
-  writeFileSync(launcherPath(def, opts.env), serviceLauncherContent(def, exec, icon), 'utf8');
+  writeFileSync(launcherPath(inst, opts.env), serviceLauncherContent(inst, exec, icon), 'utf8');
 }
 
-export function removeServiceLauncher(def: ServiceKind, env: Env = process.env): void {
-  const p = launcherPath(def, env);
+export function removeServiceLauncher(inst: ServiceInstance, env: Env = process.env): void {
+  const p = launcherPath(inst, env);
   if (existsSync(p)) rmSync(p, { force: true });
 }
 

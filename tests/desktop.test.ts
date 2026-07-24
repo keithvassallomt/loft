@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   isFlatpak, desktopExec, isDevExec, serviceLauncherContent, hubDesktopContent,
-  writeServiceLauncher, removeServiceLauncher, deployServiceIcon, ensureHubDesktopEntry,
+  writeServiceLauncher, removeServiceLauncher, deployInstanceIcon, removeInstanceIcon, ensureHubDesktopEntry,
 } from '../src/main/desktop';
 import { getKind } from '../src/main/registry';
 
 const wa = getKind('whatsapp')!;
+// The bare-kind instance (account #1): same id/displayName as the registry entry, brand icon.
+const waInst = { ...wa, kind: 'whatsapp', dbusSegment: 'WhatsApp', icon: 'brand' };
 const tmps: string[] = [];
 function tmp(): string { const d = mkdtempSync(join(tmpdir(), 'loft-')); tmps.push(d); return d; }
 afterEach(() => { for (const d of tmps.splice(0)) rmSync(d, { recursive: true, force: true }); });
@@ -50,7 +52,7 @@ describe('isDevExec', () => {
 
 describe('desktop content', () => {
   it('service launcher has Exec --service and the icon path', () => {
-    const c = serviceLauncherContent(wa, '/usr/bin/loft', '/i/whatsapp.png');
+    const c = serviceLauncherContent(waInst, '/usr/bin/loft', '/i/whatsapp.png');
     expect(c).toContain('[Desktop Entry]');
     expect(c).toContain('Name=WhatsApp');
     expect(c).toContain('Exec=/usr/bin/loft --service=whatsapp');
@@ -73,16 +75,16 @@ describe('desktop writers', () => {
     writeFileSync(join(src, 'whatsapp.png'), 'PNG');
     const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
 
-    const iconDst = deployServiceIcon(wa, { env, iconSourceDir: src });
+    const iconDst = deployInstanceIcon(waInst, { env, iconSourceDir: src });
     expect(existsSync(iconDst)).toBe(true);
     expect(readFileSync(iconDst, 'utf8')).toBe('PNG');
 
-    writeServiceLauncher(wa, { env, execPath: '/usr/bin/loft', iconSourceDir: src });
+    writeServiceLauncher(waInst, { env, execPath: '/usr/bin/loft', iconSourceDir: src });
     const launcher = join(data, 'applications', 'loft-whatsapp.desktop');
     expect(existsSync(launcher)).toBe(true);
     expect(readFileSync(launcher, 'utf8')).toContain('Exec=/usr/bin/loft --service=whatsapp');
 
-    removeServiceLauncher(wa, env);
+    removeServiceLauncher(waInst, env);
     expect(existsSync(launcher)).toBe(false);
   });
 });
@@ -138,7 +140,7 @@ describe('writeServiceLauncher self-heal', () => {
     const p = join(apps, 'loft-whatsapp.desktop');
     writeFileSync(p, '[Desktop Entry]\nExec=/old/loft --service whatsapp\nIcon=loft-whatsapp\n');
 
-    writeServiceLauncher(wa, { env, execPath: '/usr/bin/loft', iconSourceDir: iconSrc() });
+    writeServiceLauncher(waInst, { env, execPath: '/usr/bin/loft', iconSourceDir: iconSrc() });
 
     const c = readFileSync(p, 'utf8');
     expect(c).toContain('Exec=/usr/bin/loft --service=whatsapp');
@@ -151,7 +153,7 @@ describe('writeServiceLauncher self-heal', () => {
     const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
     const p = join(data, 'applications', 'loft-whatsapp.desktop');
     expect(existsSync(p)).toBe(false);
-    writeServiceLauncher(wa, { env, execPath: '/usr/bin/loft', iconSourceDir: iconSrc() });
+    writeServiceLauncher(waInst, { env, execPath: '/usr/bin/loft', iconSourceDir: iconSrc() });
     expect(existsSync(p)).toBe(true);
   });
 
@@ -163,7 +165,7 @@ describe('writeServiceLauncher self-heal', () => {
     const data = tmp();
     const env = { XDG_DATA_HOME: data, FLATPAK_ID: 'chat.loft.Loft' } as NodeJS.ProcessEnv;
     const p = join(data, 'applications', 'loft-whatsapp.desktop');
-    writeServiceLauncher(wa, {
+    writeServiceLauncher(waInst, {
       env, execPath: '/app/main/node_modules/electron/dist/electron', iconSourceDir: iconSrc(),
     });
     expect(existsSync(p)).toBe(true);
@@ -177,7 +179,7 @@ describe('writeServiceLauncher self-heal', () => {
     const data = tmp();
     const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
     const p = join(data, 'applications', 'loft-whatsapp.desktop');
-    writeServiceLauncher(wa, {
+    writeServiceLauncher(waInst, {
       env, execPath: '/home/x/loft/node_modules/electron/dist/electron', iconSourceDir: iconSrc(),
     });
     expect(existsSync(p)).toBe(false);
@@ -187,10 +189,64 @@ describe('writeServiceLauncher self-heal', () => {
     const data = tmp();
     const env = { XDG_DATA_HOME: data, APPIMAGE: '/a/Loft.AppImage' } as NodeJS.ProcessEnv;
     const p = join(data, 'applications', 'loft-whatsapp.desktop');
-    writeServiceLauncher(wa, {
+    writeServiceLauncher(waInst, {
       env, execPath: '/tmp/.mount_x/electron', iconSourceDir: iconSrc(),
     });
     expect(existsSync(p)).toBe(true);
     expect(readFileSync(p, 'utf8')).toContain('Exec=/a/Loft.AppImage --service=whatsapp');
+  });
+});
+
+describe('per-instance launchers and icons', () => {
+  it('names the launcher after the instance, not the kind', () => {
+    const inst = { ...wa, id: 'whatsapp-2', kind: 'whatsapp', displayName: 'Work', dbusSegment: 'WhatsApp2', icon: 'rose' };
+    const out = serviceLauncherContent(inst, '/usr/bin/loft', '/icons/whatsapp-2.png');
+    expect(out).toContain('Name=Work\n');
+    expect(out).toContain('Comment=Open Work via Loft\n');
+    expect(out).toContain('Exec=/usr/bin/loft --service=whatsapp-2\n');
+    expect(out).toContain('Icon=/icons/whatsapp-2.png\n');
+  });
+
+  it('deploys a variant instance icon under the INSTANCE id', () => {
+    // The rail asks for loft://icon/whatsapp-2, and no bundled whatsapp-2.png exists —
+    // so this copy is what stops a second account rendering a broken image.
+    const data = tmp();
+    const src = tmp();
+    mkdirSync(join(src, 'variants'), { recursive: true });
+    writeFileSync(join(src, 'variants', 'whatsapp-rose.png'), 'ROSE');
+    const inst = { ...wa, id: 'whatsapp-2', kind: 'whatsapp', displayName: 'Work', dbusSegment: 'WhatsApp2', icon: 'rose' };
+    const dst = deployInstanceIcon(inst, { env: { XDG_DATA_HOME: data } as NodeJS.ProcessEnv, iconSourceDir: src });
+    expect(dst).toBe(join(data, 'loft', 'icons', 'whatsapp-2.png'));
+    expect(readFileSync(dst, 'utf8')).toBe('ROSE');
+  });
+
+  it('deploys the brand PNG when the instance uses the brand icon', () => {
+    const data = tmp();
+    const src = tmp();
+    writeFileSync(join(src, 'whatsapp.png'), 'BRAND');
+    const inst = { ...wa, id: 'whatsapp', kind: 'whatsapp', displayName: 'WhatsApp', dbusSegment: 'WhatsApp', icon: 'brand' };
+    const dst = deployInstanceIcon(inst, { env: { XDG_DATA_HOME: data } as NodeJS.ProcessEnv, iconSourceDir: src });
+    expect(readFileSync(dst, 'utf8')).toBe('BRAND');
+  });
+
+  it('leaves a custom icon alone — main already wrote it, and there is no source to re-copy', () => {
+    const data = tmp();
+    const icons = join(data, 'loft', 'icons');
+    mkdirSync(icons, { recursive: true });
+    writeFileSync(join(icons, 'whatsapp-2.png'), 'MINE');
+    const inst = { ...wa, id: 'whatsapp-2', kind: 'whatsapp', displayName: 'Work', dbusSegment: 'WhatsApp2', icon: 'custom' };
+    deployInstanceIcon(inst, { env: { XDG_DATA_HOME: data } as NodeJS.ProcessEnv, iconSourceDir: tmp() });
+    expect(readFileSync(join(icons, 'whatsapp-2.png'), 'utf8')).toBe('MINE');
+  });
+
+  it('removeInstanceIcon deletes the deployed file and tolerates its absence', () => {
+    const data = tmp();
+    const env = { XDG_DATA_HOME: data } as NodeJS.ProcessEnv;
+    const icons = join(data, 'loft', 'icons');
+    mkdirSync(icons, { recursive: true });
+    writeFileSync(join(icons, 'whatsapp-2.png'), 'x');
+    removeInstanceIcon('whatsapp-2', env);
+    expect(existsSync(join(icons, 'whatsapp-2.png'))).toBe(false);
+    expect(() => removeInstanceIcon('whatsapp-2', env)).not.toThrow();
   });
 });

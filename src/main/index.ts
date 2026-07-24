@@ -26,6 +26,7 @@ import { addService, removeService } from './install';
 import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
 import { createSignalShutdown } from './shutdown';
 import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath } from './desktop';
+import type { ServiceInstance } from './instances';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
 import { RAIL_WIDTH, type Rect } from './layout';
@@ -47,6 +48,13 @@ import type { HubState, ServicePatch } from '../shared/hubTypes';
 // so this shim keeps ~28 call sites stable across that switch.
 const getService = (id: string): ServiceKind | undefined => getKind(id);
 const listServices = (): readonly ServiceKind[] => listKinds();
+
+// TEMPORARY (Task 6 → replaced in Task 10): index.ts still deals in kinds, but
+// writeServiceLauncher/removeServiceLauncher now want an instance (Task 6). Fake up a
+// bare-kind instance (account #1: id = kind id, brand icon) so this file compiles until
+// Task 10 makes index.ts instance-aware for real.
+const asInstance = (d: ServiceKind): ServiceInstance =>
+  ({ ...d, kind: d.id, dbusSegment: d.displayName.replace(/\s+/g, ''), icon: 'brand' });
 
 app.setName('Loft');
 app.setAppUserModelId('chat.loft.Loft');
@@ -424,8 +432,8 @@ function setServiceSetting(id: string, patch: ServicePatch): void {
   if (patch.launcher !== undefined) {
     const d = getService(id);
     if (d) {
-      if (patch.launcher) writeServiceLauncher(d, { execPath: process.execPath, iconSourceDir });
-      else removeServiceLauncher(d);
+      if (patch.launcher) writeServiceLauncher(asInstance(d), { execPath: process.execPath, iconSourceDir });
+      else removeServiceLauncher(asInstance(d));
     }
   }
   if (patch.customUrl !== undefined) {
@@ -1339,8 +1347,8 @@ if (!app.requestSingleInstanceLock()) {
       Object.keys(config.services),
       (id) => config.services[id]?.launcher === true,
       {
-        write: (id) => { const d = getService(id); if (d) writeServiceLauncher(d, { execPath: process.execPath, iconSourceDir }); },
-        remove: (id) => { const d = getService(id); if (d) removeServiceLauncher(d); },
+        write: (id) => { const d = getService(id); if (d) writeServiceLauncher(asInstance(d), { execPath: process.execPath, iconSourceDir }); },
+        remove: (id) => { const d = getService(id); if (d) removeServiceLauncher(asInstance(d)); },
       },
     );
 

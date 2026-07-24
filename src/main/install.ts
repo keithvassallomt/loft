@@ -2,9 +2,17 @@ import { existsSync, rmSync } from 'node:fs';
 import type { ServiceKind } from './registry';
 import type { LoftConfig } from './config';
 import { removeServiceLauncher } from './desktop';
+import type { ServiceInstance } from './instances';
 import { partitionDir } from './paths';
 
 type Env = NodeJS.ProcessEnv;
+
+// TEMPORARY (Task 6 → replaced in Task 10): install.ts still deals in kinds, but
+// removeServiceLauncher now wants an instance (Task 6). Fake up a bare-kind instance
+// (account #1: id = kind id, brand icon) so this file compiles until Task 10 makes
+// install.ts instance-aware for real.
+const asInstance = (d: ServiceKind): ServiceInstance =>
+  ({ ...d, kind: d.id, dbusSegment: d.displayName.replace(/\s+/g, ''), icon: 'brand' });
 
 export function removePartitionData(id: string, env: Env = process.env): void {
   const dir = partitionDir(id, env);
@@ -25,7 +33,7 @@ export function removeService(
   deleteData: boolean,
   env: Env = process.env,
 ): void {
-  removeServiceLauncher(def, env);
+  removeServiceLauncher(asInstance(def), env);
   delete cfg.services[def.id];
   if (deleteData) removePartitionData(def.id, env);
 }
