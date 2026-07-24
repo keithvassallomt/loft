@@ -1,6 +1,7 @@
 import { BrowserWindow, WebContentsView } from 'electron';
 import { join } from 'node:path';
 import type { ServiceKind } from './registry';
+import type { ServiceInstance } from './instances';
 import type { LoftConfig } from './config';
 import { computeLayout } from './layout';
 import { formatWindowTitle } from './serviceTitle';
@@ -30,7 +31,7 @@ export interface ServiceWindow extends ServiceHost {
 }
 
 export function createServiceWindow(
-  def: ServiceKind,
+  def: ServiceInstance,
   cfg: LoftConfig,
   opts: { minimized: boolean; onQuit: () => boolean; view?: ServiceView },
 ): ServiceWindow {

@@ -118,7 +118,7 @@ function make(grid: GridNode | null | undefined, attachIds: string[]): Harness {
 
   const deps: LoftWindowDeps = {
     cfg,
-    services: DEFS as never,
+    services: () => DEFS as never,
     onQuit: () => true,
     badge: () => 0,
     // The moment the Critical defect lives in: mid-detach, config has NOT been flipped yet

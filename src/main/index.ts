@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
-import { getKind, listKinds, KINDS, ServiceKind, effectiveUrl } from './registry';
+import { getKind, KINDS, ServiceKind, effectiveUrl } from './registry';
 import { loadConfig, saveConfig, configPath, LoftConfig, reopenDetachedEnabled } from './config';
 import { createServiceWindow, ServiceWindow } from './serviceWindow';
 import { createLoftWindow, LOFT_WINDOW_KEY, type LoftWindow } from './loftWindow';
@@ -26,7 +26,8 @@ import { addInstance, removeInstance } from './install';
 import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
 import { createSignalShutdown } from './shutdown';
 import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath } from './desktop';
-import { dbusSegmentFor, listInstances, type ServiceInstance } from './instances';
+import { dbusSegmentFor, listInstances, resolveInstance, type ServiceInstance } from './instances';
+import { scanVariants, iconCandidates } from './icons';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
 import { RAIL_WIDTH, type Rect } from './layout';
@@ -44,17 +45,10 @@ import { beginGutterDrag, type GutterDrag } from './gutterDrag';
 import { gridDropPlan, type GridDropPlan } from './gridDrop';
 import type { HubState, ServicePatch } from '../shared/hubTypes';
 
-// Instance resolution goes here in Task 10. Today a "service" is still a registry kind,
-// so this shim keeps ~28 call sites stable across that switch.
-const getService = (id: string): ServiceKind | undefined => getKind(id);
-const listServices = (): readonly ServiceKind[] => listKinds();
-
-// TEMPORARY (Task 6 → replaced in Task 10): index.ts still deals in kinds, but
-// writeServiceLauncher/removeServiceLauncher now want an instance (Task 6). Fake up a
-// bare-kind instance (account #1: id = kind id, brand icon) so this file compiles until
-// Task 10 makes index.ts instance-aware for real.
-const asInstance = (d: ServiceKind): ServiceInstance =>
-  ({ ...d, kind: d.id, dbusSegment: d.displayName.replace(/\s+/g, ''), icon: 'brand' });
+// A "service" is an ACCOUNT now. Every call site below reads the same fields it always
+// did; what changed is that `id` names an account and `displayName` is the user's.
+const getService = (id: string): ServiceInstance | undefined => resolveInstance(id, config);
+const listServices = (): ServiceInstance[] => listInstances(config);
 
 app.setName('Loft');
 app.setAppUserModelId('chat.loft.Loft');
@@ -77,12 +71,15 @@ let quitting = false;
 let tray: Tray | undefined;
 let notifications: Notifications | undefined;
 let bgStatus: { refresh(): void } | undefined;
-// Set once chat.loft.Loft's D-Bus service comes up. Unused until Task 10 wires add/remove
-// through exportInstance/unexportInstance — held here now so that wiring is a call site
-// change, not a re-plumb.
+// Set once chat.loft.Loft's D-Bus service comes up — undefined until whenReady's startup
+// sequence reaches it, so every add/remove call site optional-chains it (a hub action
+// taken in that window must not throw, just skip the D-Bus side of the update).
 let dbusApi: LoftDbus | undefined;
 // Bundled PNGs live in dist/assets/icons (copy-assets); one dir up from dist/main.
 const iconSourceDir = join(__dirname, '..', 'assets', 'icons');
+// Read once: the variant set is fixed for a build, and a readdir per icon lookup would
+// run on every rail repaint.
+const variantIndex = scanVariants(iconSourceDir);
 
 // GNOME-only: bypasses focus-stealing prevention (FocusWindow/HideWindow) and
 // hides minimized Loft windows from alt-tab/overview/dock (SetLoftWindows).
@@ -113,11 +110,17 @@ if (kde) {
 function focusExternal(key: string): void { helper?.focusWindow(key); kwin?.focusWindow(key); }
 function hideExternal(key: string): void { helper?.hideWindow(key); kwin?.hideWindow(key); }
 
-// dist/main → dist/assets/icons/<id>.png (copied by copy-assets; same deployed
-// dir the tray's dbusMenu/icon modules read from — those live one directory
-// deeper, under dist/main/tray, hence their extra '..').
+/**
+ * The best existing icon file for a service, for consumers that need a real path
+ * (notifications). Falls back through the deployed instance icon, its variant, and the
+ * kind's brand PNG — a second account has no bundled `<id>.png` of its own.
+ */
 function serviceIconPath(id: string): string {
-  return join(__dirname, '..', 'assets', 'icons', `${id}.png`);
+  const c = config.services[id];
+  const candidates = iconCandidates({
+    iconsDir: iconsDir(), assetsDir: iconSourceDir, id, kind: c?.kind ?? id, icon: c?.icon,
+  });
+  return candidates.find((p) => existsSync(p)) ?? candidates[candidates.length - 1];
 }
 
 const config: LoftConfig = loadConfig(configPath());
@@ -158,7 +161,7 @@ const wantsOwnWindow = (id: string): boolean =>
 const gridBefore = config.grid ?? null;
 const gridPruned = prune(
   gridBefore,
-  validGridServices(KINDS, (id) => config.services[id] !== undefined, wantsOwnWindow),
+  validGridServices(listServices(), (id) => config.services[id] !== undefined, wantsOwnWindow),
 );
 if (gridPruned !== gridBefore) {
   config.grid = gridPruned;
@@ -179,7 +182,7 @@ if (gridPruned !== gridBefore) {
 const phantomServices = Object.keys(config.services).filter((id) => !getService(id));
 if (phantomServices.length > 0) {
   console.warn(
-    `Ignoring unknown service(s) in config.json: ${phantomServices.join(', ')} — no such service in the registry`,
+    `Ignoring unknown service(s) in config.json: ${phantomServices.join(', ')} — no such service kind`,
   );
 }
 
@@ -259,7 +262,7 @@ function notifyHub(): void { loft?.sendManager('hub:state', hubState()); }
 
 /** Create (or reuse) a service's OWN window. Reached only through placeService — go via
  *  that (or showService), so nothing can duplicate an attached service into a window. */
-function openService(def: ServiceKind, minimized: boolean, view?: ServiceView): ServiceHost {
+function openService(def: ServiceInstance, minimized: boolean, view?: ServiceView): ServiceHost {
   // The reuse check goes through hostOf, not the windows map: a service can live in a
   // shared host now, so "is it already open?" must consult every host.
   const existing = hostOf(def.id);
@@ -304,7 +307,7 @@ function openService(def: ServiceKind, minimized: boolean, view?: ServiceView): 
 
 /** Load a service into the Loft window's rail. Does NOT select it — attaching is not
  *  showing (the open-on-startup set attaches without stealing the manager's place). */
-function attachService(def: ServiceKind, view?: ServiceView): ServiceHost {
+function attachService(def: ServiceInstance, view?: ServiceView): ServiceHost {
   const l = loft!;
   const host = l.attach(def, view);
   tray?.addService({ id: def.id, displayName: def.displayName, segment: dbusSegmentFor(def.id, config), dnd: config.services[def.id]?.dnd ?? false });
@@ -330,8 +333,15 @@ function placeService(def: ServiceKind, minimized: boolean): ServiceHost {
   // icon, per opt-in-off launcher default — no launcher write here) so a directly-launched
   // service shows up as Installed in the hub (spec §6f). Here rather than in openService so
   // an attached first launch installs itself too.
-  if (!config.services[def.id]) {
-    addInstance(def, config, { iconSourceDir });
+  //
+  // `def` may be a bare registry KIND (resolveServiceFromArgs's uninstalled-kind fallback),
+  // never a real ServiceInstance until it's actually in config — so resolve (or install,
+  // which hands the resolved instance straight back) rather than passing `def` itself
+  // onward. Every downstream host needs the real thing: the preload argument is
+  // `inst.kind`, and a bare kind has no such field.
+  let inst = getService(def.id);
+  if (!inst) {
+    inst = addInstance(def, config, { iconSourceDir });
     saveConfig(configPath(), config);
   }
   // No Loft window yet ⇒ its own window is the only host that exists. Reachable for real:
@@ -341,8 +351,8 @@ function placeService(def: ServiceKind, minimized: boolean): ServiceHost {
   // configured detached (the rail draws it ⧉ and the menu's checkbox reads unticked, since
   // that follows config). Recoverable: Unload it, then click it again. Degrading to a real
   // window beats refusing to open the service at all.
-  if (wantsOwnWindow(def.id) || !loft) return openService(def, minimized);
-  return attachService(def);
+  if (wantsOwnWindow(inst.id) || !loft) return openService(inst, minimized);
+  return attachService(inst);
 }
 
 /** Make a service visible wherever it lives, loading it if it is asleep. The single entry
@@ -436,8 +446,8 @@ function setServiceSetting(id: string, patch: ServicePatch): void {
   if (patch.launcher !== undefined) {
     const d = getService(id);
     if (d) {
-      if (patch.launcher) writeServiceLauncher(asInstance(d), { execPath: process.execPath, iconSourceDir });
-      else removeServiceLauncher(asInstance(d));
+      if (patch.launcher) writeServiceLauncher(d, { execPath: process.execPath, iconSourceDir });
+      else removeServiceLauncher(d);
     }
   }
   if (patch.customUrl !== undefined) {
@@ -703,9 +713,15 @@ function reconcileAutostart(): void {
     .then(() => notifyHub());
 }
 
-function resolveServiceFromArgs(argv: string[]): ServiceKind | undefined {
+// `--service` names an ACCOUNT once it's installed, but the very first launch of a kind
+// nobody has added yet is exactly what placeService's implicit-Add (spec §6f) has to
+// resolve too — resolveInstance alone would come back empty for it since nothing is in
+// config.services yet. Fall back to the bare registry kind so a fresh `loft --service=X`
+// still installs and launches X instead of silently landing on the manager.
+function resolveServiceFromArgs(argv: string[]): ServiceKind | ServiceInstance | undefined {
   const { service } = parseArgs(argv);
-  return service ? getService(service) : undefined;
+  if (!service) return undefined;
+  return getService(service) ?? getKind(service);
 }
 
 // Titlebar/badge/notify IPC comes from a view's preload; map the sender's webContents id
@@ -1133,15 +1149,29 @@ if (!app.requestSingleInstanceLock()) {
   registerHubIpc(ipcMain, {
     getState: hubState,
     openService: (id) => { const d = getService(id); if (d) showService(d); },
-    addService: (id, customUrl) => {
-      const d = getService(id); if (!d) return;
-      addInstance(d, config, { customUrl, iconSourceDir });
+    // `id` here is a KIND id, not an account id — the renderer doesn't yet have a way to
+    // ask for a 2nd+ account of one (Task 11 lands that UI), so today it always names the
+    // kind whose first account is being created. addInstance allocates the actual account
+    // id from it.
+    addService: (kindId, customUrl) => {
+      const kind = getKind(kindId);
+      if (!kind) return;
+      const inst = addInstance(kind, config, {
+        customUrl, variants: variantIndex[kind.id] ?? [], iconSourceDir,
+      });
       saveConfig(configPath(), config);
+      // A new account must reach the tray and D-Bus now — not at next launch. Before
+      // instances, adding a service was rare enough that waiting was invisible; adding
+      // a second WhatsApp and finding it missing from the tray menu is not.
+      dbusApi?.exportInstance(inst);
+      tray?.addService({
+        id: inst.id, displayName: inst.displayName, dnd: false, segment: inst.dbusSegment,
+      });
       loft?.refreshRail();
       notifyHub();
     },
     removeService: (id, deleteData) => {
-      const d = getService(id); if (!d) return;
+      const inst = getService(id); if (!inst) return;
       quitService(id);
       // quitService returns early when the service is loaded NOWHERE, so loft.unload — and
       // the prune inside it — never runs. Grid leaves are asleep in the ordinary case
@@ -1149,12 +1179,10 @@ if (!app.requestSingleInstanceLock()) {
       // service keeps its leaf, it is persisted, and opening Grid draws a header strip for a
       // service that no longer exists with no page behind it. No-op by identity otherwise.
       loft?.dropFromGrid(id);
-      // TEMPORARY (Task 6 → replaced in Task 10): removeService's `id` is a config key,
-      // which may already name a 2nd+ account, but `d` is still a bare kind — asInstance
-      // fakes up account #1 rather than resolving `id`'s real instance. Fine today because
-      // nothing upstream of this hub IPC can produce an id for a 2nd+ account yet.
-      removeInstance(asInstance(d), config, deleteData);
+      removeInstance(inst, config, deleteData);
       saveConfig(configPath(), config);
+      dbusApi?.unexportInstance(inst);
+      tray?.removeService(id);
       reconcileAutostart();
       loft?.refreshRail();
       notifyHub();
@@ -1204,7 +1232,11 @@ if (!app.requestSingleInstanceLock()) {
     // return the bytes: the main-process global fetch() does NOT support file://.
     protocol.handle('loft', async (req) => {
       const name = new URL(req.url).pathname.replace(/^\/+/, '') || 'loft';
-      for (const file of [join(iconsDir(), `${name}.png`), join(iconSourceDir, `${name}.png`)]) {
+      const c = config.services[name];
+      for (const file of iconCandidates({
+        iconsDir: iconsDir(), assetsDir: iconSourceDir, id: name,
+        kind: c?.kind ?? (getKind(name) ? name : undefined), icon: c?.icon,
+      })) {
         try {
           return new Response(await readFile(file), { headers: { 'content-type': 'image/png' } });
         } catch { /* try the next candidate */ }
@@ -1228,7 +1260,7 @@ if (!app.requestSingleInstanceLock()) {
     try {
       const configured: TrayServiceSeed[] = Object.keys(config.services)
         .map((id) => getService(id))
-        .filter((d): d is ServiceKind => d !== undefined)
+        .filter((d): d is ServiceInstance => d !== undefined)
         .map((d) => ({
           id: d.id,
           displayName: d.displayName,
@@ -1356,8 +1388,8 @@ if (!app.requestSingleInstanceLock()) {
       Object.keys(config.services),
       (id) => config.services[id]?.launcher === true,
       {
-        write: (id) => { const d = getService(id); if (d) writeServiceLauncher(asInstance(d), { execPath: process.execPath, iconSourceDir }); },
-        remove: (id) => { const d = getService(id); if (d) removeServiceLauncher(asInstance(d)); },
+        write: (id) => { const d = getService(id); if (d) writeServiceLauncher(d, { execPath: process.execPath, iconSourceDir }); },
+        remove: (id) => { const d = getService(id); if (d) removeServiceLauncher(d); },
       },
     );
 
@@ -1368,7 +1400,7 @@ if (!app.requestSingleInstanceLock()) {
     // handler is registered at module scope above, so it is already there.
     loft = createLoftWindow({
       cfg: config,
-      services: [...KINDS], // the registry is readonly; the rail wants a plain array
+      services: () => listServices(), // read fresh each refresh — the set changes at runtime
       onQuit: () => quitting,
       badge: (id) => currentBadge.get(id) ?? 0,
       detached: isDetached,
@@ -1440,7 +1472,10 @@ if (!app.requestSingleInstanceLock()) {
     });
 
     const args = parseArgs(process.argv);
-    const def = args.service ? getService(args.service) : undefined;
+    // Same resolver as second-instance's argv handling — a bare, uninstalled kind must
+    // resolve here too, or the app's own first launch of a brand-new service silently
+    // shows the manager instead of installing and opening it (see resolveServiceFromArgs).
+    const def = resolveServiceFromArgs(process.argv);
     // Self-heal installs whose entry doesn't match their flags (e.g. upgrades from
     // the old global-toggle model, or a hand-deleted entry). Hoisted above the
     // --service branch so it runs on *every* launch path, not just the no-service
@@ -1507,10 +1542,9 @@ if (!app.requestSingleInstanceLock()) {
         // subject to Wayland's focus-stealing prevention.
         showWindow: () => { loft?.open(); focusExternal(LOFT_WINDOW_KEY); },
         setGlobalDnd: (enabled) => { setGlobalDnd(enabled); notifications?.setGlobalDnd(enabled); },
-        // Installed accounts, not registry kinds (Task 2's listServices() shim): an
-        // uninstalled service must not get a D-Bus object, and a second account of one
-        // kind needs its own.
-        instances: () => listInstances(config),
+        // Installed accounts, not registry kinds: an uninstalled service must not get a
+        // D-Bus object, and a second account of one kind needs its own.
+        instances: () => listServices(),
       };
       dbusApi = await startLoftDbusService(loftDeps);
     } catch (err) {

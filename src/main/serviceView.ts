@@ -2,6 +2,7 @@ import { BrowserWindow, WebContentsView, session, shell } from 'electron';
 import { join } from 'node:path';
 import type { ServiceKind } from './registry';
 import { effectiveUrl } from './registry';
+import type { ServiceInstance } from './instances';
 import type { LoftConfig } from './config';
 import type { Rect } from './layout';
 import { configureSession } from './session';
@@ -102,7 +103,7 @@ function safeSend(view: WebContentsView, channel: string, ...args: unknown[]): v
  * that `mount()` re-checks, or move the initial load into an explicit start() the
  * host calls after mounting.
  */
-export function createServiceView(def: ServiceKind, cfg: LoftConfig): ServiceView {
+export function createServiceView(def: ServiceInstance, cfg: LoftConfig): ServiceView {
   const partition = `persist:${def.id}`;
   const ses = session.fromPartition(partition);
   configureSession(ses, partition);
@@ -113,7 +114,10 @@ export function createServiceView(def: ServiceKind, cfg: LoftConfig): ServiceVie
       partition,
       backgroundThrottling: false,
       preload: join(__dirname, '../preload/service.js'),
-      additionalArguments: [`--loft-service=${def.id}`],
+      // The KIND, not the instance id: this argument selects the badge parser, the
+      // Messenger/Telegram scrape-only rule and the de-chroming — all properties of the
+      // app, not the account. Routing back to main is by webContents, not by id.
+      additionalArguments: [`--loft-service=${def.kind}`],
       // Sandboxed (a same-origin window.open call popup shares this opener's
       // renderer process; a non-sandboxed WebRTC renderer SIGSEGVs on Intel Xe),
       // but contextIsolation:false so the (sandboxed) preload still shares the
@@ -124,8 +128,10 @@ export function createServiceView(def: ServiceKind, cfg: LoftConfig): ServiceVie
   });
   serviceView.webContents.setUserAgent(ses.getUserAgent());
 
-  // Static de-chrome CSS (the dynamic Messenger-banner bit runs in the preload).
-  const dechromeCss = dechromeCssFor(def.id);
+  // Static de-chrome CSS (the dynamic Messenger-banner bit runs in the preload). Keyed on
+  // the KIND, same reasoning as the preload argument above — a second account of Messenger
+  // or Talk needs its chrome stripped too, and dechromeCssFor only knows kind ids.
+  const dechromeCss = dechromeCssFor(def.kind);
   if (dechromeCss) {
     serviceView.webContents.on('did-finish-load', () => {
       void serviceView.webContents.insertCSS(dechromeCss);
@@ -179,7 +185,9 @@ export function createServiceView(def: ServiceKind, cfg: LoftConfig): ServiceVie
   // same-origin app/auth navigations are not top-level document changes we hijack.
   serviceView.webContents.on('will-navigate', (e, url, isInPlace) => {
     if (isInPlace) return;
-    if (classifyNavigation(def.id, serviceView.webContents.getURL(), url) !== 'external') return;
+    // The KIND, not the account: classifyNavigation's Element/Messenger special cases are
+    // rules about those apps, not about which account of them this is.
+    if (classifyNavigation(def.kind, serviceView.webContents.getURL(), url) !== 'external') return;
     // Only intercept schemes we can actually hand off. For anything else (ftp:, a
     // custom app scheme) let Chromium's own external-protocol handling take it rather
     // than dead-ending the click with a bare preventDefault.

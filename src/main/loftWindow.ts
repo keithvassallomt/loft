@@ -1,5 +1,5 @@
 import { BrowserWindow, WebContentsView, Menu } from 'electron';
-import type { ServiceKind } from './registry';
+import type { ServiceInstance } from './instances';
 import type { LoftConfig } from './config';
 import { computeLayout, RAIL_WIDTH, type Rect } from './layout';
 import { formatWindowTitle } from './serviceTitle';
@@ -30,7 +30,7 @@ export interface LoftWindow {
   hide(): void;
   /** create+mount a view; does NOT select it. Pass a pre-built (live) view to MOVE it in
    *  from a detached window without reloading; omit it to build a fresh one. */
-  attach(def: ServiceKind, view?: ServiceView): ServiceHost;
+  attach(def: ServiceInstance, view?: ServiceView): ServiceHost;
   /** Unmount and hand the still-live view back for re-mounting elsewhere.
    *  ORDERING CONTRACT: call this BEFORE writing `detached: true` to config. It picks
    *  the next tab by locating `id` in the attached list, so a config flag flipped first
@@ -87,7 +87,9 @@ export interface LoftWindow {
 
 export interface LoftWindowDeps {
   cfg: LoftConfig;
-  services: ServiceKind[];
+  /** Installed accounts, read fresh on every refresh — the set changes at runtime (add,
+   *  remove, rename), and a captured array would freeze the rail at startup. */
+  services(): ServiceInstance[];
   /** Never true unless the app is really quitting — close-to-tray depends on it. */
   onQuit(): boolean;
   /** Live unread for a service, ungated (the rail model applies badgesEnabled itself). */
@@ -228,7 +230,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
 
   // --- rail + titlebar state --------------------------------------------------
   const model = (): RailItem[] => buildRailModel({
-    services: deps.services,
+    services: deps.services(),
     config: deps.cfg,
     // A tab of ours, or a live view in its own window — both are loaded, and only the
     // first kind is something this window can see.
@@ -240,7 +242,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
 
   const refreshRail = (): void =>
     safeSend(rail, 'rail:state', buildRailState({
-      services: deps.services,
+      services: deps.services(),
       config: deps.cfg,
       loaded: (id) => views.has(id) || deps.loadedElsewhere(id),
       detached: deps.detached,
@@ -290,8 +292,11 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     const layout = computeGridLayout(deps.cfg.grid ?? null, content);
     const names: Record<string, string> = {};
     const badges: Record<string, number> = {};
+    // Read once per refresh, not once per cell — refreshGrid runs on every pointermove of
+    // a divider drag, and the accessor recomputes the whole instance list from config.
+    const services = deps.services();
     for (const c of layout.cells) {
-      const def = deps.services.find((d) => d.id === c.service);
+      const def = services.find((d) => d.id === c.service);
       names[c.service] = def?.displayName ?? c.service;
       badges[c.service] =
         deps.cfg.services[c.service]?.badgesEnabled === false ? 0 : deps.badge(c.service);
