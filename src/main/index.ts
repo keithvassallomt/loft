@@ -15,7 +15,7 @@ import { Tray, TrayDeps, TrayServiceSeed } from './tray';
 import { startTrayBackend } from './tray/backend';
 import { startNotifications, Notifications } from './notifications';
 import { createShellHelperClient } from './gnome/shellHelper';
-import { startLoftDbusService, type LoftServiceDeps } from './dbus/loftService';
+import { startLoftDbusService, type LoftServiceDeps, type LoftDbus } from './dbus/loftService';
 import { ensureGnomeHelper, defaultHelperInstallDeps } from './gnome/helperInstall';
 import { isGnome, isKde, resolveTrayBackend } from './trayBackend';
 import { createKwinClient, type KwinClient } from './kde/kwin';
@@ -26,7 +26,7 @@ import { addInstance, removeInstance } from './install';
 import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
 import { createSignalShutdown } from './shutdown';
 import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath } from './desktop';
-import { dbusSegmentFor, type ServiceInstance } from './instances';
+import { dbusSegmentFor, listInstances, type ServiceInstance } from './instances';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
 import { RAIL_WIDTH, type Rect } from './layout';
@@ -77,6 +77,10 @@ let quitting = false;
 let tray: Tray | undefined;
 let notifications: Notifications | undefined;
 let bgStatus: { refresh(): void } | undefined;
+// Set once chat.loft.Loft's D-Bus service comes up. Unused until Task 10 wires add/remove
+// through exportInstance/unexportInstance — held here now so that wiring is a call site
+// change, not a re-plumb.
+let dbusApi: LoftDbus | undefined;
 // Bundled PNGs live in dist/assets/icons (copy-assets); one dir up from dist/main.
 const iconSourceDir = join(__dirname, '..', 'assets', 'icons');
 
@@ -1503,8 +1507,12 @@ if (!app.requestSingleInstanceLock()) {
         // subject to Wayland's focus-stealing prevention.
         showWindow: () => { loft?.open(); focusExternal(LOFT_WINDOW_KEY); },
         setGlobalDnd: (enabled) => { setGlobalDnd(enabled); notifications?.setGlobalDnd(enabled); },
+        // Installed accounts, not registry kinds (Task 2's listServices() shim): an
+        // uninstalled service must not get a D-Bus object, and a second account of one
+        // kind needs its own.
+        instances: () => listInstances(config),
       };
-      await startLoftDbusService(loftDeps);
+      dbusApi = await startLoftDbusService(loftDeps);
     } catch (err) {
       console.error('Failed to start chat.loft.Loft D-Bus service:', err);
     }

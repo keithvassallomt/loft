@@ -1,6 +1,5 @@
 import * as dbus from 'dbus-next';
-import { KINDS } from '../registry';
-import { dbusName } from './names';
+import type { ServiceInstance } from '../instances';
 
 const { Interface, ACCESS_READ } = dbus.interface;
 const BUS = 'chat.loft.Loft';
@@ -21,6 +20,8 @@ export interface LoftServiceDeps {
   showWindow(): void;
   /** Toggle global DND (the GNOME-panel "Do Not Disturb" switch calls this). */
   setGlobalDnd(enabled: boolean): void;
+  /** Installed accounts to export at startup. */
+  instances(): ServiceInstance[];
 }
 
 /** Per-service object exported at /chat/loft/<DbusName>, interface chat.loft.Service. */
@@ -67,11 +68,51 @@ LoftRootObject.configureMembers({
   signals: {},
 });
 
-export async function startLoftDbusService(deps: LoftServiceDeps): Promise<void> {
+/** Where a service object lives. One function so the export, the unexport and any
+ *  future consumer cannot drift. */
+export function objectPathFor(segment: string): string {
+  return `/chat/loft/${segment}`;
+}
+
+export interface LoftDbus {
+  exportInstance(inst: ServiceInstance): void;
+  unexportInstance(inst: ServiceInstance): void;
+}
+
+export async function startLoftDbusService(deps: LoftServiceDeps): Promise<LoftDbus> {
   const bus = dbus.sessionBus();
   await bus.requestName(BUS, 0);
   bus.export('/chat/loft/Loft', new LoftRootObject(deps));
-  for (const svc of KINDS) {
-    bus.export(`/chat/loft/${dbusName(svc.displayName)}`, new LoftServiceObject(svc.id, deps));
-  }
+
+  // Exported object per path, so a duplicate segment is reported rather than silently
+  // replacing a live object. Segments are unique by construction; this catches a
+  // hand-edited config that made two ids derive the same one. Keyed by path (not a bare
+  // Set) because dbus-next's unexport wants the same Interface instance back, not just
+  // the path.
+  const exported = new Map<string, LoftServiceObject>();
+
+  const api: LoftDbus = {
+    exportInstance(inst) {
+      const path = objectPathFor(inst.dbusSegment);
+      if (exported.has(path)) {
+        console.warn(`Not exporting ${inst.id}: ${path} is already taken`);
+        return;
+      }
+      const obj = new LoftServiceObject(inst.id, deps);
+      exported.set(path, obj);
+      bus.export(path, obj);
+    },
+    unexportInstance(inst) {
+      const path = objectPathFor(inst.dbusSegment);
+      const obj = exported.get(path);
+      if (!obj) return;
+      exported.delete(path);
+      bus.unexport(path, obj);
+    },
+  };
+
+  // Per INSTANCE, not per registry entry: an uninstalled service no longer has a D-Bus
+  // object, and a second account gets its own.
+  for (const inst of deps.instances()) api.exportInstance(inst);
+  return api;
 }
