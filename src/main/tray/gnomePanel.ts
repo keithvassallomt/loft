@@ -3,6 +3,7 @@ import type { Tray, TrayDeps } from './index';
 import type { ShellHelperClient } from '../gnome/shellHelper';
 
 export interface PanelSnapshot {
+  /** The D-Bus segment, which is also the helper's own key for this row. */
   id: string;
   displayName: string;
   visible: boolean;
@@ -30,7 +31,7 @@ export async function startGnomePanelTray(deps: TrayDeps, helper: ShellHelperCli
   const model = new TrayModel();
   model.setGlobalDnd(deps.globalDnd);
   for (const s of deps.configuredServices)
-    model.addService({ id: s.id, displayName: s.displayName, badge: 0, dnd: s.dnd, visible: s.visible, running: s.running });
+    model.addService({ id: s.id, displayName: s.displayName, segment: s.segment, badge: 0, dnd: s.dnd, visible: s.visible, running: s.running });
 
   // Snapshot of only-running services (they carry the Show/Hide/DND/Quit controls).
   let prev = new Map<string, PanelSnapshot>();
@@ -38,10 +39,10 @@ export async function startGnomePanelTray(deps: TrayDeps, helper: ShellHelperCli
     const mm = model.menuModel();
     const m = new Map<string, PanelSnapshot>();
     for (const r of mm.running) {
-      m.set(r.id, { id: r.id, displayName: r.label, visible: r.visible, badge: 0, dnd: r.dnd });
+      m.set(r.segment, { id: r.segment, displayName: r.label, visible: r.visible, badge: 0, dnd: r.dnd });
     }
     // menuModel doesn't carry raw badge; read it from the model's per-service view.
-    for (const s of model.snapshotServices()) if (m.has(s.id)) m.get(s.id)!.badge = s.badge;
+    for (const s of model.snapshotServices()) if (m.has(s.segment)) m.get(s.segment)!.badge = s.badge;
     return m;
   };
 
@@ -53,7 +54,7 @@ export async function startGnomePanelTray(deps: TrayDeps, helper: ShellHelperCli
   const snapshotAvailable = (): Map<string, PanelSnapshot> => {
     const m = new Map<string, PanelSnapshot>();
     for (const a of model.menuModel().available) {
-      m.set(a.id, { id: a.id, displayName: a.label, visible: false, badge: 0, dnd: false });
+      m.set(a.segment, { id: a.segment, displayName: a.label, visible: false, badge: 0, dnd: false });
     }
     return m;
   };
@@ -116,11 +117,13 @@ export async function startGnomePanelTray(deps: TrayDeps, helper: ShellHelperCli
   });
 
   return {
-    addService: (seed) => model.addService({ id: seed.id, displayName: seed.displayName, badge: 0, dnd: seed.dnd, visible: false, running: false }),
+    addService: (seed) => model.addService({ id: seed.id, displayName: seed.displayName, segment: seed.segment, badge: 0, dnd: seed.dnd, visible: false, running: false }),
     setBadge: (id, n) => model.setBadge(id, n),
     setRunning: (id, running) => model.setRunning(id, running),
     setVisible: (id, visible) => model.setVisible(id, visible),
     setDnd: (id, enabled) => model.setDnd(id, enabled),
     setGlobalDnd: (enabled) => model.setGlobalDnd(enabled),
+    setDisplayName: (id, name) => model.setDisplayName(id, name),
+    removeService: (id) => model.removeService(id),
   };
 }

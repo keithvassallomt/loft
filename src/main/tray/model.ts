@@ -5,6 +5,8 @@ import { type OverlayKind, overlayFor } from './icon';
 export interface ServiceTrayState {
   id: string;
   displayName: string;
+  /** Stable D-Bus object-path segment — what the GNOME panel menu calls back on. */
+  segment: string;
   badge: number;
   dnd: boolean;
   visible: boolean;
@@ -55,6 +57,23 @@ export class TrayModel {
     if (s && s.running !== running) { s.running = running; this.changed(); }
   }
 
+  /** A rename must reach the tray now, not at next launch — this is one of the two
+   *  places (with the window caption) a user checks that a rename took. */
+  setDisplayName(id: string, name: string): void {
+    const s = this.find(id);
+    if (s && s.displayName !== name) { s.displayName = name; this.changed(); }
+  }
+
+  /** Drop a service the user removed. Without this its row survives in the available
+   *  section until the next launch — and with accounts coming and going, that stale row
+   *  is now something a user will actually hit. */
+  removeService(id: string): void {
+    const at = this.services.findIndex((s) => s.id === id);
+    if (at === -1) return;
+    this.services.splice(at, 1);
+    this.changed();
+  }
+
   setGlobalDnd(enabled: boolean): void {
     if (this.globalDnd !== enabled) { this.globalDnd = enabled; this.changed(); }
   }
@@ -82,17 +101,18 @@ export class TrayModel {
       running: running.map((s) => ({
         id: s.id,
         label: s.displayName,
+        segment: s.segment,
         unread: !this.globalDnd && !s.dnd && s.badge > 0,
         dnd: s.dnd,
         visible: s.visible,
       })),
-      available: available.map((s) => ({ id: s.id, label: s.displayName })),
+      available: available.map((s) => ({ id: s.id, label: s.displayName, segment: s.segment })),
     };
   }
 
-  /** Read-only per-service snapshot (id + raw badge) for the GNOME-panel backend. */
-  snapshotServices(): ReadonlyArray<{ id: string; badge: number }> {
-    return this.services.map((s) => ({ id: s.id, badge: s.badge }));
+  /** Read-only per-service snapshot (segment + raw badge) for the GNOME-panel backend. */
+  snapshotServices(): ReadonlyArray<{ segment: string; badge: number }> {
+    return this.services.map((s) => ({ segment: s.segment, badge: s.badge }));
   }
 
   private find(id: string): ServiceTrayState | undefined {

@@ -18,7 +18,7 @@ function currentIds(menu: DbusMenu): number[] {
 
 const running = (): MenuModel => ({
   globalDnd: false,
-  running: [{ id: 'whatsapp', label: 'WhatsApp', unread: false, dnd: false, visible: true }],
+  running: [{ id: 'whatsapp', label: 'WhatsApp', segment: 'WhatsApp', unread: false, dnd: false, visible: true }],
   available: [],
 });
 // Same service, now quit → it moves from the running group to the available group.
@@ -26,7 +26,7 @@ const running = (): MenuModel => ({
 const afterQuit = (): MenuModel => ({
   globalDnd: false,
   running: [],
-  available: [{ id: 'whatsapp', label: 'WhatsApp' }],
+  available: [{ id: 'whatsapp', label: 'WhatsApp', segment: 'WhatsApp' }],
 });
 
 describe('DbusMenu item ids', () => {

@@ -25,7 +25,7 @@ function fakeHelper() {
 }
 
 const deps = (globalDnd: boolean): TrayDeps => ({
-  configuredServices: [{ id: 'slack', displayName: 'Slack', dnd: false, running: true, visible: true }],
+  configuredServices: [{ id: 'slack', displayName: 'Slack', segment: 'slack', dnd: false, running: true, visible: true }],
   globalDnd,
   onToggleService: vi.fn(),
   onLaunchService: vi.fn(),

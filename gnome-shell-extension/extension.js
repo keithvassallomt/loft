@@ -808,7 +808,9 @@ export default class LoftShellHelper extends Extension {
             existing.wmClass === wmClass) {
             return;
         }
-        this._combinedServices.set(name, { displayName, visible, badge, dnd, wmClass });
+        // `name` is the D-Bus segment main pushed (Task 8) — stash it on the row so the
+        // menu builder below can call back on it without re-deriving it from displayName.
+        this._combinedServices.set(name, { name, displayName, visible, badge, dnd, wmClass });
         // A service is running now — it can't also be in the available section.
         this._combinedAvailable.delete(name);
         this._rebuildCombinedMenu();
@@ -830,8 +832,10 @@ export default class LoftShellHelper extends Extension {
         // actually removed a running row, the menu MUST rebuild even when the
         // available display name is unchanged — hence wasRunning gates the no-op.
         const wasRunning = this._combinedServices.delete(name);
-        if (!wasRunning && this._combinedAvailable.get(name) === displayName) return;
-        this._combinedAvailable.set(name, displayName);
+        if (!wasRunning && this._combinedAvailable.get(name)?.displayName === displayName) return;
+        // Same reasoning as _updateCombinedService: keep `name` (the segment) on the row
+        // itself so the launch-row loop below doesn't have to re-derive it.
+        this._combinedAvailable.set(name, { name, displayName });
         this._rebuildCombinedMenu();
         this._updateCombinedBadges();
     }
@@ -875,8 +879,10 @@ export default class LoftShellHelper extends Extension {
 
         // One compact row per service: name + unread dot + [Show/Hide] [DND] [Quit]
         for (const [name, svc] of this._combinedServices) {
-            // dbus_name == display name with whitespace stripped (see service.rs).
-            const dbusName = svc.displayName.replace(/\s+/g, '');
+            // The D-Bus segment main pushed as `name`. Deriving it from the display
+            // name (as this used to) breaks the moment a user renames an account:
+            // the object path is pinned to the kind's default name, not the label.
+            const dbusName = svc.name;
 
             const item = new PopupMenu.PopupBaseMenuItem({ reactive: false, can_focus: false });
 
@@ -956,10 +962,10 @@ export default class LoftShellHelper extends Extension {
         // SNI menu's available section (src/main/tray/dbusMenu.ts).
         if (this._combinedAvailable.size > 0) {
             menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            for (const [, displayName] of this._combinedAvailable) {
-                // dbus_name == display name with whitespace stripped (see dbus/names.ts).
-                const dbusName = displayName.replace(/\s+/g, '');
-                const launchItem = new PopupMenu.PopupMenuItem(displayName);
+            for (const [, avail] of this._combinedAvailable) {
+                // The D-Bus segment main pushed as `name` (see the running-service loop above).
+                const dbusName = avail.name;
+                const launchItem = new PopupMenu.PopupMenuItem(avail.displayName);
                 launchItem.connect('activate', () => {
                     this._callDaemonMethod(dbusName, 'Show');
                     menu.close();

@@ -9,10 +9,12 @@ type Variant = dbus.Variant;
 /** The state the menu is rendered from (produced by `TrayModel`). */
 export interface MenuModel {
   globalDnd: boolean;
-  /** Services with a live window (hidden-to-tray still counts). */
-  running: Array<{ id: string; label: string; unread: boolean; dnd: boolean; visible: boolean }>;
+  /** Services with a live window (hidden-to-tray still counts). `segment` rides along
+   *  unused here (the SNI menu's action ids are already `svc:<id>:…`) so the two tray
+   *  backends can share one model — the GNOME panel is the one that dereferences it. */
+  running: Array<{ id: string; label: string; segment: string; unread: boolean; dnd: boolean; visible: boolean }>;
   /** Configured services with no live window (click to launch). */
-  available: Array<{ id: string; label: string }>;
+  available: Array<{ id: string; label: string; segment: string }>;
 }
 
 /** dbusmenu property map: `a{sv}`. */

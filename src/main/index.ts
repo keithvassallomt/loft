@@ -26,7 +26,7 @@ import { addInstance, removeInstance } from './install';
 import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
 import { createSignalShutdown } from './shutdown';
 import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath } from './desktop';
-import type { ServiceInstance } from './instances';
+import { dbusSegmentFor, type ServiceInstance } from './instances';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
 import { RAIL_WIDTH, type Rect } from './layout';
@@ -285,7 +285,7 @@ function openService(def: ServiceKind, minimized: boolean, view?: ServiceView): 
   sw.setBadge(config.services[def.id]?.badgesEnabled === false ? 0 : (currentBadge.get(def.id) ?? 0));
   syncLoftWindows();
   focusExternal(def.displayName);
-  tray?.addService({ id: def.id, displayName: def.displayName, dnd: config.services[def.id]?.dnd ?? false });
+  tray?.addService({ id: def.id, displayName: def.displayName, segment: dbusSegmentFor(def.id, config), dnd: config.services[def.id]?.dnd ?? false });
   tray?.setRunning(def.id, true);
   tray?.setVisible(def.id, sw.isVisible());
   notifications?.setVisible(def.id, sw.isVisible());
@@ -303,7 +303,7 @@ function openService(def: ServiceKind, minimized: boolean, view?: ServiceView): 
 function attachService(def: ServiceKind, view?: ServiceView): ServiceHost {
   const l = loft!;
   const host = l.attach(def, view);
-  tray?.addService({ id: def.id, displayName: def.displayName, dnd: config.services[def.id]?.dnd ?? false });
+  tray?.addService({ id: def.id, displayName: def.displayName, segment: dbusSegmentFor(def.id, config), dnd: config.services[def.id]?.dnd ?? false });
   tray?.setRunning(def.id, true);
   tray?.setVisible(def.id, host.isVisible());
   // One window, N services: the Loft window's focus/visibility handlers only fire on
@@ -1228,6 +1228,7 @@ if (!app.requestSingleInstanceLock()) {
         .map((d) => ({
           id: d.id,
           displayName: d.displayName,
+          segment: dbusSegmentFor(d.id, config),
           dnd: config.services[d.id]?.dnd ?? false,
           // Route through hostOf() so reimplementing for a shared host requires only one change
           running: hostOf(d.id) !== undefined,
@@ -1259,7 +1260,7 @@ if (!app.requestSingleInstanceLock()) {
       // path that opens a window before tray init.
       for (const [id, sw] of windows) {
         const d = getService(id);
-        if (d) tray.addService({ id, displayName: d.displayName, dnd: config.services[id]?.dnd ?? false });
+        if (d) tray.addService({ id, displayName: d.displayName, segment: dbusSegmentFor(id, config), dnd: config.services[id]?.dnd ?? false });
         tray.setRunning(id, true);
         tray.setVisible(id, sw.isVisible());
       }

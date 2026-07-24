@@ -24,4 +24,12 @@ describe('diffPanelServices', () => {
     expect(updates).toEqual([]);
     expect(removals).toEqual([]);
   });
+
+  it('diffs on the segment, because that is the key the helper is told', () => {
+    const snap = (segment: string, displayName: string) =>
+      new Map([[segment, { id: segment, displayName, visible: false, badge: 0, dnd: false }]]);
+    const { updates, removals } = diffPanelServices(snap('WhatsApp2', 'Work'), snap('WhatsApp2', 'Home'));
+    expect(removals).toEqual([]);
+    expect(updates[0].displayName).toBe('Home');
+  });
 });

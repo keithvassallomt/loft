@@ -29,8 +29,8 @@ function fakeHelper() {
 // One running (Slack), one configured-but-not-running (Telegram).
 const deps = (): TrayDeps => ({
   configuredServices: [
-    { id: 'slack', displayName: 'Slack', dnd: false, running: true, visible: true },
-    { id: 'telegram', displayName: 'Telegram', dnd: false, running: false, visible: false },
+    { id: 'slack', displayName: 'Slack', segment: 'slack', dnd: false, running: true, visible: true },
+    { id: 'telegram', displayName: 'Telegram', segment: 'telegram', dnd: false, running: false, visible: false },
   ],
   globalDnd: false,
   onToggleService: vi.fn(),

@@ -8,6 +8,8 @@ import { trayPixmap } from './icon';
 export interface TrayServiceSeed {
   id: string;
   displayName: string;
+  /** Stable D-Bus object-path segment — never moves on rename. */
+  segment: string;
   dnd: boolean;
   running: boolean;
   visible: boolean;
@@ -36,12 +38,16 @@ export interface TrayDeps {
 
 export interface Tray {
   /** Register a newly-launched service that wasn't in the startup seed. */
-  addService(seed: { id: string; displayName: string; dnd: boolean }): void;
+  addService(seed: { id: string; displayName: string; segment: string; dnd: boolean }): void;
   setBadge(id: string, n: number): void;
   setRunning(id: string, running: boolean): void;
   setVisible(id: string, visible: boolean): void;
   setDnd(id: string, enabled: boolean): void;
   setGlobalDnd(enabled: boolean): void;
+  /** Reflect a rename in place — see TrayModel.setDisplayName. */
+  setDisplayName(id: string, name: string): void;
+  /** Forget a removed service — see TrayModel.removeService. */
+  removeService(id: string): void;
 }
 
 const SVC_ACTION = /^svc:(.+):(toggle|dnd|quit|launch)$/;
@@ -58,6 +64,7 @@ export async function startTray(deps: TrayDeps): Promise<Tray> {
     model.addService({
       id: s.id,
       displayName: s.displayName,
+      segment: s.segment,
       badge: 0,
       dnd: s.dnd,
       visible: s.visible,
@@ -99,11 +106,13 @@ export async function startTray(deps: TrayDeps): Promise<Tray> {
 
   return {
     addService: (seed) =>
-      model.addService({ id: seed.id, displayName: seed.displayName, badge: 0, dnd: seed.dnd, visible: false, running: false }),
+      model.addService({ id: seed.id, displayName: seed.displayName, segment: seed.segment, badge: 0, dnd: seed.dnd, visible: false, running: false }),
     setBadge: (id, n) => model.setBadge(id, n),
     setRunning: (id, running) => model.setRunning(id, running),
     setVisible: (id, visible) => model.setVisible(id, visible),
     setDnd: (id, enabled) => model.setDnd(id, enabled),
     setGlobalDnd: (enabled) => model.setGlobalDnd(enabled),
+    setDisplayName: (id, name) => model.setDisplayName(id, name),
+    removeService: (id) => model.removeService(id),
   };
 }
