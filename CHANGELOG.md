@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.0] - 2026-07-15
 
+> [!IMPORTANT]
+> Version 1.0.0 of Loft isn't an update, it's a **total re-write!** The bad news is that you'll have
+> to login again to your services. The good news is:
+> - You get a fantastic unified view.
+> - You get proper titlebars, no longer needing to hover and wait to hide services.
+> - You get great new (entirely optional!) features like grid view, logging into multiple accounts, and more control over auto-open modes.
+> - You no longer need to have Google Chrome installed.
+> - Rich notifications, video and voice call support, and everything that made Loft great to
+> start with still work, of course.
+
 ### Added
 
 - Unified view: every service now lives in a single Loft window with a sidebar rail of service icons, instead of opening a separate window for each one. Click an icon in the rail to switch to that service full-size; each has its own titlebar showing its name and unread count, with zoom controls and a close button that hides it to the tray while it keeps running in the background. Drag the rail icons to reorder them. Prefer a service in its own window? Turn on **Open in its own window** in its settings and Loft remembers the choice. Moving a service between the shared window, its own window, and the grid keeps its page live, so scroll position, half-typed drafts, and ongoing calls (including video and screen-share) all survive the move.
