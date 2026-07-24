@@ -30,6 +30,11 @@
     if (!res.ok) nameError = res.error ?? 'Could not rename.';
   }
 
+  // Cache-busting for the <h2> preview below: its src is keyed on svc.icon so a swatch
+  // change re-fetches, but a custom icon keeps `icon === 'custom'` across re-picks of a
+  // different file — this counter (mirrors IconPicker's own `rev`) covers that case too.
+  let iconRev = $state(0);
+
   let showRemove = $state(false);
   let deleteData = $state(false);
 
@@ -42,7 +47,7 @@
 
 {#if svc}
   <h2>
-    <img class="ico" src={`loft://icon/${id}`} alt=""
+    <img class="ico" src={`loft://icon/${id}?c=${svc.icon}-${iconRev}`} alt=""
          onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
     {svc.displayName}
   </h2>
@@ -53,7 +58,7 @@
     {#if nameError}<small class="err">{nameError}</small>{/if}
   </label>
 
-  <IconPicker {svc} />
+  <IconPicker {svc} onChanged={() => iconRev++} />
 
   {#if svc.selfHosted}
     <label class="field">

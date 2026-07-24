@@ -1166,8 +1166,10 @@ if (!app.requestSingleInstanceLock()) {
       catch (err) { console.error(`Failed to rewrite ${id}'s launcher:`, err); }
     }
     windows.get(id)?.refreshIdentity(inst.displayName);
+    bgStatus?.refresh();
+    // refreshRail is aliased to refreshAll (see loftWindow.ts), which already runs
+    // refreshGrid — a separate refreshGrid() call here would just repeat that work.
     loft?.refreshRail();
-    loft?.refreshGrid();
     syncLoftWindows(); // the caption set the GNOME helper hides just changed
     notifyHub();
   }

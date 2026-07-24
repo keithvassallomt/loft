@@ -274,7 +274,10 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     const sv = views.get(active);
     if (!sv) return;
     const count = deps.cfg.services[active]?.badgesEnabled === false ? 0 : deps.badge(active);
-    safeSend(titlebar, 'titlebar:set-service', formatWindowTitle(sv.def.displayName, count));
+    // sv.def is captured by value at construction and has no setter, so it goes stale on
+    // a rename — the name has to come from config fresh, same as refreshGrid below.
+    const name = deps.services().find((d) => d.id === active)?.displayName ?? sv.def.displayName;
+    safeSend(titlebar, 'titlebar:set-service', formatWindowTitle(name, count));
     safeSend(titlebar, 'titlebar:set-context', active);
   };
 

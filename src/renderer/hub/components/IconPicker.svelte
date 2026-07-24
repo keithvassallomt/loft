@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { HubService } from '../../../shared/hubTypes';
-  let { svc }: { svc: HubService } = $props();
+  // onChanged: lets a parent (ServiceDetail's <h2> preview) cache-bust itself too — its
+  // own `rev` below only covers the swatch/self-preview images in this component.
+  let { svc, onChanged }: { svc: HubService; onChanged?: () => void } = $props();
 
   let error = $state('');
 
@@ -12,7 +14,7 @@
     error = '';
     const res = await window.loftHub.setServiceIcon(svc.id, choice);
     if (!res.ok) error = res.error ?? 'Could not change the icon.';
-    else rev++;
+    else { rev++; onChanged?.(); }
   }
 
   const label = (c: string) => c.charAt(0).toUpperCase() + c.slice(1);
