@@ -586,8 +586,10 @@ function buildServiceMenu(id: string): Electron.MenuItemConstructorOptions[] {
  */
 function buildGridAddMenu(): Electron.MenuItemConstructorOptions[] {
   const inGrid = new Set(gridServicesOf(config.grid ?? null));
-  const items = KINDS
-    .filter((d) => config.services[d.id] !== undefined)
+  // Installed ACCOUNTS, not registry kinds — a second WhatsApp needs its own entry here,
+  // and a renamed account needs its own name, neither of which KINDS can give us (mirrors
+  // the grid prune's listServices() conversion elsewhere).
+  const items = listServices()
     .filter((d) => !inGrid.has(d.id) && !isDetached(d.id))
     .map((d) => ({ label: d.displayName, click: () => addToGrid(d.id) }));
   if (!items.length) return [{ label: 'Every service is already in the grid', enabled: false }];
@@ -1320,8 +1322,14 @@ if (!app.requestSingleInstanceLock()) {
       const c = config.services[name];
       const kind = c?.kind ?? (getKind(name) ? name : undefined);
       // `?v=<colour>` asks for a specific variant of a KIND — the swatch row, which must
-      // show colours this account is not currently wearing.
-      const candidates = variant && kind
+      // show colours this account is not currently wearing. `?v=brand` is the same idea
+      // pushed one step further: it must show the bundled brand PNG itself, bypassing
+      // iconCandidates' instance-first fallback — otherwise the "Default" swatch would
+      // show whatever the kind's FIRST account currently wears, since that account's id
+      // equals the kind id.
+      const candidates = variant === BRAND_ICON && kind
+        ? [join(iconSourceDir, `${kind}.png`)]
+        : variant && kind
         ? [variantPngPath(iconSourceDir, kind, variant)]
         : iconCandidates({ iconsDir: iconsDir(), assetsDir: iconSourceDir, id: name, kind, icon: c?.icon });
       for (const file of candidates) {

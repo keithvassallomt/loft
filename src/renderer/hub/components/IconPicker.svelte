@@ -25,7 +25,9 @@
   <div class="row">
     <button class="sw" class:on={svc.icon === 'brand'} title="Default"
             onclick={() => choose('brand')} aria-label="Default icon">
-      <img src={`loft://icon/${svc.kind}`} alt="" />
+      <!-- ?v=brand: the plain kind id resolves through the first-account fallback, so
+           without it this swatch would show whatever THAT account currently wears. -->
+      <img src={`loft://icon/${svc.kind}?v=brand`} alt="" />
     </button>
     {#each svc.variants as colour (colour)}
       <button class="sw" class:on={svc.icon === colour} title={label(colour)}
