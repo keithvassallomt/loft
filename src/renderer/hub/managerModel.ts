@@ -10,9 +10,8 @@ export interface ManagerNav {
 
 export function managerNav(state: HubState): ManagerNav {
   return {
-    configure: state.services
-      .filter((s) => s.installed)
-      .map((s) => ({ id: s.id, displayName: s.displayName })),
+    // Every entry in `services` IS an installed instance now — there is no separate flag.
+    configure: state.services.map((s) => ({ id: s.id, displayName: s.displayName })),
   };
 }
 
@@ -23,7 +22,7 @@ export function managerNav(state: HubState): ManagerNav {
  */
 export function resolveSelection(sel: ManagerSelection, state: HubState): ManagerSelection {
   if (typeof sel === 'object' && sel !== null) {
-    const ok = state.services.some((s) => s.id === sel.service && s.installed);
+    const ok = state.services.some((s) => s.id === sel.service);
     return ok ? sel : 'add';
   }
   return sel;

@@ -12,7 +12,7 @@ import { buildBridge } from '../src/preload/hub';
 
 function mockIpc() {
   return {
-    invoke: vi.fn().mockResolvedValue({ services: [], globals: { trayBackend: 'auto', autostartBlocked: false } }),
+    invoke: vi.fn().mockResolvedValue({ services: [], kinds: [], globals: { trayBackend: 'auto', autostartBlocked: false } }),
     send: vi.fn(),
     on: vi.fn(),
     removeListener: vi.fn(),
@@ -37,12 +37,28 @@ describe('hub preload bridge', () => {
     b.recoverService('slack', { clearCaches: true });
     b.quit();
     expect(ipc.send).toHaveBeenCalledWith('hub:openService', 'slack');
-    expect(ipc.send).toHaveBeenCalledWith('hub:addService', { id: 'talk', customUrl: 'https://cloud.example.com/apps/spreed/' });
+    expect(ipc.send).toHaveBeenCalledWith('hub:addService', { kind: 'talk', customUrl: 'https://cloud.example.com/apps/spreed/' });
     expect(ipc.send).toHaveBeenCalledWith('hub:removeService', { id: 'slack', deleteData: true });
     expect(ipc.send).toHaveBeenCalledWith('hub:setServiceSetting', { id: 'slack', patch: { dnd: true } });
     expect(ipc.send).toHaveBeenCalledWith('hub:setGlobal', { trayBackend: 'sni' });
     expect(ipc.send).toHaveBeenCalledWith('hub:recoverService', { id: 'slack', opts: { clearCaches: true } });
     expect(ipc.send).toHaveBeenCalledWith('hub:quit');
+  });
+
+  it('addService sends a kind id, not an account id', () => {
+    const ipc = mockIpc();
+    buildBridge(ipc as never).addService('whatsapp', 'https://x');
+    expect(ipc.send).toHaveBeenCalledWith('hub:addService', { kind: 'whatsapp', customUrl: 'https://x' });
+  });
+
+  it('renameService and setServiceIcon invoke their channels and return the result', async () => {
+    const ipc = mockIpc();
+    ipc.invoke.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, error: 'nope' });
+    const b = buildBridge(ipc as never);
+    expect(await b.renameService('whatsapp', 'Work')).toEqual({ ok: true });
+    expect(ipc.invoke).toHaveBeenCalledWith('hub:renameService', { id: 'whatsapp', name: 'Work' });
+    expect(await b.setServiceIcon('whatsapp', 'rose')).toEqual({ ok: false, error: 'nope' });
+    expect(ipc.invoke).toHaveBeenCalledWith('hub:setServiceIcon', { id: 'whatsapp', choice: 'rose' });
   });
 
   it('onStateChanged subscribes and returns an unsubscribe', () => {

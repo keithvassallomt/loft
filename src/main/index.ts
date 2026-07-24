@@ -241,7 +241,9 @@ function syncLoftWindows(): void { helper?.setLoftWindows(windowKeys()); }
  *  config plus wherever the services actually live, and nothing caches it. */
 function hubState(): HubState {
   return buildHubState({
-    services: KINDS,
+    instances: listServices(),
+    kinds: KINDS,
+    variants: variantIndex,
     config,
     running: (id) => hostOf(id) !== undefined,
     visible: (id) => hostOf(id)?.isVisible() ?? false,
@@ -1149,10 +1151,9 @@ if (!app.requestSingleInstanceLock()) {
   registerHubIpc(ipcMain, {
     getState: hubState,
     openService: (id) => { const d = getService(id); if (d) showService(d); },
-    // `id` here is a KIND id, not an account id — the renderer doesn't yet have a way to
-    // ask for a 2nd+ account of one (Task 11 lands that UI), so today it always names the
-    // kind whose first account is being created. addInstance allocates the actual account
-    // id from it.
+    // `kindId` names the REGISTRY kind, not an account — the "Add another" gallery lets the
+    // user ask for a 2nd+ account of a kind they already have. addInstance allocates the
+    // actual account id from it.
     addService: (kindId, customUrl) => {
       const kind = getKind(kindId);
       if (!kind) return;
@@ -1188,6 +1189,9 @@ if (!app.requestSingleInstanceLock()) {
       notifyHub();
     },
     setServiceSetting: (id, patch) => { setServiceSetting(id, patch); notifyHub(); },
+    // Implemented in Task 12 (rename + icon picker).
+    renameService: async () => ({ ok: false, error: 'not implemented' }),
+    setServiceIcon: async () => ({ ok: false, error: 'not implemented' }),
     setGlobal: (patch) => {
       if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; saveConfig(configPath(), config); }
       notifyHub();

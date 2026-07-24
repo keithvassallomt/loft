@@ -1,42 +1,42 @@
 <script lang="ts">
-  import type { HubService } from '../../../shared/hubTypes';
+  import type { HubKind } from '../../../shared/hubTypes';
   import Modal from './Modal.svelte';
-  let { svc }: { svc: HubService } = $props();
+  let { kind }: { kind: HubKind } = $props();
 
   let showUrlModal = $state(false);
   let urlDraft = $state('');
 
   function add() {
-    if (svc.selfHosted) { urlDraft = ''; showUrlModal = true; }
-    else window.loftHub.addService(svc.id);
+    if (kind.selfHosted) { urlDraft = ''; showUrlModal = true; }
+    else window.loftHub.addService(kind.id);
   }
   function confirmAdd() {
     showUrlModal = false;
-    window.loftHub.addService(svc.id, urlDraft.trim() || undefined);
+    window.loftHub.addService(kind.id, urlDraft.trim() || undefined);
   }
 </script>
 
 <div class="tile">
-  <img class="icon" src={`loft://icon/${svc.id}`} alt="" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')} />
-  <span class="name">{svc.displayName}</span>
+  <img class="icon" src={`loft://icon/${kind.id}`} alt="" onerror={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')} />
+  <span class="name">{kind.displayName}</span>
   <button class="pill" onclick={add}>Add</button>
 </div>
 
 {#if showUrlModal}
   <Modal
-    title={`Add ${svc.displayName}`}
+    title={`Add ${kind.displayName}`}
     confirmLabel="Add"
-    confirmDisabled={svc.serverRequired && urlDraft.trim() === ''}
+    confirmDisabled={kind.serverRequired && urlDraft.trim() === ''}
     onConfirm={confirmAdd}
     onCancel={() => (showUrlModal = false)}
   >
     <label class="field">
-      <span>Server URL{svc.serverRequired ? '' : ' (optional)'}</span>
+      <span>Server URL{kind.serverRequired ? '' : ' (optional)'}</span>
       <input bind:value={urlDraft} placeholder="cloud.example.com" />
       <!-- A service with a real default (Element) must be addable in one click; only a
            service with no central instance (Talk) can insist on a server. -->
-      {#if !svc.serverRequired}
-        <small class="hint">Leave blank to use {svc.defaultUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')}</small>
+      {#if !kind.serverRequired}
+        <small class="hint">Leave blank to use {kind.defaultUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')}</small>
       {/if}
     </label>
   </Modal>
