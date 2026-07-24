@@ -47,5 +47,13 @@ export function buildHubState(deps: HubStateDeps): HubState {
     defaultUrl: k.url,
     instanceCount: deps.instances.filter((i) => i.kind === k.id).length,
   }));
-  return { services, kinds, globals: { trayBackend: deps.trayBackend, autostartBlocked: deps.autostartBlocked } };
+  return {
+    services,
+    kinds,
+    globals: {
+      trayBackend: deps.trayBackend,
+      autostartBlocked: deps.autostartBlocked,
+      debug: deps.config.debug === true,
+    },
+  };
 }

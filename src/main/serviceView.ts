@@ -53,6 +53,9 @@ export interface ServiceView {
   pushDnd(enabled: boolean): void;
   /** Tell the page whether it is hidden (drives document.hidden/visibilityState). */
   pushHidden(hidden: boolean): void;
+  /** Enable/disable the developer context menu (Shift+right-click) for this page. Held
+   *  locally so it can be re-pushed on every did-finish-load (the preload re-runs blank). */
+  setDebug(enabled: boolean): void;
   /** Ask the page to navigate to a conversation (notification click). */
   navigate(url: string): void;
   /** Replay a notification click into the page's own handler. */
@@ -210,6 +213,14 @@ export function createServiceView(def: ServiceInstance, cfg: LoftConfig): Servic
     serviceView.webContents.setZoomFactor(currentZoom),
   );
 
+  // Developer-menu gate (spec: Settings → Developer mode). The preload only intercepts
+  // Shift+right-click while enabled, and it re-runs blank on every full navigation, so the
+  // value is held here and re-pushed on did-finish-load below (same reason zoom is).
+  let debugEnabled = cfg.debug === true;
+  serviceView.webContents.on('did-finish-load', () =>
+    safeSend(serviceView, 'service:debug', debugEnabled),
+  );
+
   // Single host-owned did-finish-load hook (see setOnLoad). Bound exactly once; hosts
   // re-point the target on adoption instead of stacking their own listeners.
   let onLoad: (() => void) | undefined;
@@ -360,6 +371,7 @@ export function createServiceView(def: ServiceInstance, cfg: LoftConfig): Servic
     getZoom: () => currentZoom,
     pushDnd: (enabled) => safeSend(serviceView, 'service:dnd', enabled),
     pushHidden: (hidden) => safeSend(serviceView, 'service:visibility', hidden),
+    setDebug: (enabled) => { debugEnabled = enabled; safeSend(serviceView, 'service:debug', enabled); },
     navigate: (url) => safeSend(serviceView, 'service:navigate', url),
     notifyClick: (notifyId, epoch) => safeSend(serviceView, 'service:notify-click', { notifyId, epoch }),
     loadUrl,

@@ -46,6 +46,9 @@ export interface LoftConfig {
   globalDnd?: boolean;
   /** Tray backend preference ('auto', 'gnome-panel', or 'sni'). */
   trayBackend?: TrayBackend;
+  /** Developer mode: Shift+right-click a service view opens the Chromium developer menu
+   *  (inspect element / DevTools). Absent or false = off. */
+  debug?: boolean;
   /** Schema version, gating one-shot migrations. Absent = pre-v2 (see migrate.ts). */
   configVersion?: number;
   /** The Loft window's own bounds. No zoom — zoom is per service. */
@@ -220,6 +223,7 @@ export function loadConfig(path: string): LoftConfig {
 
     const base: LoftConfig = { services };
     if (parsed.globalDnd === true) base.globalDnd = true;
+    if (parsed.debug === true) base.debug = true;
     if (trayBackend) base.trayBackend = trayBackend;
     if (isFiniteNumber(parsed.configVersion)) base.configVersion = parsed.configVersion;
     const w = sanitizeBounds(parsed.window);

@@ -579,6 +579,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
         setBadge: (c) => api.setBadge(id, c),
         pushDnd: (v) => sv.pushDnd(v),
         pushHidden: (v) => sv.pushHidden(v),
+        setDebug: (v) => sv.setDebug(v),
         navigate: (u) => sv.navigate(u),
         notifyClick: (n, e) => sv.notifyClick(n, e),
         loadUrl: (u) => sv.loadUrl(u),

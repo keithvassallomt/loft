@@ -68,7 +68,7 @@ describe('buildHubState', () => {
     });
     const tg = s.services.find((x) => x.id === 'telegram')!;
     expect(tg).toMatchObject({ running: true, visible: true, dnd: true, openOnStartup: true, customUrl: 'https://t' });
-    expect(s.globals).toEqual({ trayBackend: 'sni', autostartBlocked: true });
+    expect(s.globals).toEqual({ trayBackend: 'sni', autostartBlocked: true, debug: false });
   });
 
   it('reports launcher as configured (absent means off)', () => {

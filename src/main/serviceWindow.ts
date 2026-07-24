@@ -171,6 +171,7 @@ export function createServiceWindow(
     },
     pushDnd: (enabled: boolean) => sv.pushDnd(enabled),
     pushHidden: (hidden: boolean) => sv.pushHidden(hidden),
+    setDebug: (enabled: boolean) => sv.setDebug(enabled),
     navigate: (url: string) => sv.navigate(url),
     notifyClick: (notifyId: number, epoch: string) => sv.notifyClick(notifyId, epoch),
     loadUrl: (url: string) => sv.loadUrl(url),

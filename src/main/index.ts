@@ -1275,6 +1275,13 @@ if (!app.requestSingleInstanceLock()) {
     },
     setGlobal: (patch) => {
       if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; saveConfig(configPath(), config); }
+      if (patch.debug !== undefined) {
+        config.debug = patch.debug;
+        saveConfig(configPath(), config);
+        // Reach already-loaded pages, which will not reload; a service started later reads
+        // config.debug at construction (serviceView.ts), so sleeping ones need no push.
+        for (const id of Object.keys(config.services)) hostOf(id)?.setDebug(patch.debug);
+      }
       notifyHub();
     },
     recoverService: (id, opts) => {
@@ -1309,6 +1316,35 @@ if (!app.requestSingleInstanceLock()) {
     const sw = findBySenderId(e.sender.id);
     if (!sw || !p || typeof p.title !== 'string' || typeof p.body !== 'string') return;
     void notifications?.handle(sw.def.id, { title: p.title, body: p.body, icon: p.icon, href: p.href, notifyId: p.notifyId, epoch: p.epoch });
+  });
+
+  // Shift+right-click on a service view, forwarded by its preload (contextMenu.ts) only while
+  // developer mode is on. Re-checked here (defence in depth) so a stale preload can't pop it.
+  // e.sender IS the service page's webContents — used directly for inspect/nav/DevTools;
+  // reload goes through the host so the stuck-watcher re-arms.
+  ipcMain.on('service:context-menu', (e, p?: { x?: number; y?: number }) => {
+    if (config.debug !== true) return;
+    const host = findBySenderId(e.sender.id);
+    if (!host) return; // not a service view (recovery overlays / Loft chrome never send this)
+    const wc = e.sender;
+    const x = Math.round(Number(p?.x) || 0);
+    const y = Math.round(Number(p?.y) || 0);
+    const openDevTools = (): void => { if (!wc.isDevToolsOpened()) wc.openDevTools({ mode: 'detach' }); };
+    Menu.buildFromTemplate([
+      { label: 'Back', enabled: wc.navigationHistory.canGoBack(), click: () => wc.navigationHistory.goBack() },
+      { label: 'Forward', enabled: wc.navigationHistory.canGoForward(), click: () => wc.navigationHistory.goForward() },
+      { label: 'Reload', click: () => host.reload() },
+      { type: 'separator' },
+      { role: 'cut' },
+      { role: 'copy' },
+      { role: 'paste' },
+      { role: 'selectAll' },
+      { type: 'separator' },
+      // Detached DevTools first: a WebContentsView has no window frame of its own to dock into.
+      { label: 'Inspect element', click: () => { openDevTools(); wc.inspectElement(x, y); } },
+      { label: wc.isDevToolsOpened() ? 'Close DevTools' : 'Open DevTools',
+        click: () => { if (wc.isDevToolsOpened()) wc.closeDevTools(); else wc.openDevTools({ mode: 'detach' }); } },
+    ]).popup();
   });
 
   app.whenReady().then(async () => {

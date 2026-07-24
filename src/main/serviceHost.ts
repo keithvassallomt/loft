@@ -36,6 +36,8 @@ export interface ServiceHost {
   pushDnd(enabled: boolean): void;
   /** Tell the page whether it is hidden (drives document.hidden/visibilityState). */
   pushHidden(hidden: boolean): void;
+  /** Enable/disable the developer context menu (Shift+right-click) for this service's page. */
+  setDebug(enabled: boolean): void;
   /** Ask the page to navigate to a conversation (notification click). */
   navigate(url: string): void;
   /** Replay a notification click into the page's own handler (notification click). */

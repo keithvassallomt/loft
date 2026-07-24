@@ -38,7 +38,7 @@ export interface HubKind {
   instanceCount: number;
 }
 
-export interface HubGlobals { trayBackend: TrayBackend; autostartBlocked: boolean }
+export interface HubGlobals { trayBackend: TrayBackend; autostartBlocked: boolean; debug: boolean }
 export interface HubState { services: HubService[]; kinds: HubKind[]; globals: HubGlobals; }
 
 /** Result of an operation the user can get wrong. */
@@ -51,5 +51,5 @@ export interface ServicePatch {
   customUrl?: string;
   launcher?: boolean;
 }
-export interface GlobalPatch { trayBackend?: TrayBackend }
+export interface GlobalPatch { trayBackend?: TrayBackend; debug?: boolean }
 export interface RecoverOpts { clearCaches: boolean }
