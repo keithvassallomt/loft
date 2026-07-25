@@ -8,9 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.1] - 2026-07-25
 
 > [!IMPORTANT]
-> Version 1.0.0 of Loft isn't an update, it's a **total re-write!** The bad news is that you'll have to login to your services again if you're upgrading from v0.2.0. The good news is:
+> The 1.0.x series of Loft isn't an update, it's a **total re-write!** The bad news is that you'll have to login to your services again if you're upgrading from the v0 series. The good news is:
 > - You get a fantastic unified view.
-> - You get proper titlebars, no longer needing to hover and wait to hide services.
+> - You get proper title bars, no longer needing to hover and wait to hide services.
 > - You get great new (entirely optional!) features like grid view, logging into multiple accounts, and more control over auto-open modes.
 > - You no longer need to have Google Chrome installed.
 > - Rich notifications, video and voice call support, and everything that made Loft great to

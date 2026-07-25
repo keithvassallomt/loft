@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 /**
- * Extract one version's section from CHANGELOG.md, for use as GitHub release notes.
+ * Build a GitHub release body: the version's CHANGELOG.md section, plus the standing
+ * installation footer.
  *
  * Without this the release body falls back to whatever the git tag's annotation says,
  * which is how v1.0.1 shipped with terse plain-text notes while v1.0.0 had the full
  * changelog entry — same project, two different-looking releases. Reading the changelog
  * means the release notes and the changelog cannot disagree.
+ *
+ * The footer (FriendlyHub badge, install line, Full Changelog link) lives in
+ * .github/release-notes-footer.md rather than in here, so it can be edited without
+ * touching code. It used to be pasted onto every release by hand.
  *
  *   node scripts/changelogSection.mjs 1.0.1            # -> stdout
  *   node scripts/changelogSection.mjs v1.0.1           # leading v is accepted
@@ -15,6 +20,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+export const FOOTER_PATH = resolve(ROOT, '.github/release-notes-footer.md');
 
 /**
  * Return the body of the `## [<version>] - <date>` section, without its heading.
@@ -38,6 +44,11 @@ export function changelogSection(changelog, version) {
   return body;
 }
 
+/** The full release body: changelog section, then the standing footer. */
+export function releaseNotes(changelog, version, footer) {
+  return `${changelogSection(changelog, version)}\n\n${footer.trim()}`;
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const version = process.argv[2];
   if (!version) {
@@ -45,7 +56,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     process.exit(1);
   }
   try {
-    process.stdout.write(changelogSection(readFileSync(resolve(ROOT, 'CHANGELOG.md'), 'utf8'), version) + '\n');
+    // Both reads are allowed to throw: a release that quietly ships without its notes, or
+    // without the install badge, is worse than one that fails loudly in CI.
+    const changelog = readFileSync(resolve(ROOT, 'CHANGELOG.md'), 'utf8');
+    const footer = readFileSync(FOOTER_PATH, 'utf8');
+    process.stdout.write(releaseNotes(changelog, version, footer) + '\n');
   } catch (e) {
     console.error(e.message);
     process.exit(1);

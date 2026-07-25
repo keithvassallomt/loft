@@ -71,12 +71,13 @@ jobs:
           flatpak-builder --user --force-clean --repo=.flatpak-repo build-dir "$MANIFEST"
           flatpak build-bundle .flatpak-repo Loft.flatpak chat.loft.Loft
 
-      # Release notes come from CHANGELOG.md, not from the tag annotation. Without this the
-      # body falls back to whatever the tag message says, which is how v1.0.1 first shipped
-      # with terse plain-text notes while v1.0.0 carried the full changelog entry. The
-      # extractor throws on a missing or empty section, so a release cannot silently ship
-      # without notes. Dispatch previews have no version to look up and are left to the
-      # action's own default.
+      # Release notes = the version's CHANGELOG.md section + .github/release-notes-footer.md
+      # (FriendlyHub badge, install line, Full Changelog link). Neither used to be automatic:
+      # the body fell back to the tag annotation, which is how v1.0.1 first shipped with
+      # terse plain-text notes while v1.0.0 carried the full entry, and the footer was pasted
+      # onto every release by hand. The script throws on a missing/empty section or an
+      # unreadable footer, so a release cannot silently ship without either. Dispatch
+      # previews have no version to look up and keep the action's own default.
       - name: Build release notes from the changelog
         if: github.ref_type == 'tag'
         run: node scripts/changelogSection.mjs "${{ github.ref_name }}" > RELEASE_NOTES.md
