@@ -40,36 +40,44 @@
 
   <screenshots>
     <screenshot type="default" xml:lang="en">
-      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/main_light.png</image>
-      <caption>Loft Manager showing available services</caption>
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/unified_window.png</image>
+      <caption>All your messaging in one window, with a sidebar to switch between services</caption>
     </screenshot>
     <screenshot xml:lang="en">
-      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/main_dark.png</image>
-      <caption>Loft Manager showing available services (dark mode)</caption>
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/grid.png</image>
+      <caption>Grid view: several services on screen side by side</caption>
     </screenshot>
     <screenshot xml:lang="en">
-      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/service_settings.png</image>
-      <caption>Loft Manager showing per-service settings</caption>
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/hub_light.png</image>
+      <caption>The Loft manager: the services you have, and the ones you can add</caption>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/hub_dark.png</image>
+      <caption>The Loft manager in dark mode</caption>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/multiple_accounts.png</image>
+      <caption>More than one account of the same service, each with its own name and icon</caption>
     </screenshot>
     <screenshot xml:lang="en">
       <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/video_call.png</image>
-      <caption>WhatsApp service during a video call</caption>
+      <caption>Voice and video calling, with screen sharing</caption>
     </screenshot>
     <screenshot xml:lang="en">
-      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/gnome_unified.png</image>
-      <caption>Unified panel icon on GNOME</caption>
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/notification.png</image>
+      <caption>Notifications that show who the message is from and take you to it</caption>
     </screenshot>
     <screenshot xml:lang="en">
-      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/gnome_individual.png</image>
-      <caption>Individual panel icons on GNOME</caption>
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/tray_menu.png</image>
+      <caption>The Loft panel menu on GNOME</caption>
     </screenshot>
     <screenshot xml:lang="en">
-      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/kde_unified.png</image>
-      <caption>Unified tray icon on KDE</caption>
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/tray_menu_kde.png</image>
+      <caption>The Loft tray menu on KDE Plasma</caption>
     </screenshot>
     <screenshot xml:lang="en">
-      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/kde_individual.png</image>
-      <caption>Individual tray icons on KDE</caption>
+      <image>https://raw.githubusercontent.com/keithvassallomt/loft/main/data/screenshots/service_settings.png</image>
+      <caption>Per-service settings, including when each service opens</caption>
     </screenshot>
   </screenshots>
 
@@ -77,13 +85,19 @@
     <release version="1.0.0" date="2026-07-25">
       <description>
         <p>
-          A ground-up rewrite. Loft is now a single self-contained application —
-          it no longer needs a separate Google Chrome installation — with the same
-          full voice and video calling, and improved GNOME and KDE Plasma integration.
+          Loft 1.0 is a complete rewrite. Google Chrome is no longer needed — Loft
+          now brings everything with it — and your messaging lives together in one
+          window instead of a separate one for every service.
         </p>
+        <ul>
+          <li>All your services in one window, with a sidebar to switch between them. Each has its own titlebar and unread count, and closing one tucks it away in the tray while it keeps running in the background. Prefer a service in its own window? Turn that on in its settings and Loft remembers.</li>
+          <li>New grid view: put several services on screen at once instead of switching back and forth. Drag services in, drag the dividers to resize them, and Loft brings the arrangement back next time.</li>
+          <li>Multiple accounts: sign in to two WhatsApps, two Slacks, or two NextCloud Talk servers, and give each one its own name and icon so you can tell them apart.</li>
+          <li>More say over what opens when: each service can stay closed, start quietly at login, or load only when you open Loft.</li>
+          <li>Calls, screen sharing, unread badges, panel and tray icons, Do Not Disturb, and notifications that take you straight to the message all work as before, with smoother GNOME and KDE Plasma integration.</li>
+        </ul>
         <p>
-          One-time change: you'll need to sign in to each service again after
-          upgrading, as logins are no longer shared with Chrome.
+          One-time change: you'll need to sign in to each service again after upgrading.
         </p>
       </description>
     </release>
