@@ -53,7 +53,7 @@ function endDrag(): void {
 const initials = (name: string): string =>
   name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 
-function serviceButton(item: RailItem): HTMLButtonElement {
+function serviceButton(item: RailItem, iconEpoch: number): HTMLButtonElement {
   const b = document.createElement('button');
   b.className = 'item';
   b.classList.toggle('active', item.active);
@@ -68,7 +68,10 @@ function serviceButton(item: RailItem): HTMLButtonElement {
   // append: the badge and the ⧉/🌙 marks are appended after this and must stay on top.
   const img = document.createElement('img');
   img.className = 'icon';
-  img.src = `loft://icon/${item.id}`;
+  // ?e=<epoch> busts Chromium's cache under the stable loft://icon/<id> URL: without it a
+  // changed icon keeps the old bytes until the whole rail renderer reloads. Main bumps the
+  // epoch on every icon re-deploy.
+  img.src = `loft://icon/${item.id}?e=${iconEpoch}`;
   img.alt = '';
   img.addEventListener('error', () => {
     img.remove();
@@ -188,7 +191,9 @@ function render(state: RailState): void {
   root.replaceChildren(
     homeButton(state.managerActive),
     gridButton(state.gridActive, state.gridCount),
-    ...(state.items.length ? [divider, ...state.items.map(serviceButton)] : []),
+    ...(state.items.length
+      ? [divider, ...state.items.map((it) => serviceButton(it, state.iconEpoch))]
+      : []),
   );
 }
 

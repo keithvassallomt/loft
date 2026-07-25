@@ -34,7 +34,9 @@
           <button class="n svc" class:on={isService(view) && view.service === c.id}
                   aria-current={isService(view) && view.service === c.id ? 'page' : undefined}
                   onclick={() => (selection = { service: c.id })}>
-            <img class="ico" src={`loft://icon/${c.id}`} alt=""
+            <!-- ?e=<epoch> busts Chromium's cache under the stable loft://icon/<id> URL, so a
+                 changed icon updates this nav list without a full reload (see the rail). -->
+            <img class="ico" src={`loft://icon/${c.id}?e=${$hubState.globals.iconEpoch}`} alt=""
                  onerror={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')} />
             <span>{c.displayName}</span>
           </button>

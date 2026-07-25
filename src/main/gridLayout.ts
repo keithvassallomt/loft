@@ -40,6 +40,8 @@ export interface GridViewState {
   names: Record<string, string>;
   badges: Record<string, number>;
   focused: string | undefined;
+  /** Cache-buster for the cell headers' loft://icon/<id> URLs — see RailState.iconEpoch. */
+  iconEpoch: number;
 }
 
 const px = (n: number): number => Math.max(0, Math.round(n));

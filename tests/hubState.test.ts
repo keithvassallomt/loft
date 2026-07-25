@@ -14,6 +14,7 @@ const base = (config: LoftConfig) => ({
   badge: () => 0,
   trayBackend: 'auto' as const,
   autostartBlocked: false,
+  iconEpoch: 0,
 });
 
 describe('buildHubState', () => {
@@ -72,7 +73,7 @@ describe('buildHubState', () => {
     const tg = s.services.find((x) => x.id === 'telegram')!;
     expect(tg).toMatchObject({ running: true, visible: true, dnd: true, autoOpen: 'login', customUrl: 'https://t' });
     expect(s.services.find((x) => x.id === 'slack')!.autoOpen).toBe('launch');
-    expect(s.globals).toEqual({ trayBackend: 'sni', autostartBlocked: true, debug: false });
+    expect(s.globals).toEqual({ trayBackend: 'sni', autostartBlocked: true, debug: false, iconEpoch: 0 });
   });
 
   it('reports launcher as configured (absent means off)', () => {
@@ -94,7 +95,7 @@ describe('buildHubState', () => {
     const deps = {
       instances: [], kinds: [], variants: {}, config: { services: {} } as LoftConfig,
       running: () => false, visible: () => false, badge: () => 0,
-      trayBackend: 'auto' as const,
+      trayBackend: 'auto' as const, iconEpoch: 0,
     };
     expect(buildHubState({ ...deps, autostartBlocked: true }).globals.autostartBlocked).toBe(true);
     expect(buildHubState({ ...deps, autostartBlocked: false }).globals.autostartBlocked).toBe(false);

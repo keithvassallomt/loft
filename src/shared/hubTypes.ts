@@ -41,7 +41,7 @@ export interface HubKind {
   instanceCount: number;
 }
 
-export interface HubGlobals { trayBackend: TrayBackend; autostartBlocked: boolean; debug: boolean }
+export interface HubGlobals { trayBackend: TrayBackend; autostartBlocked: boolean; debug: boolean; iconEpoch: number }
 export interface HubState { services: HubService[]; kinds: HubKind[]; globals: HubGlobals; }
 
 /** Result of an operation the user can get wrong. */

@@ -121,6 +121,7 @@ function make(grid: GridNode | null | undefined, attachIds: string[]): Harness {
     services: () => DEFS as never,
     onQuit: () => true,
     badge: () => 0,
+    iconEpoch: () => 0,
     // The moment the Critical defect lives in: mid-detach, config has NOT been flipped yet
     // (the ordering contract forbids it), so nothing here reports the service as detached.
     detached: () => false,

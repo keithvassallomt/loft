@@ -12,6 +12,6 @@ contextBridge.exposeInMainWorld('loft', {
   addToGrid: () => ipcRenderer.send('titlebar:addToGrid'),
   onSetAttachable: (cb: (id: string | null) => void) =>
     ipcRenderer.on('titlebar:set-attachable', (_e, id: string | null) => cb(id)),
-  onSetContext: (cb: (id: string | null) => void) =>
-    ipcRenderer.on('titlebar:set-context', (_e, id: string | null) => cb(id)),
+  onSetContext: (cb: (id: string | null, iconEpoch: number) => void) =>
+    ipcRenderer.on('titlebar:set-context', (_e, id: string | null, iconEpoch = 0) => cb(id, iconEpoch)),
 });

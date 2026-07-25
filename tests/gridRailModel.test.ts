@@ -16,6 +16,7 @@ const base = {
   detached: () => false,
   badge: () => 0,
   activeId: undefined as string | undefined,
+  iconEpoch: 0,
 };
 
 describe('buildRailState', () => {
@@ -48,5 +49,9 @@ describe('buildRailState', () => {
     expect(s.gridActive).toBe(false);
     expect(s.managerActive).toBe(false);
     expect(s.items.find((i) => i.id === 'slack')!.active).toBe(true);
+  });
+
+  it('passes the icon cache-buster through so the rail can bust a changed icon URL', () => {
+    expect(buildRailState({ ...base, grid: null, iconEpoch: 7 }).iconEpoch).toBe(7);
   });
 });

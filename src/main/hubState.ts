@@ -15,6 +15,9 @@ export interface HubStateDeps {
   trayBackend: TrayBackend;
   /** True when services asked to open at login but no autostart entry exists (e.g. the portal denied). */
   autostartBlocked: boolean;
+  /** Icon cache-buster (see HubGlobals.iconEpoch): the hub's own service list renders
+   *  loft://icon/<id> and would otherwise keep the cached image after an icon change. */
+  iconEpoch: number;
 }
 
 export function buildHubState(deps: HubStateDeps): HubState {
@@ -54,6 +57,7 @@ export function buildHubState(deps: HubStateDeps): HubState {
       trayBackend: deps.trayBackend,
       autostartBlocked: deps.autostartBlocked,
       debug: deps.config.debug === true,
+      iconEpoch: deps.iconEpoch,
     },
   };
 }

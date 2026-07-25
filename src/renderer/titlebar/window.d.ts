@@ -8,6 +8,6 @@ interface Window {
     attach(): void;
     addToGrid(): void;
     onSetAttachable(cb: (id: string | null) => void): void;
-    onSetContext(cb: (id: string | null) => void): void;
+    onSetContext(cb: (id: string | null, iconEpoch: number) => void): void;
   };
 }

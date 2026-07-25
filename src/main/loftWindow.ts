@@ -94,6 +94,10 @@ export interface LoftWindowDeps {
   onQuit(): boolean;
   /** Live unread for a service, ungated (the rail model applies badgesEnabled itself). */
   badge(id: string): number;
+  /** Monotonic icon cache-buster, bumped by main when any icon is re-deployed. Threaded into
+   *  the rail/grid/titlebar loft://icon/<id> URLs so a changed icon actually re-fetches
+   *  instead of showing Chromium's cached copy under the (stable) URL. */
+  iconEpoch(): number;
   /** Is this service detached? Detached services appear in the rail but aren't tabs. */
   detached(id: string): boolean;
   /** Is this service loaded somewhere ELSE — i.e. in its own window? The rail lists every
@@ -253,6 +257,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       badge: deps.badge,
       activeId: active,
       grid: deps.cfg.grid ?? null,
+      iconEpoch: deps.iconEpoch(),
     }));
 
   const refreshTitlebar = (): void => {
@@ -282,7 +287,9 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     // a rename — the name has to come from config fresh, same as refreshGrid below.
     const name = deps.services().find((d) => d.id === active)?.displayName ?? sv.def.displayName;
     safeSend(titlebar, 'titlebar:set-service', formatWindowTitle(name, count));
-    safeSend(titlebar, 'titlebar:set-context', active);
+    // The epoch rides with set-context so the titlebar re-fetches this service's icon after a
+    // change: refreshTitlebar re-pushes set-context on every refresh (an icon change included).
+    safeSend(titlebar, 'titlebar:set-context', active, deps.iconEpoch());
   };
 
   const refreshGrid = (): void => {
@@ -314,6 +321,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       names,
       badges,
       focused: focusedCell,
+      iconEpoch: deps.iconEpoch(),
     };
     safeSend(grid, 'grid:state', state);
   };

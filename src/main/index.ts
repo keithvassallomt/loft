@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, Menu, nativeImage, protocol, session } from 'electron';
+import { app, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, session } from 'electron';
 import { readFile } from 'node:fs/promises';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,6 +20,7 @@ import { ensureGnomeHelper, defaultHelperInstallDeps } from './gnome/helperInsta
 import { isGnome, isKde, resolveTrayBackend } from './trayBackend';
 import { createKwinClient, type KwinClient } from './kde/kwin';
 import { startBackgroundStatus } from './gnome/backgroundStatus';
+import { watchAppearance, type AppearanceWatcher } from './appearance';
 import { buildHubState } from './hubState';
 import { registerHubIpc } from './hubIpc';
 import { addInstance, removeInstance } from './install';
@@ -74,6 +75,13 @@ let quitting = false;
 let tray: Tray | undefined;
 let notifications: Notifications | undefined;
 let bgStatus: { refresh(): void } | undefined;
+// Follows the desktop light/dark preference and drives nativeTheme.themeSource (see the
+// whenReady startup). Held so releaseOsResources can stop its portal D-Bus connection.
+let appearanceWatcher: AppearanceWatcher | undefined;
+// Monotonic icon cache-buster. A service icon is re-deployed under the SAME loft://icon/<id>
+// URL, so every renderer that draws it (rail, grid, titlebar, hub) would keep Chromium's
+// cached copy; bumping this on each change and appending it as `?e=<n>` forces a re-fetch.
+let iconEpoch = 0;
 // Set once chat.loft.Loft's D-Bus service comes up — undefined until whenReady's startup
 // sequence reaches it, so every add/remove call site optional-chains it (a hub action
 // taken in that window must not throw, just skip the D-Bus side of the update).
@@ -253,6 +261,7 @@ function hubState(): HubState {
     badge: (id) => currentBadge.get(id) ?? 0,
     trayBackend: config.trayBackend ?? 'auto',
     autostartBlocked: wantsAutostart(config.services) && !isAutostartEnabled(),
+    iconEpoch,
   });
 }
 
@@ -1259,6 +1268,10 @@ if (!app.requestSingleInstanceLock()) {
       const inst = addInstance(kind, config, {
         customUrl, variants: variantIndex[kind.id] ?? [], iconSourceDir,
       });
+      // Ids are reused (allocateInstanceId fills the lowest gap), so a removed-then-re-added
+      // account can land on an id whose old icon is still in Chromium's cache — bump so the
+      // rail/hub re-fetch under the fresh ?e=<n>.
+      iconEpoch += 1;
       saveConfig(configPath(), config);
       // A new account must reach the tray and D-Bus now — not at next launch. Before
       // instances, adding a service was rare enough that waiting was invisible; adding
@@ -1312,6 +1325,7 @@ if (!app.requestSingleInstanceLock()) {
       saveConfig(configPath(), config);
       const next = getService(id);
       if (next) deployInstanceIcon(next, { iconSourceDir });
+      iconEpoch += 1; // new bytes under the same loft://icon/<id> URL — force a re-fetch everywhere
       applyIdentityChange(id);
       return { ok: true };
     },
@@ -1390,6 +1404,18 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    // Follow the desktop light/dark preference. Loft's renderers theme purely off the CSS
+    // prefers-color-scheme media feature; on Linux (notably Fedora/GNOME, and worse inside
+    // the Flatpak sandbox) Chromium reads the color scheme once at renderer creation and
+    // never observes a live change, so a dark->light switch only took effect after the
+    // window was re-opened. Driving nativeTheme.themeSource explicitly forces every renderer
+    // (rail, titlebar, grid, hub AND the service web views) to re-evaluate the media query
+    // live — no per-renderer wiring. The value comes from the XDG Settings portal, which is
+    // reachable under Flatpak (gsettings is not — no dconf access) and cross-desktop.
+    appearanceWatcher = watchAppearance((dark) => {
+      nativeTheme.themeSource = dark ? 'dark' : 'light';
+    });
+
     // loft://icon/<id> -> the deployed icon (added services) or the bundled asset
     // (available/not-yet-added services + the 'loft' app icon). Read from disk and
     // return the bytes: the main-process global fetch() does NOT support file://.
@@ -1577,6 +1603,7 @@ if (!app.requestSingleInstanceLock()) {
       services: () => listServices(), // read fresh each refresh — the set changes at runtime
       onQuit: () => quitting,
       badge: (id) => currentBadge.get(id) ?? 0,
+      iconEpoch: () => iconEpoch,
       detached: isDetached,
       loadedElsewhere: (id) => windows.has(id),
       buildServiceMenu,
@@ -1784,6 +1811,10 @@ function persistAll(): void {
 function releaseOsResources(): void {
   try {
     notifications?.close();
+    // The appearance watcher holds a dbus-next portal connection; leaking it under Flatpak
+    // keeps bwrap alive the same way a stray `gsettings monitor` child would (see above).
+    appearanceWatcher?.stop();
+    appearanceWatcher = undefined; // idempotent: both exit paths can reach here
   } catch (e) {
     console.error('releaseOsResources failed:', (e as Error)?.message ?? e);
   }

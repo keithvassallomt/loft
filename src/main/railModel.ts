@@ -27,6 +27,10 @@ export interface RailState {
   gridActive: boolean;
   /** How many services are in the grid; the entry renders a count when non-zero. */
   gridCount: number;
+  /** Cache-buster for loft://icon/<id> URLs. The URL is stable across an icon change, so
+   *  the rail would otherwise keep Chromium's cached image; the renderer appends `?e=<n>`,
+   *  and main bumps this whenever an icon is re-deployed. */
+  iconEpoch: number;
 }
 
 export interface RailModelInput {
@@ -86,6 +90,8 @@ export function buildRailModel(i: RailModelInput): RailItem[] {
 
 export interface RailStateInput extends RailModelInput {
   grid: GridNode | null;
+  /** Current icon cache-buster (see RailState.iconEpoch). */
+  iconEpoch: number;
 }
 
 /**
@@ -99,6 +105,7 @@ export function buildRailState(i: RailStateInput): RailState {
     managerActive: i.activeId === undefined,
     gridActive: i.activeId === GRID_ID,
     gridCount: gridServices(i.grid).length,
+    iconEpoch: i.iconEpoch,
   };
 }
 

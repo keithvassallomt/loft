@@ -57,12 +57,14 @@ iconEl.addEventListener('error', () => { iconEl.hidden = true; });
 
 addGridEl.addEventListener('click', () => window.loft.addToGrid());
 
-window.loft.onSetContext((id) => {
+window.loft.onSetContext((id, iconEpoch) => {
   const isGrid = id === TITLEBAR_GRID_CONTEXT;
   // A service, as opposed to the manager or the grid — the only context with an icon to
   // load and a web view for reload to act on.
   const isService = id !== null && !isGrid;
-  if (isService) iconEl.src = `loft://icon/${id}`;
+  // ?e=<epoch> busts Chromium's cache under the stable loft://icon/<id> URL, so a changed
+  // icon re-fetches when the user next opens this service (main bumps the epoch on change).
+  if (isService) iconEl.src = `loft://icon/${id}?e=${iconEpoch}`;
   iconEl.hidden = !isService;
   reloadEl.hidden = !isService;
   // Zoom survives into the grid: Task 13 aims it at the focused cell. It is still hidden in

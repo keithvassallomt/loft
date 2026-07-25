@@ -153,7 +153,8 @@ function gridCellHeader(cell: GridLayout['cells'][number], state: GridViewState)
 
   const img = document.createElement('img');
   img.className = 'icon';
-  img.src = `loft://icon/${cell.service}`;
+  // ?e=<epoch> busts Chromium's icon cache under the stable loft://icon/<id> URL (see rail).
+  img.src = `loft://icon/${cell.service}?e=${state.iconEpoch}`;
   img.alt = '';
   el.append(img);
 
