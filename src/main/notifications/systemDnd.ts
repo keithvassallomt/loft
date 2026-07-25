@@ -22,7 +22,22 @@ export interface SystemDndDeps {
 
 export interface SystemDndWatcher { current(): boolean; stop(): void }
 
-/** GNOME: gsettings show-banners → DND is the negation (banners off = DND on). */
+/**
+ * GNOME: gsettings show-banners → DND is the negation (banners off = DND on).
+ *
+ * KNOWN LIMITATION — inert under Flatpak. A modern Flatpak sandbox has no route to the host's
+ * dconf: no dconf grant here, and current flatpak dropped the dconf bridge, so `gsettings`
+ * inside the sandbox reads only the empty in-sandbox schema defaults (show-banners defaults to
+ * true, which masks the failure as "DND never on"). The XDG Settings portal — which the
+ * live-theme feature uses successfully for `org.freedesktop.appearance` (see ../appearance.ts)
+ * — is the only mechanism that reaches the host, but it exposes a curated namespace set that
+ * does NOT include `org.gnome.desktop.notifications`, so there is no portal read to switch to.
+ * Left as-is on purpose: GNOME Shell suppresses the banner for anything Loft sends over
+ * org.freedesktop.Notifications while DND is on regardless, so the gap is largely cosmetic
+ * (the in-page sound gate, and message-tray entries), and Loft's own global DND is the
+ * substitute. Do NOT "fix" this by reintroducing flatpak-spawn --host. See CLAUDE.md §9.
+ * Unpackaged/dev runs are unsandboxed and work fine, which is why this only bites the Flatpak.
+ */
 function gnomeDeps(): SystemDndDeps {
   const read = (): boolean | null => {
     try {
