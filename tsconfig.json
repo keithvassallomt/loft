@@ -1,8 +1,19 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "node16",
-    "moduleResolution": "node16",
+    // DO NOT move to node16/nodenext without first moving the five browser renderer
+    // scripts off this tsc invocation. src/renderer/{rail,grid,gridOverlay,titlebar,
+    // recovery}/*.ts are loaded as plain <script> tags sharing one global scope, and are
+    // import/export-free precisely so tsc emits them as SCRIPTS. Under node16,
+    // impliedNodeFormat makes every file a CommonJS module, so the emit gains
+    // `Object.defineProperty(exports, "__esModule", ...)` — and `exports` is undefined in
+    // a browser, so the script dies on line 2 with a ReferenceError. Symptom: an empty
+    // rail and a Loft window that never stops showing the loading cursor.
+    // "Node" (node10) is deprecated and stops working in TypeScript 7.0; the fix is to
+    // bundle those five with esbuild (--format=iife) like the preloads already are, then
+    // modernise this. Guarded by tests/rendererEmit.test.ts.
+    "module": "CommonJS",
+    "moduleResolution": "Node",
     "rootDir": "src",
     "outDir": "dist",
     "strict": true,
