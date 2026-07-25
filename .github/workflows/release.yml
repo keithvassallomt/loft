@@ -31,7 +31,10 @@ jobs:
           npm run build
 
       - name: Package deb/rpm/AppImage
-        run: npx electron-builder --linux deb rpm AppImage
+        # --publish never: on a tag build electron-builder otherwise starts its own
+        # GitHub publish (and fails for want of GH_TOKEN). The release is published
+        # by the action-gh-release step below, from all four artifacts at once.
+        run: npx electron-builder --linux deb rpm AppImage --publish never
 
       - name: Set up Flatpak runtimes
         run: |
