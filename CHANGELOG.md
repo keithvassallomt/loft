@@ -8,8 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2026-07-25
 
 > [!IMPORTANT]
-> Version 1.0.0 of Loft isn't an update, it's a **total re-write!** The bad news is that you'll have
-> to login again to your services. The good news is:
+> Version 1.0.0 of Loft isn't an update, it's a **total re-write!** The bad news is that you'll have to login again to your services. The good news is:
 > - You get a fantastic unified view.
 > - You get proper titlebars, no longer needing to hover and wait to hide services.
 > - You get great new (entirely optional!) features like grid view, logging into multiple accounts, and more control over auto-open modes.
@@ -94,8 +93,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-04-04
 
 Initial release.
-
-[0.1.3]: https://github.com/keithvassallomt/loft/releases/tag/v0.1.3
-[0.1.2]: https://github.com/keithvassallomt/loft/releases/tag/v0.1.2
-[0.1.1]: https://github.com/keithvassallomt/loft/releases/tag/v0.1.1
-[0.1.0]: https://github.com/keithvassallomt/loft/releases/tag/v0.1.0
