@@ -1,72 +1,89 @@
 import { describe, it, expect } from 'vitest';
-import * as ts from 'typescript';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+import esbuild from 'esbuild';
+import { RENDERER_BUNDLES, BUNDLE_OPTIONS, bundleRenderer } from '../scripts/bundleRenderer.mjs';
 
 /**
- * The five renderer entry points that each index.html loads as a PLAIN <script src="...">
- * (verified by grepping the src= attributes out of every renderer index.html). They are
- * not bundled and not ES modules — they run in the page's global scope.
+ * The five renderer entry points are loaded by their index.html as `<script src="...">`
+ * (three as type="module", titlebar and recovery as classic scripts). Whatever builds them
+ * must therefore emit something a browser can execute directly.
  *
- * That is why they are deliberately import/export-free: a file with no top-level
- * import/export is a SCRIPT to TypeScript, so tsc emits it bare. Add an import to one, or
- * change tsconfig's `module` to node16/nodenext, and tsc instead emits a CommonJS module
- * prologue — `Object.defineProperty(exports, "__esModule", { value: true })`. `exports`
- * does not exist in a browser, so the script dies on line 2 with a ReferenceError and the
- * whole view comes up blank.
+ * They used to be emitted by the main `tsc -p tsconfig.json`, which quietly made the whole
+ * app's module format load-bearing for them: a file with no top-level import/export is a
+ * SCRIPT to TypeScript and emits bare, so they were only ever browser-safe by accident.
+ * Moving tsconfig to module=node16 turned all five into CommonJS modules whose emit opens
+ * with `Object.defineProperty(exports, "__esModule", ...)` — `exports` is undefined in a
+ * page, so each died on line 2 and Loft came up with an empty rail and a window stuck on
+ * the loading cursor (2026-07-25).
  *
- * That happened for real (2026-07-25): moving tsconfig to module/moduleResolution "node16"
- * to clear a deprecation broke all five at once. The visible symptom was an empty rail and
- * a Loft window stuck showing the loading cursor — nothing in the journal, no failing test,
- * because tests/ is excluded from tsc and svelte-check only covers the Svelte hub. This
- * test is the guard that was missing.
+ * esbuild now builds them, which removes that coupling entirely. This test is what keeps
+ * it removed: it runs the REAL bundle configuration (imported, not restated, so the guard
+ * cannot drift from the build) and asserts the output is browser-executable.
+ *
+ * It fails if someone switches the bundle format to cjs, or routes these files back
+ * through a tsc invocation that emits CommonJS.
  */
-const BROWSER_SCRIPTS = [
-  'src/renderer/rail/rail.ts',
-  'src/renderer/grid/grid.ts',
-  'src/renderer/gridOverlay/overlay.ts',
-  'src/renderer/titlebar/titlebar.ts',
-  'src/renderer/recovery/recovery.ts',
-];
-
-/** Compile one file with the project's REAL tsconfig and return the emitted JS. */
-function emitWithProjectConfig(entry: string): string {
-  const configPath = resolve(ROOT, 'tsconfig.json');
-  const read = ts.readConfigFile(configPath, ts.sys.readFile);
-  expect(read.error, `could not read ${configPath}`).toBeUndefined();
-
-  const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, ROOT);
-  const options: ts.CompilerOptions = { ...parsed.options, outDir: undefined, noEmit: false, declaration: false, sourceMap: false };
-
-  const entryPath = resolve(ROOT, entry);
-  const program = ts.createProgram([entryPath], options);
-
-  // Emit ONLY the entry. These scripts type-reference main-process modules (railModel,
-  // config, …) for their shared types, so those get pulled into the program — and an
-  // emit(undefined, …) would hand us their output too. Those files are genuine CommonJS
-  // modules whose `exports` is entirely correct, so folding them in here would fail the
-  // assertion below for the wrong reason.
-  const sourceFile = program.getSourceFile(entryPath);
-  expect(sourceFile, `${entry} is not in the program`).toBeDefined();
-
-  let output = '';
-  program.emit(sourceFile, (fileName, text) => {
-    if (fileName.endsWith('.js')) output += text;
-  });
-  return output;
-}
-
 describe('browser renderer scripts', () => {
-  it.each(BROWSER_SCRIPTS)('%s emits as a bare script, not a CommonJS module', (entry) => {
-    const js = emitWithProjectConfig(entry);
+  // One build for all five, in memory — nothing is written to dist.
+  const built = bundleRenderer({ write: false }).then((results) =>
+    results.map((r, i) => ({
+      entry: RENDERER_BUNDLES[i].entry,
+      js: r.outputFiles.filter((f) => f.path.endsWith('.js')).map((f) => f.text).join(''),
+    })),
+  );
 
-    expect(js, `${entry} produced no JS`).not.toBe('');
-    // The exact prologue that breaks these in a browser.
-    expect(js).not.toContain('Object.defineProperty(exports');
-    // Any reference to the CommonJS globals is equally fatal in a plain <script>.
+  it('builds every entry listed in RENDERER_BUNDLES', async () => {
+    expect((await built).length).toBe(5);
+  });
+
+  it.each(RENDERER_BUNDLES.map((b) => b.entry))('%s is browser-executable', async (entry) => {
+    const out = (await built).find((b) => b.entry === entry);
+    expect(out, `${entry} produced no bundle`).toBeDefined();
+    expect(out!.js, `${entry} produced empty JS`).not.toBe('');
+
+    // The exact prologue that broke these in a browser.
+    expect(out!.js).not.toContain('Object.defineProperty(exports');
+    // Any reference to the CommonJS globals is equally fatal in a page.
+    expect(out!.js).not.toMatch(/\bexports\b/);
+    expect(out!.js).not.toMatch(/\bmodule\.exports\b/);
+    expect(out!.js).not.toMatch(/\brequire\s*\(/);
+  });
+
+  // Bare ESM would break titlebar.js and recovery.js, which their index.html loads as
+  // classic <script> rather than <script type="module">.
+  it.each(RENDERER_BUNDLES.map((b) => b.entry))('%s does not emit bare ESM syntax', async (entry) => {
+    const out = (await built).find((b) => b.entry === entry);
+    expect(out!.js).not.toMatch(/^\s*export\s/m);
+    expect(out!.js).not.toMatch(/^\s*import\s+[^(]/m);
+  });
+
+  /**
+   * The assertions above cannot fail today whatever BUNDLE_OPTIONS.format says: all five
+   * entries are currently import/export-free, so esbuild emits near-identical output for
+   * iife, cjs and esm alike. Verified — flipping the format to cjs or esm leaves every one
+   * of them green. On their own they are a smoke test, not a guard.
+   *
+   * This is the guard. It puts a module-shaped fixture (a top-level export, which is
+   * exactly what bundling these files now permits) through the REAL BUNDLE_OPTIONS, where
+   * the format does change the output:
+   *
+   *   cjs  -> `exports.x = ...`          ReferenceError in a page
+   *   esm  -> `export { x }`             SyntaxError in a classic <script>
+   *   iife -> wrapped, neither           correct
+   *
+   * So this fails the moment someone changes the format, including before any real entry
+   * has grown its first import.
+   */
+  it('keeps module-shaped input browser-executable (fails if the format changes)', async () => {
+    const result = await esbuild.build({
+      ...BUNDLE_OPTIONS,
+      write: false,
+      stdin: { contents: 'export const marker = 1;\nconsole.log(marker);', loader: 'ts' },
+    });
+    const js = result.outputFiles.map((f) => f.text).join('');
+
+    expect(js).toContain('marker');
     expect(js).not.toMatch(/\bexports\b/);
-    expect(js).not.toMatch(/\brequire\s*\(/);
+    expect(js).not.toMatch(/^\s*export\s/m);
+    expect(js).not.toMatch(/^\s*import\s+[^(]/m);
   });
 });

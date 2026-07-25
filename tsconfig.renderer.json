@@ -1,0 +1,29 @@
+{
+  // Type-checking ONLY for the five browser renderer scripts. esbuild bundles them
+  // (scripts/bundleRenderer.mjs) and does not type-check, so this config is what keeps
+  // them honest — hence "noEmit": true. They are excluded from the main tsconfig.json
+  // precisely so that the app's module format can never again decide how a browser script
+  // is emitted; see the comment in scripts/bundleRenderer.mjs.
+  //
+  // The hub is not here: it is a Svelte app built by Vite and checked by `npm run check`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // The pairing for bundler-consumed browser code: esbuild resolves the imports, so
+    // neither node10's directory walking nor node16's mandatory file extensions apply.
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": []
+  },
+  // Must be restated: `exclude` is inherited, and the base excludes all of src/renderer,
+  // which would leave this config with no inputs at all (TS18003).
+  "exclude": ["node_modules", "dist", "tests", "src/renderer/hub"],
+  "include": [
+    "src/renderer/rail/**/*.ts",
+    "src/renderer/grid/**/*.ts",
+    "src/renderer/gridOverlay/**/*.ts",
+    "src/renderer/titlebar/**/*.ts",
+    "src/renderer/recovery/**/*.ts"
+  ]
+}

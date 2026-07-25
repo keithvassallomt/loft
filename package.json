@@ -7,7 +7,9 @@
   "license": "GPL-3.0-or-later",
   "main": "dist/main/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && npm run bundle-preload && npm run bundle-hub-preload && npm run bundle-rail-preload && npm run bundle-grid-preload && npm run bundle-renderer && npm run copy-assets",
+    "build": "tsc -p tsconfig.json && npm run check-renderer && npm run bundle-preload && npm run bundle-hub-preload && npm run bundle-rail-preload && npm run bundle-grid-preload && npm run bundle-renderer-scripts && npm run bundle-renderer && npm run copy-assets",
+    "check-renderer": "tsc -p tsconfig.renderer.json",
+    "bundle-renderer-scripts": "node scripts/bundleRenderer.mjs",
     "bundle-preload": "esbuild src/preload/service.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/service.js",
     "bundle-hub-preload": "esbuild src/preload/hub.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/hub.js",
     "bundle-rail-preload": "esbuild src/preload/rail.ts --bundle --platform=node --format=cjs --external:electron --outfile=dist/preload/rail.js",
