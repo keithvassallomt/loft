@@ -22,9 +22,33 @@ finish-args:
   # so audio/camera came from outside the sandbox. Removing that escape moved rendering
   # in here, and these permissions have to be requested explicitly.
   - --socket=pulseaudio
-  # Devices: GPU (/dev/dri) AND the camera (/dev/video*) for video calls. `all` covers
-  # both — flatpak has no camera-specific device, and it's what Chrome and other
-  # Electron calling apps (e.g. teams_for_linux) use.
+  # Devices: GPU (/dev/dri) AND the camera (/dev/video*) for video calls.
+  #
+  # `all` is not laziness — it is the only option, re-verified 2026-07-25:
+  #   * flatpak has NO camera device value, at any version. `flatpak run --device=camera`
+  #     answers "valid types are: dri, all, kvm, shm, input, usb" (flatpak 1.18.0), and
+  #     --device=dri binds /dev/dri, /dev/udmabuf, /dev/mali*, /dev/nvidia* — NOT
+  #     /dev/video*. A camera-only value was requested in flatpak#1715 and closed
+  #     WONTFIX; upstream's answer was the Camera portal instead.
+  #   * The Camera portal is not usable here yet. Chromium only takes that path behind
+  #     the WebRtcPipeWireCamera feature, which is FEATURE_DISABLED_BY_DEFAULT in the
+  #     Chromium 150 that Electron 43 ships (expiry milestone 160 — upstream cites "no
+  #     test coverage yet", and it regressed fully in M127 and again in M131). The code
+  #     IS compiled into our binary (strings on node_modules/electron/dist/electron finds
+  #     WebRtcPipeWireCamera, org.freedesktop.portal.Camera, OpenPipeWireRemote,
+  #     AccessCamera) — it is simply switched off.
+  #   * Worse than "off": the V4L2 fallback only triggers when PipeWire init returns
+  #     UNAVAILABLE. If PipeWire initialises but exposes no camera nodes, you get zero
+  #     cameras and NO fallback — and with --device=dri there'd be no /dev/video* to fall
+  #     back to (cf. flathub/com.google.Chrome#480, open, Fedora 43 GNOME Wayland).
+  #
+  # Not a linter failure either: flatpak-builder-lint has no rule for device=all, and
+  # Flathub's own com.google.Chrome manifest still ships it.
+  #
+  # To revisit later: set `enable-features=WebRtcPipeWireCamera` via app.commandLine
+  # (Loft currently sets no Chromium switches) while KEEPING --device=all, confirm cameras
+  # still enumerate, and only then narrow to --device=dri. Needs no new finish-args — the
+  # Camera portal lives on the portal bus name, which is granted by default.
   - --device=all
   # The messaging web apps need the network.
   - --share=network
