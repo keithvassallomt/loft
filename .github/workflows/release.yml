@@ -71,11 +71,22 @@ jobs:
           flatpak-builder --user --force-clean --repo=.flatpak-repo build-dir "$MANIFEST"
           flatpak build-bundle .flatpak-repo Loft.flatpak chat.loft.Loft
 
+      # Release notes come from CHANGELOG.md, not from the tag annotation. Without this the
+      # body falls back to whatever the tag message says, which is how v1.0.1 first shipped
+      # with terse plain-text notes while v1.0.0 carried the full changelog entry. The
+      # extractor throws on a missing or empty section, so a release cannot silently ship
+      # without notes. Dispatch previews have no version to look up and are left to the
+      # action's own default.
+      - name: Build release notes from the changelog
+        if: github.ref_type == 'tag'
+        run: node scripts/changelogSection.mjs "${{ github.ref_name }}" > RELEASE_NOTES.md
+
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'preview' }}
           name: ${{ github.ref_type == 'tag' && github.ref_name || 'Preview build' }}
+          body_path: ${{ github.ref_type == 'tag' && 'RELEASE_NOTES.md' || '' }}
           prerelease: ${{ github.ref_type != 'tag' }}
           files: |
             dist-electron/*.deb
