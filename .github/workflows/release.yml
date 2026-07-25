@@ -36,11 +36,23 @@ jobs:
         # by the action-gh-release step below, from all four artifacts at once.
         run: npx electron-builder --linux deb rpm AppImage --publish never
 
+      # Versions are READ FROM THE MANIFEST, never hardcoded. They were pinned to 24.08
+      # here while the manifest moved to 25.08, which would have installed the wrong
+      # runtimes and failed the Flatpak build at tag time — i.e. mid-release. One source
+      # of truth removes the whole class of drift.
       - name: Set up Flatpak runtimes
         run: |
+          set -euo pipefail
+          RUNTIME_VERSION=$(sed -n "s/^runtime-version: *'\([^']*\)'.*/\1/p" chat.loft.Loft.yml)
+          BASE_VERSION=$(sed -n "s/^base-version: *'\([^']*\)'.*/\1/p" chat.loft.Loft.yml)
+          test -n "$RUNTIME_VERSION" && test -n "$BASE_VERSION"
+          echo "runtime=$RUNTIME_VERSION base=$BASE_VERSION"
           flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
-          flatpak install -y --user flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08 \
-            org.electronjs.Electron2.BaseApp//24.08 org.freedesktop.Sdk.Extension.node22//24.08
+          flatpak install -y --user flathub \
+            "org.freedesktop.Platform//$RUNTIME_VERSION" \
+            "org.freedesktop.Sdk//$RUNTIME_VERSION" \
+            "org.electronjs.Electron2.BaseApp//$BASE_VERSION" \
+            "org.freedesktop.Sdk.Extension.node22//$RUNTIME_VERSION"
 
       # On a tag, build the manifest EXACTLY as FriendlyHub gets it — git source pinned to
       # this tag. That is the only step that proves the submitted manifest builds; the old
