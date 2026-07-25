@@ -92,6 +92,10 @@ export interface LoftWindowDeps {
   services(): ServiceInstance[];
   /** Never true unless the app is really quitting — close-to-tray depends on it. */
   onQuit(): boolean;
+  /** Called after bounds/zoom land in the in-memory config, so main can flush them to disk
+   *  while the app is alive. The session-end signal handler cannot write anything (see
+   *  shutdown.ts), so this is the only thing that gets them saved. */
+  onPersisted?(): void;
   /** Live unread for a service, ungated (the rail model applies badgesEnabled itself). */
   badge(id: string): number;
   /** Monotonic icon cache-buster, bumped by main when any icon is re-deployed. Threaded into
@@ -561,6 +565,8 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       const prev = deps.cfg.services[id];
       if (prev) deps.cfg.services[id] = { ...prev, window: { ...(prev.window ?? { width: 1100, height: 800 }), zoom: sv.getZoom() } };
     }
+    // Flush while alive — the session-end handler has ~21ms and cannot (see shutdown.ts).
+    deps.onPersisted?.();
   };
   window.on('resize', persist);
   window.on('move', persist);

@@ -26,6 +26,7 @@ import { registerHubIpc } from './hubIpc';
 import { addInstance, removeInstance } from './install';
 import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
 import { createSignalShutdown } from './shutdown';
+import { createDebouncedFlush } from './configFlush';
 import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath, deployInstanceIcon } from './desktop';
 import {
   dbusSegmentFor, listInstances, resolveInstance, validateInstanceName, nameErrorMessage,
@@ -135,6 +136,26 @@ function serviceIconPath(id: string): string {
 }
 
 const config: LoftConfig = loadConfig(configPath());
+
+/**
+ * Debounced disk flush for window bounds/zoom — the one config field that used to reach
+ * disk only at shutdown, which the session-end handler can no longer afford to do (it has
+ * ~21ms under Flatpak and does nothing but exit; see shutdown.ts).
+ *
+ * 400ms: long enough that a window drag costs one write instead of dozens, short enough
+ * that the write has landed long before a user who just resized a window reaches the
+ * logout button.
+ *
+ * Declared HERE, immediately after `config`, and not down beside persistAll(): the window
+ * constructors capture it in `onPersisted` closures far above that point, and a module-level
+ * `const` referenced before its initialiser runs is a TDZ throw. Same trap as the recovery
+ * view hoist — keep it above every use.
+ */
+const boundsFlush = createDebouncedFlush({
+  save: () => saveConfig(configPath(), config),
+  delayMs: 400,
+});
+
 // DETACHED services only — one window each. An attached service's host is `loft`.
 const windows = new Map<string, ServiceWindow>();
 // The unified window (spec 09 §2): manager + rail + every attached service. Created on
@@ -294,7 +315,12 @@ function openService(def: ServiceInstance, minimized: boolean, view?: ServiceVie
     if (key) focusExternal(key);
     return existing;
   }
-  const sw = createServiceWindow(def, config, { minimized, onQuit: () => quitting, view });
+  const sw = createServiceWindow(def, config, {
+    minimized,
+    onQuit: () => quitting,
+    view,
+    onPersisted: () => boundsFlush.schedule(),
+  });
   // Keep the tray's visibility state in sync with the window (drives Show/Hide label).
   sw.window.on('show', () => tray?.setVisible(def.id, true));
   sw.window.on('hide', () => tray?.setVisible(def.id, false));
@@ -1607,6 +1633,7 @@ if (!app.requestSingleInstanceLock()) {
       cfg: config,
       services: () => listServices(), // read fresh each refresh — the set changes at runtime
       onQuit: () => quitting,
+      onPersisted: () => boundsFlush.schedule(),
       badge: (id) => currentBadge.get(id) ?? 0,
       iconEpoch: () => iconEpoch,
       detached: isDetached,
@@ -1769,30 +1796,25 @@ if (!app.requestSingleInstanceLock()) {
     releaseOsResources();
   });
 
-  // Session-end (logout/shutdown): systemd SIGTERMs our scope ~1s BEFORE it tears down
-  // the session bus (measured on GNOME: loft scope Stopping at T, dbus-broker Stopping at
-  // T+~940ms). Chromium calls LOG(FATAL) (dbus/bus.cc) the instant its D-Bus connection
-  // disconnects while the process is alive — so if we're still shutting down when the bus
-  // dies, the process aborts (SIGTRAP) and the user gets an "Electron crashed" notice at
-  // the next login. Electron's default graceful teardown (~600ms, longer with several
-  // services + our own dbus-next connections open) can lose that race.
+  // Session-end (logout/shutdown): exit immediately, doing NOTHING else. Under Flatpak the
+  // budget between our SIGTERM and Chromium aborting on its dropped D-Bus connection is
+  // ~21ms — xdg-dbus-proxy is a member of our own systemd scope, so `systemctl stop` kills
+  // it alongside us rather than ~940ms later like dbus-broker. shutdown.ts carries the full
+  // measurement and the reasoning; the short version is that no work belongs here, because
+  // any work at all loses the race and reports a bogus crash at the next login.
   //
-  // Fix: persist synchronously and app.exit(0) IMMEDIATELY — collapsing shutdown to a few
-  // ms, well inside the pre-bus-death window. app.quit() is the graceful path that loses
-  // the race; app.exit(0) is deliberate. Reproduced the abort directly by killing a private
-  // bus under a running Electron; verified the exact FATAL:dbus/bus.cc:1245 message, and
-  // that this drops SIGTERM exit from ~600ms to ~116ms. (createSignalShutdown is unit-tested.)
-  const fastExit = createSignalShutdown({
-    persist: () => { persistAll(); releaseOsResources(); },
-    exit: () => app.exit(0),
-  });
+  // Nothing is lost by not persisting: every config field except window bounds/zoom already
+  // saves on change, and bounds/zoom now flush through boundsFlush while the app is alive.
+  const fastExit = createSignalShutdown({ exit: () => app.exit(0) });
   for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.on(sig, fastExit);
 }
 
-/** Persist every open window's bounds/zoom and flush config. Shared by the in-app quit
- *  path (before-quit) and the session-end signal handler. Not allHosts(): persist() is
- *  window-shaped (bounds), so it is deliberately off ServiceHost — a tab has no bounds
- *  of its own, and the Loft window persists its own plus every attached service's zoom. */
+/** Persist every open window's bounds/zoom and flush config. Used by the in-app quit path
+ *  (before-quit) ONLY — the session-end signal handler cannot afford it (~21ms under
+ *  Flatpak; see shutdown.ts), which is why the same state also flushes continuously via
+ *  boundsFlush. Not allHosts(): persist() is window-shaped (bounds), so it is deliberately
+ *  off ServiceHost — a tab has no bounds of its own, and the Loft window persists its own
+ *  plus every attached service's zoom. */
 function persistAll(): void {
   for (const sw of windows.values()) sw.persist();
   loft?.persist();
@@ -1800,8 +1822,10 @@ function persistAll(): void {
 }
 
 /**
- * Kill OS resources that outlive the process. Runs on BOTH exit paths: before-quit does
- * not fire for app.exit(0), which is exactly what the session-end handler above uses.
+ * Kill OS resources that outlive the process. Runs on the in-app quit path ONLY
+ * (before-quit), which has all the time it needs. It deliberately does NOT run on the
+ * session-end signal path: that handler has ~21ms under Flatpak and does nothing but
+ * exit (see shutdown.ts). Do not "restore" it there.
  *
  * Currently just the system-DND watcher, whose GNOME backend spawns a `gsettings monitor`
  * child. Node does not reap spawned children on exit, and `gsettings monitor` only notices
@@ -1810,6 +1834,11 @@ function persistAll(): void {
  * exits. GNOME Shell then still sees Loft as running and ACTIVATES it on an icon click
  * rather than launching it — the app becomes unstartable until the corpse is killed by
  * hand, with nothing on screen to explain why.
+ *
+ * That failure mode is Flatpak-only (no bwrap to hold open otherwise), and under Flatpak
+ * the child is no longer spawned at all — the GNOME DND backend is inert there, so it now
+ * resolves to the no-op (systemDnd.ts). What remains here covers the unsandboxed builds,
+ * where an orphaned monitor is a harmless stray rather than an unstartable app.
  *
  * Best-effort and never throws: an exit path must always reach its exit().
  */

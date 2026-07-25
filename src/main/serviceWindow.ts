@@ -36,7 +36,15 @@ export interface ServiceWindow extends ServiceHost {
 export function createServiceWindow(
   def: ServiceInstance,
   cfg: LoftConfig,
-  opts: { minimized: boolean; onQuit: () => boolean; view?: ServiceView },
+  opts: {
+    minimized: boolean;
+    onQuit: () => boolean;
+    view?: ServiceView;
+    /** Called after bounds/zoom land in the in-memory config, so main can flush them to
+     *  disk while the app is alive. The session-end signal handler cannot write anything
+     *  (see shutdown.ts), so this is the only thing that gets them saved. */
+    onPersisted?: () => void;
+  },
 ): ServiceWindow {
   const saved = cfg.services[def.id]?.window;
 
@@ -108,9 +116,10 @@ export function createServiceWindow(
     }
   });
 
-  // Persist bounds + zoom into the in-memory config (index.ts saveConfig runs on
-  // before-quit). Bind to resize/move AND hide so a session that only zooms or never
-  // moves the window still records its state.
+  // Persist bounds + zoom into the in-memory config, then ask main to flush it. Bind to
+  // resize/move AND hide so a session that only zooms or never moves the window still
+  // records its state. The flush has to happen here, while the app is alive: at a Flatpak
+  // logout the session-end handler has ~21ms before Chromium aborts and cannot write.
   const persist = (): void => {
     const [w, h] = window.getSize();
     const [x, y] = window.getPosition();
@@ -118,6 +127,7 @@ export function createServiceWindow(
       ...cfg.services[def.id],
       window: { x, y, width: w, height: h, zoom: sv.getZoom() },
     };
+    opts.onPersisted?.();
   };
   window.on('resize', persist);
   window.on('move', persist);

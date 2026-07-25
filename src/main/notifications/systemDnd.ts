@@ -1,6 +1,7 @@
 import { spawn, execFileSync } from 'node:child_process';
 import * as dbus from 'dbus-next';
 import { isGnome, isKde } from '../trayBackend';
+import { isFlatpak } from '../desktop';
 
 const SCHEMA = 'org.gnome.desktop.notifications';
 const KEY = 'show-banners';
@@ -111,7 +112,15 @@ const NOOP_DEPS: SystemDndDeps = { current: () => null, watch: () => ({ stop: ()
 /** Pick the DND backend for the current desktop (KDE → Plasma, GNOME → gsettings, else none). */
 export function defaultSystemDndDeps(env: NodeJS.ProcessEnv): SystemDndDeps {
   if (isKde(env)) return kdeDeps();
-  if (isGnome(env)) return gnomeDeps();
+  // GNOME-under-Flatpak gets the no-op, not gnomeDeps(): the sandboxed gsettings read can
+  // only ever return the empty in-sandbox schema default (see the KNOWN LIMITATION above),
+  // so the backend is inert there — but its `gsettings monitor` child is not free. Node
+  // does not reap it, and a survivor holds bwrap open, leaving the flatpak instance alive
+  // and the app unstartable (GNOME activates the corpse instead of launching). Killing it
+  // at exit is no longer an option: the session-end handler has ~21ms under Flatpak and
+  // does nothing but exit (shutdown.ts). So don't start it. NOOP_DEPS.current() returns
+  // null — "unknown" — which is honest, where the sandboxed read would claim "DND off".
+  if (isGnome(env)) return isFlatpak(env) ? NOOP_DEPS : gnomeDeps();
   return NOOP_DEPS;
 }
 
