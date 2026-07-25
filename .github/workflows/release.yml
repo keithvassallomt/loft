@@ -42,9 +42,21 @@ jobs:
           flatpak install -y --user flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08 \
             org.electronjs.Electron2.BaseApp//24.08 org.freedesktop.Sdk.Extension.node22//24.08
 
+      # On a tag, build the manifest EXACTLY as FriendlyHub gets it — git source pinned to
+      # this tag. That is the only step that proves the submitted manifest builds; the old
+      # `type: dir` source always resolved here (CI has a full checkout) and so hid the
+      # missing-source bug that failed the 1.0.0 FriendlyHub build.
+      # A dispatch preview has no tag to pin, so it builds the generated working-tree
+      # manifest instead.
       - name: Build Flatpak bundle
         run: |
-          flatpak-builder --user --force-clean --repo=.flatpak-repo build-dir chat.loft.Loft.yml
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            MANIFEST=chat.loft.Loft.yml
+          else
+            npm run flatpak:dev
+            MANIFEST=chat.loft.Loft.dev.yml
+          fi
+          flatpak-builder --user --force-clean --repo=.flatpak-repo build-dir "$MANIFEST"
           flatpak build-bundle .flatpak-repo Loft.flatpak chat.loft.Loft
 
       - name: Publish release

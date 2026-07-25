@@ -230,5 +230,9 @@ npm run icons
 
 # Packaging (heavier; only for distribution or packaged-behavior verification)
 npm run dist                 # electron-builder: deb/rpm/AppImage
-flatpak-builder --user --force-clean --repo=.flatpak-repo build-dir chat.loft.Loft.yml
+# The committed chat.loft.Loft.yml is what FriendlyHub gets: its app source is `type: git`
+# pinned to the release tag, so it does NOT see working-tree changes. Generate the dev
+# manifest (same file, working-tree source) for local builds.
+npm run flatpak:dev
+flatpak-builder --user --force-clean --repo=.flatpak-repo build-dir chat.loft.Loft.dev.yml
 ```

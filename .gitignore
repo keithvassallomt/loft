@@ -14,5 +14,8 @@ dist-electron/
 /flatpak-node/
 *.flatpak
 
+# Local-iteration manifest, generated from chat.loft.Loft.yml by `npm run flatpak:dev`
+/chat.loft.Loft.dev.yml
+
 # Brainstorming visual companion (superpowers)
 .superpowers/

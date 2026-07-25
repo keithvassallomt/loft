@@ -15,6 +15,7 @@
     "bundle-renderer": "vite build",
     "copy-assets": "mkdir -p dist/renderer/titlebar dist/renderer/recovery dist/renderer/rail dist/renderer/grid dist/renderer/gridOverlay dist/assets/icons/variants && cp src/renderer/titlebar/index.html src/renderer/titlebar/titlebar.css dist/renderer/titlebar/ && cp src/renderer/recovery/index.html src/renderer/recovery/recovery.css dist/renderer/recovery/ && cp src/renderer/rail/index.html src/renderer/rail/rail.css dist/renderer/rail/ && cp src/renderer/grid/index.html src/renderer/grid/grid.css dist/renderer/grid/ && cp src/renderer/gridOverlay/index.html src/renderer/gridOverlay/overlay.css dist/renderer/gridOverlay/ && cp assets/loft.png dist/assets/ && cp assets/icons/*.png dist/assets/icons/ && cp assets/icons/variants/*.png dist/assets/icons/variants/ && cp assets/icons/loft-symbolic.svg dist/assets/loft-symbolic.svg",
     "icons": "scripts/rasterize-icons.sh",
+    "flatpak:dev": "node scripts/flatpakDevManifest.mjs",
     "start": "npm run build && env -u ELECTRON_RUN_AS_NODE electron .",
     "dist": "npm run build && electron-builder --linux",
     "whatsapp": "npm run build && env -u ELECTRON_RUN_AS_NODE electron . --service=whatsapp",

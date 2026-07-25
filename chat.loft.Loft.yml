@@ -94,16 +94,19 @@ modules:
       - install -Dm644 data/chat.loft.Loft.metainfo.xml /app/share/metainfo/chat.loft.Loft.metainfo.xml
       - install -Dm644 build/icon.png /app/share/icons/hicolor/512x512/apps/chat.loft.Loft.png
     sources:
-      - type: dir
-        path: .
-        # Force a clean offline install and keep the copy small: skip VCS,
-        # local build artifacts, and any host-built node_modules/dist.
-        skip:
-          - .git
-          - build-dir
-          - .flatpak-repo
-          - target
-          - node_modules
-          - dist
-          - dist-electron
-      - flatpak/generated-sources.json
+      # This manifest is uploaded to FriendlyHub verbatim, and FriendlyHub builds it in a
+      # directory holding ONLY the manifest + its companion files — there is no checkout.
+      # So the app source MUST be `type: git` ("not `type: dir`", per FriendlyHub's own
+      # submission rules): a `type: dir` source resolves to nothing on their builder, and
+      # the first build command dies with "npm ci can only install with an existing
+      # package-lock.json". `npm run flatpak:dev` regenerates the block below as a
+      # working-tree `type: dir` source for local iteration — do not hand-edit it here.
+      # >>> app source (generated: scripts/flatpakDevManifest.mjs) >>>
+      - type: git
+        url: https://github.com/keithvassallomt/loft.git
+        tag: v1.0.0
+      # <<< app source <<<
+      # Companion files land flat next to the manifest in the FriendlyHub build repo, so
+      # this reference must stay a bare filename — hence the file lives at the repo root
+      # rather than under flatpak/.
+      - generated-sources.json
