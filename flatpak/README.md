@@ -31,27 +31,29 @@ Verified against `flatpak remote-ls flathub` and
 
 | Component | Choice | Notes |
 |-----------|--------|-------|
-| Runtime | `org.freedesktop.Platform//24.08` | freedesktop-sdk-24.08.x |
-| SDK | `org.freedesktop.Sdk//24.08` | |
-| Base app | `org.electronjs.Electron2.BaseApp//24.08` | Provides `zypak-wrapper` + Chromium's shared libs; must match the runtime branch. |
-| Node SDK extension | `org.freedesktop.Sdk.Extension.node22//24.08` | Build-time only (tsc/esbuild/vite). node22 matches the host toolchain (Node 22, npm 10) that produced the lockfile. |
+| Runtime | `org.freedesktop.Platform//25.08` | freedesktop-sdk-25.08.x |
+| SDK | `org.freedesktop.Sdk//25.08` | |
+| Base app | `org.electronjs.Electron2.BaseApp//25.08` | Provides `zypak-wrapper` + Chromium's shared libs; must match the runtime branch. |
+| Node SDK extension | `org.freedesktop.Sdk.Extension.node22//25.08` | Build-time only (tsc/esbuild/vite). node22 matches the host toolchain (Node 22, npm 10) that produced the lockfile. |
 | Electron (app) | `43.1.0` | Resolved from `electron/node_modules/electron/package.json`. The app **bundles its own** Electron binary (from `generated-sources.json`); the base app only supplies zypak + libraries. |
 
-**Why 24.08 (and not 25.08).** Both `24.08` and `25.08` form a mutually
-consistent set on Flathub today (runtime + sdk + `Electron2.BaseApp` +
-`Sdk.Extension.node22` all exist on both branches). We chose `24.08`: it is the
-more mature freedesktop branch (higher patch level) and the current well-trodden
-target for Electron 43 apps on Flathub, which lowers the risk of a runtime
-library-version surprise. Bump all four together if/when moving to `25.08`.
+**On 25.08 since 1.0.1.** Both branches form a mutually consistent set on
+Flathub (runtime + sdk + `Electron2.BaseApp` + `Sdk.Extension.node22` exist on
+each), and 1.0.0 shipped on `24.08` as the more mature branch. 1.0.1 moved to
+`25.08` so the app keeps receiving library and security updates; verified
+build-clean, and Electron, the portals, the GNOME session client and the Shell
+helper all work on it. Bump all four together, and note that CI reads the
+versions out of the manifest (`.github/workflows/release.yml`) rather than
+hardcoding them — so the manifest is the only place to change.
 
 ### Installing the runtimes locally
 
 ```bash
 flatpak install -y --user flathub \
-  org.freedesktop.Platform//24.08 \
-  org.freedesktop.Sdk//24.08 \
-  org.electronjs.Electron2.BaseApp//24.08 \
-  org.freedesktop.Sdk.Extension.node22//24.08
+  org.freedesktop.Platform//25.08 \
+  org.freedesktop.Sdk//25.08 \
+  org.electronjs.Electron2.BaseApp//25.08 \
+  org.freedesktop.Sdk.Extension.node22//25.08
 ```
 
 ## Regenerating the Node offline sources
@@ -175,18 +177,35 @@ flatpak run chat.loft.Loft            # opens the hub window
 ## Standalone `.flatpak` bundle (GitHub Releases artifact)
 
 ```bash
-flatpak build-bundle .flatpak-repo Loft-1.0.0.flatpak chat.loft.Loft
+flatpak build-bundle .flatpak-repo Loft.flatpak chat.loft.Loft
 ```
 
-Install with `flatpak install --user Loft-1.0.0.flatpak`.
+Install with `flatpak install --user Loft.flatpak`. (CI attaches the bundle to
+the GitHub Release under exactly this name.)
 
 ## FriendlyHub upload
 
-FriendlyHub builds the manifest itself for both architectures. Upload, **both from
-the repo root**:
+FriendlyHub builds the manifest itself for both architectures. Upload **three**
+files:
 
-1. `chat.loft.Loft.yml` (the manifest), and
-2. `generated-sources.json` (the offline Node sources it references).
+1. `chat.loft.Loft.yml` — the manifest (repo root),
+2. `generated-sources.json` — the offline Node sources it references (repo root), and
+3. `data/chat.loft.Loft.metainfo.xml` — the AppStream metainfo, which supplies the
+   store listing and the version FriendlyHub publishes.
+
+The metainfo is easy to forget, because the manifest never references it as a
+source — the build installs it out of the git checkout
+(`install -Dm644 data/chat.loft.Loft.metainfo.xml …`). FriendlyHub still needs
+its own copy for the listing, so it has to be uploaded alongside the other two.
+This list previously said two files and cost a re-upload; if you are scripting
+the submission, take all three from the release tag so they cannot disagree:
+
+```bash
+mkdir -p ~/Downloads/loft-friendlyhub-$VER && cd ~/Downloads/loft-friendlyhub-$VER
+for f in chat.loft.Loft.yml generated-sources.json data/chat.loft.Loft.metainfo.xml; do
+  git -C /path/to/loft show "v$VER:$f" > "$(basename "$f")"
+done
+```
 
 FriendlyHub builds **x86_64** and **aarch64** from the same inputs (the offline
 sources contain every arch's tarballs and Electron binary).
