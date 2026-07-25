@@ -15,6 +15,7 @@ import { Tray, TrayDeps, TrayServiceSeed } from './tray';
 import { startTrayBackend } from './tray/backend';
 import { startNotifications, Notifications } from './notifications';
 import { createShellHelperClient } from './gnome/shellHelper';
+import { registerSessionClient } from './gnome/sessionClient';
 import { startLoftDbusService, type LoftServiceDeps, type LoftDbus } from './dbus/loftService';
 import { ensureGnomeHelper, defaultHelperInstallDeps } from './gnome/helperInstall';
 import { isGnome, isKde, resolveTrayBackend } from './trayBackend';
@@ -1796,15 +1797,24 @@ if (!app.requestSingleInstanceLock()) {
     releaseOsResources();
   });
 
-  // Session-end (logout/shutdown): exit immediately, doing NOTHING else. Under Flatpak the
-  // budget between our SIGTERM and Chromium aborting on its dropped D-Bus connection is
-  // ~21ms — xdg-dbus-proxy is a member of our own systemd scope, so `systemctl stop` kills
-  // it alongside us rather than ~940ms later like dbus-broker. shutdown.ts carries the full
-  // measurement and the reasoning; the short version is that no work belongs here, because
-  // any work at all loses the race and reports a bogus crash at the next login.
+  // Session-end, the RELIABLE path: let gnome-session tell us the logout is happening,
+  // instead of racing the SIGTERM that follows it.
   //
-  // Nothing is lost by not persisting: every config field except window bounds/zoom already
-  // saves on change, and bounds/zoom now flush through boundsFlush while the app is alive.
+  // By the time SIGTERM arrives it is already too late. systemd stops our scope, which
+  // SIGTERMs us and our xdg-dbus-proxy together; the proxy exits in ~16ms, and Chromium
+  // aborts the moment its D-Bus connection drops while we are alive. A harness modelling
+  // that topology proved exiting-on-SIGTERM is not a fix but a coin flip — it never
+  // survived a simultaneous bus death and won about two runs in five at the real gap.
+  // The same app.exit(0) is reliably clean given ~940ms, so the fix is to buy budget, not
+  // to shave microseconds. gnome-session's EndSession exchange completes before it stops
+  // the app scopes, with the bus still healthy — that is the budget. See gnome/sessionClient.ts.
+  if (gnome) {
+    void registerSessionClient(() => app.exit(0));
+  }
+
+  // Fallback for everything that is not GNOME, and for a SIGTERM that arrives without any
+  // session-manager warning at all (kill, systemctl stop, a desktop with no such service).
+  // Deliberately still does NOTHING but exit: any work here loses the race outright.
   const fastExit = createSignalShutdown({ exit: () => app.exit(0) });
   for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.on(sig, fastExit);
 }
