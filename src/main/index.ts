@@ -247,6 +247,11 @@ function windowKeys(): string[] {
   return keys;
 }
 function syncLoftWindows(): void { helper?.setLoftWindows(windowKeys()); }
+// A shell restart, suspend/resume, or extension re-enable wipes the helper's key set,
+// and it has no way to ask for it back. Re-send on every (re)appearance: otherwise
+// alt-tab keeps offering windows Loft has hidden to the tray until some unrelated
+// window open/close happens to resync. gnomePanel re-pushes the tray state the same way.
+helper?.onHelperAppeared(() => { syncLoftWindows(); });
 
 /** Everything the manager renderer draws. Read fresh on every call — it is derived from
  *  config plus wherever the services actually live, and nothing caches it. */

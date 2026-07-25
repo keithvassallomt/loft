@@ -1,9 +1,9 @@
 {
   "uuid": "loft-shell-helper@loft.chat",
   "name": "Loft Shell Helper",
-  "description": "Window management helper for Loft — handles window activation and hides minimized Loft windows from alt-tab.",
+  "description": "Panel indicator and window management for the Loft messaging app.\n\nAdds a panel menu listing Loft's configured services, each with show/hide, do-not-disturb and quit controls, plus a global do-not-disturb switch. Also activates Loft windows on request and keeps the ones hidden to the tray out of alt-tab.\n\nRequires Loft to be installed and running; the menu controls it over D-Bus.",
   "shell-version": ["47", "48", "49", "50"],
-  "version-name": "2.1",
+  "version-name": "2.0",
   "url": "https://github.com/keithvassallomt/loft",
   "donations": {
     "github": "keithvassallomt"
