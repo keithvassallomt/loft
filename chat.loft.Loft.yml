@@ -58,6 +58,16 @@ finish-args:
   - --talk-name=org.freedesktop.Notifications
   # GNOME Shell extension helper (install via EGO + drive FocusWindow/HideWindow).
   - --talk-name=org.gnome.Shell.Extensions
+  # The helper's OWN bus name, exported by the extension inside gnome-shell. This must be
+  # listed explicitly and is easy to lose: it used to be covered incidentally by
+  # `--own-name=chat.loft.*`, because an own rule also implies talk/see for every matching
+  # name. Dropping that wildcard (the app owns only its app id) therefore silently removed
+  # talk access to a name Loft never owned — every call returned ServiceUnknown, which is
+  # how xdg-dbus-proxy reports a filtered name rather than AccessDenied, so it reads like
+  # "the extension isn't installed". Symptom: no panel tray icon on GNOME. The app id
+  # default grant covers chat.loft.Loft and chat.loft.Loft.*, NOT the sibling
+  # chat.loft.ShellHelper.
+  - --talk-name=chat.loft.ShellHelper
   # No --talk-name for org.freedesktop.portal.* and no --own-name for the app id itself:
   # flatpak grants both to every sandboxed app by default, so listing them is redundant
   # (flatpak-builder-lint: finish-args-portal-talk-name, finish-args-unnecessary-appid-
