@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Logging out no longer leaves an "Electron crashed" report waiting at your next login.** Loft now registers with GNOME as a session client and quits cleanly when the session ends. Previously it was only told to quit at the same instant its sandbox lost its connection to the desktop's message bus, and it aborted instead of exiting — harmless to your accounts and settings, but it filed a crash report on every single logout.
+- Window sizes and positions are now saved as you move and resize, rather than when Loft exits, so they survive the app being closed abruptly.
+- The Flatpak build submitted to FriendlyHub now builds there. The 1.0.0 submission failed because the manifest referenced the source in a way that only works from a full checkout, which their builder doesn't have.
+
+### Changed
+
+- Tightened the Flatpak sandbox: Loft no longer claims a wildcard of D-Bus names, only the one it actually uses, and drops two permissions the sandbox grants every app anyway.
+
 ## [1.0.0] - 2026-07-25
 
 > [!IMPORTANT]
