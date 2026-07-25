@@ -1,9 +1,13 @@
 app-id: chat.loft.Loft
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+# Keep runtime-version and base-version in lockstep: the Electron base app is built
+# against a specific freedesktop runtime, and mixing them gives link errors at build time
+# or missing libraries at run time. node22 is available for 25.08 too, so the sdk-extension
+# below needs no change (its branch follows the SDK version).
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 base: org.electronjs.Electron2.BaseApp
-base-version: '24.08'
+base-version: '25.08'
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.node22
 command: loft

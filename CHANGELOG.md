@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Tightened the Flatpak sandbox: Loft no longer claims a wildcard of D-Bus names, only the one it actually uses, and drops two permissions the sandbox grants every app anyway.
+- The Flatpak build moved to the 25.08 freedesktop runtime, so it keeps receiving system library and security updates.
 
 ## [1.0.0] - 2026-07-25
 
