@@ -1,8 +1,8 @@
 {
   "name": "loft",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Linux desktop integration for messaging web apps",
-  "author": "Keith Vassallo <keith@icemalta.com>",
+  "author": "Keith Vassallo <keith@vassallo.cloud>",
   "homepage": "https://github.com/keithvassallomt/loft",
   "license": "GPL-3.0-or-later",
   "main": "dist/main/index.js",

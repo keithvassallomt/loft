@@ -164,13 +164,27 @@ modules:
       # package-lock.json". `npm run flatpak:dev` regenerates the block below as a
       # working-tree `type: dir` source for local iteration — do not hand-edit it here.
       # >>> app source (generated: scripts/flatpakDevManifest.mjs) >>>
-      # `commit` alongside `tag` on purpose: a tag is a moveable reference, so a tag-only
-      # source is not a reproducible build (flatpak-builder-lint:
-      # module-loft-source-git-no-commit-with-tag). Both must be bumped together on release.
+      # Tag only, no `commit:` — deliberate, and it costs a lint finding
+      # (module-loft-source-git-no-commit-with-tag) that is accepted rather than fixed.
+      #
+      # A commit pin cannot coexist with this release workflow. The tag here has to equal
+      # package.json's version in the RELEASE COMMIT ITSELF (enforced by
+      # tests/flatpakManifest.test.ts, because FriendlyHub reads the published version from
+      # the metainfo and would otherwise ship one version's code labelled as another). But
+      # the sha of the commit a tag names cannot be known while writing that same commit —
+      # so any sha put here is necessarily stale, and the tag would point at a tree naming
+      # a different commit. Silently wrong beats visibly unpinned, so: no sha.
+      #
+      # An earlier attempt to satisfy the linter made this worse twice over: it pinned
+      # 7199b83, which is the ANNOTATED TAG OBJECT's sha rather than the commit's
+      # (`git rev-parse v1.0.0` returns the tag object; only `git rev-parse v1.0.0^{}`
+      # peels it to the commit), and flatpak-builder resolves that field as a commit.
+      #
+      # The reproducibility this would buy is thin here anyway: the tags are annotated and
+      # Keith is the only person who can move them.
       - type: git
         url: https://github.com/keithvassallomt/loft.git
-        tag: v1.0.0
-        commit: 7199b83f11edbcc0aadbf29250d64720b1574ba8
+        tag: v1.0.1
       # <<< app source <<<
       # Companion files land flat next to the manifest in the FriendlyHub build repo, so
       # this reference must stay a bare filename — hence the file lives at the repo root

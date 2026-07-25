@@ -82,6 +82,18 @@
   </screenshots>
 
   <releases>
+    <release version="1.0.1" date="2026-07-25">
+      <description>
+        <p>
+          A same-day fix for Loft 1.0, which reported a crash every time you logged out.
+        </p>
+        <ul>
+          <li>Logging out no longer leaves an "Electron crashed" report waiting at your next login. Loft now tells GNOME it is part of the session and shuts down properly when the session ends. Your accounts and settings were never at risk — but the report appeared on every single logout.</li>
+          <li>Window sizes and positions are saved as you move and resize them, so they survive Loft being closed abruptly.</li>
+          <li>The Flatpak build now builds on FriendlyHub, and moves to the 25.08 runtime so it keeps getting system library and security updates.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-07-25">
       <description>
         <p>

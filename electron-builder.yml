@@ -14,7 +14,7 @@ linux:
     - AppImage
   category: Network
   icon: build/icon.png
-  maintainer: Keith Vassallo <keith@icemalta.com>
+  maintainer: Keith Vassallo <keith@vassallo.cloud>
   synopsis: Desktop integration for messaging web apps on Linux
   description: >-
     Loft gives WhatsApp, Facebook Messenger, Slack, Telegram, Element, and
