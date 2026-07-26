@@ -5,6 +5,7 @@ import type { TrayBackend } from './trayBackend';
 import type { AutoOpen } from '../shared/hubTypes';
 import { clampZoom } from './zoom';
 import { services as gridServices, RATIO_MIN, RATIO_MAX, type GridNode } from './gridTree';
+import { sanitizeBubbles, type Bubble } from './bubbles';
 
 /** A window's position and size. The Loft window uses this; zoom is per service. */
 export interface Bounds {
@@ -68,6 +69,8 @@ export interface LoftConfig {
   railOrder?: string[];
   /** Grid view arrangement (grid-view spec §5/§6). Absent or null means an empty grid. */
   grid?: GridNode | null;
+  /** Pinned conversations, in pin order. Absent means none — an empty list is never written. */
+  bubbles?: Bubble[];
 }
 
 export function defaultConfig(): LoftConfig {
@@ -255,6 +258,10 @@ export function loadConfig(path: string): LoftConfig {
     }
     const grid = sanitizeGridNode(parsed.grid);
     if (grid) base.grid = grid;
+    // Absent rather than `[]` when empty, keeping the file free of no-op keys — the same
+    // convention `autoOpen` and `globalDnd` follow.
+    const bubbles = sanitizeBubbles(parsed.bubbles);
+    if (bubbles.length) base.bubbles = bubbles;
     return base;
   } catch {
     return defaultConfig();

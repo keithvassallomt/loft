@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig, saveConfig, defaultConfig, reopenDetachedEnabled, effectiveAutoOpen } from '../src/main/config';
+import { bubbleId } from '../src/main/bubbles';
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'loft-cfg-')); });
@@ -220,5 +221,43 @@ describe('effectiveAutoOpen', () => {
   });
   it('prefers autoOpen over the legacy boolean', () => {
     expect(effectiveAutoOpen({ autoOpen: 'launch', openOnStartup: true })).toBe('launch');
+  });
+});
+
+describe('bubbles in config', () => {
+  it('round-trips through save and load', () => {
+    const p = join(dir, 'bubbles.json');
+    const cfg = defaultConfig();
+    cfg.bubbles = [{ id: bubbleId('whatsapp', '1@lid'), serviceId: 'whatsapp', key: '1@lid', title: 'Dan' }];
+    saveConfig(p, cfg);
+    expect(loadConfig(p)).toEqual(cfg);
+  });
+
+  it('omits the key entirely when there are no bubbles, keeping no-op keys out of the file', () => {
+    const p = join(dir, 'empty-bubbles.json');
+    writeFileSync(p, JSON.stringify({ services: {}, bubbles: [] }), 'utf8');
+    expect(loadConfig(p).bubbles).toBeUndefined();
+  });
+
+  it('survives a corrupt bubble list rather than failing to start', () => {
+    const p = join(dir, 'bad-bubbles.json');
+    writeFileSync(p, JSON.stringify({ services: { slack: {} }, bubbles: 'not an array' }), 'utf8');
+    const cfg = loadConfig(p);
+    expect(cfg.bubbles).toBeUndefined();
+    expect(cfg.services.slack).toBeDefined();
+  });
+
+  it('drops only the malformed bubbles, keeping the good ones', () => {
+    const p = join(dir, 'mixed-bubbles.json');
+    writeFileSync(p, JSON.stringify({
+      services: {},
+      bubbles: [
+        { serviceId: 'slack', key: 'C1', title: 'good' },
+        { serviceId: 'slack', title: 'no key' },
+      ],
+    }), 'utf8');
+    expect(loadConfig(p).bubbles).toEqual([
+      { id: bubbleId('slack', 'C1'), serviceId: 'slack', key: 'C1', title: 'good' },
+    ]);
   });
 });
