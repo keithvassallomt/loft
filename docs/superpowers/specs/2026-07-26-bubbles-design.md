@@ -262,6 +262,22 @@ as broken.
 the plan with bounded backoff (roughly 500ms intervals for up to 20s) before reporting
 `not-found`. Without this, every bubble click on a sleeping service fails.
 
+## Follow-ups, in order
+
+Deferred deliberately, not forgotten. Each is a slice in its own right.
+
+1. **Unread dot on bubbles.** A plain dot when the pinned conversation has anything unread —
+   no count, so it cannot be wrong by a number. Needs per-conversation unread detection in all
+   six parsers, which is why it is not in v1. Shows nothing while the service is asleep, for the
+   same reason rail badges read 0 there.
+2. **Drag to reorder bubbles.** Order is pin order in v1. This is the slice that has to touch
+   `railGesture.ts` / `railDrag.ts` / `railSlots.ts` / `gridDrop.ts` and teach them a second
+   entry type, so it is worth doing on its own, against a feature that already works, rather
+   than entangled with the first build.
+3. **Unread count**, if the dot proves insufficient. Furthest out: WhatsApp counts messages,
+   Telegram counts conversations and Element reads a title, so the three do not agree today and
+   a shared meaning has to be decided first.
+
 ## Non-goals
 
 - **Unread indication on bubbles.** Service badge only in v1. An unread *dot* is the first
