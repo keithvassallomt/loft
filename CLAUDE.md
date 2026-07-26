@@ -222,6 +222,17 @@ env -u ELECTRON_RUN_AS_NODE npx electron . --service=whatsapp --minimized
 npm start
 npm run whatsapp   # also: messenger, slack, telegram, element, talk
 
+# Run the working-tree build against the INSTALLED FLATPAK's profile, so a dev session
+# inherits real logins instead of asking for a QR scan every time. The whole mechanism is
+# XDG_CONFIG_HOME/XDG_DATA_HOME (see scripts/devProfile.mjs) — no dev branch in the app.
+npm run dev                        # copy-on-write clone of the Flatpak profile (safe; can
+                                   # run alongside the Flatpak). Args pass through:
+npm run dev -- --service=whatsapp  #   e.g. straight into a service for a DevTools spike
+npm run dev:refresh                # re-snapshot the clone (picks up new logins)
+npm run dev:live                   # against the Flatpak's REAL profile — writes persist
+                                   # both ways. Refuses to start while the Flatpak is
+                                   # running, and backs up config.json first.
+
 # Tests and renderer type-checking
 npm test
 npm run check
