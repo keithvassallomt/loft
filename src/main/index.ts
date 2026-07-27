@@ -1570,6 +1570,17 @@ if (!app.requestSingleInstanceLock()) {
     const open = currentConversation.get(id);
     if (open) set.delete(open.key);
     unreadKeys.set(id, set);
+    // Both sides of the match, on one line. A key the page reports that does not equal the
+    // key a bubble stored produces NO error anywhere — the dot simply never appears — so
+    // this is the only place the mismatch is observable. Cheap: the preload sends only when
+    // the set changes, so this logs on change, not on every poll.
+    const pinned = (config.bubbles ?? []).filter((b) => b.serviceId === id);
+    const matched = pinned.filter((b) => set.has(b.key) || set.has(b.title));
+    console.log(
+      `[unread] ${id}: seen=${JSON.stringify([...set])}`
+      + ` pinned=${JSON.stringify(pinned.map((b) => b.key))}`
+      + ` -> ${matched.length} match${matched.length === 1 ? '' : 'es'}`,
+    );
     loft?.refreshRail();
   });
 
