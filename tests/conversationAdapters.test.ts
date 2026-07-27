@@ -203,14 +203,14 @@ describe('element adapter', () => {
 describe('avatar url handling', () => {
   // This filter was https-only and silently dropped every Telegram and Talk avatar.
   it('resolves a RELATIVE avatar against the page origin (NextCloud Talk)', () => {
-    document.body.innerHTML = '<div id="app-content"><img class="avatar" src="/avatar/keith/64"></div>';
+    document.body.innerHTML = '<a href="/call/abc123"><img src="/avatar/keith/64"></a>';
     const got = CONVERSATION_ADAPTERS.talk.capture(
       document, fakeWin('https://cloud.example.org/call/abc123'));
     expect(got?.avatarUrl).toBe('https://cloud.example.org/avatar/keith/64');
   });
 
   it('rejects a scheme main could never resolve', () => {
-    document.body.innerHTML = '<div id="app-content"><img class="avatar" src="javascript:alert(1)"></div>';
+    document.body.innerHTML = '<a href="/call/abc123"><img src="javascript:alert(1)"></a>';
     expect(CONVERSATION_ADAPTERS.talk.capture(
       document, fakeWin('https://cloud.example.org/call/abc123'))?.avatarUrl).toBeUndefined();
   });
@@ -247,13 +247,47 @@ describe('messenger adapter', () => {
 
 describe('talk adapter', () => {
   const tk = CONVERSATION_ADAPTERS.talk;
-  it('captures the call token and plans a full navigation', () => {
-    const win = fakeWin('https://cloud.example.org/call/abc123');
-    expect(tk.capture(document, win)?.key).toBe('/call/abc123');
-    expect(tk.plan('/call/abc123', document, win)).toEqual({ kind: 'url', url: '/call/abc123' });
+  const win = fakeWin('https://nc.example.org/call/37egz8x9');
+
+  it('captures the call token as the key', () => {
+    document.body.innerHTML = '';
+    document.title = 'Test User - Talk - Example - Nextcloud';
+    expect(tk.capture(document, win)?.key).toBe('/call/37egz8x9');
   });
+
+  // Measured: the row's own text is the name concatenated with the last message
+  // ("Test UserYou:ssup"), so document.title is the only clean source.
+  it('takes the conversation name from document.title, before the " - Talk" suffix', () => {
+    document.title = 'Test User - Talk - Vassallo.cloud - Nextcloud';
+    expect(tk.capture(document, win)?.title).toBe('Test User');
+  });
+
+  // Measured: reopening used to assign location.href and reload the whole Vue app. The
+  // sidebar has real anchors, so the router can be used instead.
+  it('plans an ANCHOR click rather than a full navigation', () => {
+    document.body.innerHTML = '<a href="/call/37egz8x9">Test UserYou:ssup</a>';
+    const plan = tk.plan('/call/37egz8x9', document, win);
+    expect(plan.kind).toBe('row');
+    if (plan.kind !== 'row') throw new Error('unreachable');
+    expect(plan.via).toBe('anchor');
+    expect(plan.find(document)).toBe(document.querySelector('a'));
+  });
+
+  it('ignores the Talk app icon placeholder, so bubbles fall back to distinct initials', () => {
+    document.title = 'Test User - Talk - Example - Nextcloud';
+    document.body.innerHTML =
+      '<a href="/call/37egz8x9"><img src="/custom_apps/spreed/img/app.svg"></a>';
+    expect(tk.capture(document, win)?.avatarUrl).toBeUndefined();
+  });
+
+  it('keeps a real avatar, resolved against the instance origin', () => {
+    document.title = 'Test User - Talk - Example - Nextcloud';
+    document.body.innerHTML = '<a href="/call/37egz8x9"><img src="/avatar/testuser/64"></a>';
+    expect(tk.capture(document, win)?.avatarUrl).toBe('https://nc.example.org/avatar/testuser/64');
+  });
+
   it('captures nothing outside a call route', () => {
-    expect(tk.capture(document, fakeWin('https://cloud.example.org/apps/files'))).toBeNull();
+    expect(tk.capture(document, fakeWin('https://nc.example.org/apps/files'))).toBeNull();
   });
 });
 

@@ -208,20 +208,36 @@ function findMessengerAnchor(doc: Document, key: string): Element | null {
 }
 
 // --- NextCloud Talk ---------------------------------------------------------
-// Path-routed with no in-page route available, so reopening is a full navigation. Inferred,
-// not measured — no Talk account existed during the spike.
+// Measured: the conversation list renders a real anchor per conversation, `a[href="/call/
+// <token>"]`, matching the path we store as the key. So reopening clicks that anchor and
+// stays in the Vue router, rather than assigning location.href and reloading the whole app.
+// A full navigation remains the fallback when the row is not rendered at all.
+
+/** Talk's own app icon, served as the avatar for any conversation with no picture. Using it
+ *  would make every such bubble an identical Talk logo — strictly worse than the initials the
+ *  rail falls back to, which at least tell two conversations apart. */
+const TALK_PLACEHOLDER = /\/img\/app\.svg$/;
+
+function talkAnchor(doc: Document, key: string): Element | null {
+  try { return doc.querySelector(`a[href="${key}"]`); } catch { return null; }
+}
 
 const talk: ConversationAdapter = {
   capture(doc, win) {
     if (!/^\/call\/[^/]+/.test(win.location.pathname)) return null;
+    const key = win.location.pathname;
+    // "Test User - Talk - Vassallo.cloud - Nextcloud" -> "Test User". The row's own text is
+    // the name concatenated with the last message ("Test UserYou:ssup"), so it is unusable.
+    const title = clean(doc.title).replace(/\s+-\s+Talk\s+-\s+.*$/, '');
+    const src = talkAnchor(doc, key)?.querySelector('img')?.getAttribute('src') ?? '';
     return {
-      key: win.location.pathname,
-      title: clean(doc.querySelector('#app-content h2, .app-navigation .active')?.textContent)
-        || clean(doc.title),
-      avatarUrl: usableAvatarUrl(doc.querySelector('#app-content img.avatar')?.getAttribute('src'), win),
+      key,
+      title,
+      avatarUrl: TALK_PLACEHOLDER.test(src) ? undefined : usableAvatarUrl(src, win),
     };
   },
-  plan: (key) => ({ kind: 'url', url: key }),
+  plan: (key) => ({ kind: 'row', via: 'anchor', find: (doc) => talkAnchor(doc, key) }),
+  scroller: (doc) => doc.querySelector('.app-navigation__list, .app-navigation ul, .app-navigation'),
 };
 
 /**
