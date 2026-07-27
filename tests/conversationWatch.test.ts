@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { sameConversation, startConversationWatch } from '../src/preload/conversation/watch';
+import { CONVERSATION_ADAPTERS, type ConversationAdapter } from '../src/preload/conversation/adapters';
 
 describe('sameConversation', () => {
   const a = { key: '1@lid', title: 'Dan', avatarUrl: 'https://x/a.jpg' };
@@ -30,7 +31,7 @@ describe('startConversationWatch', () => {
 
   it('does nothing for a kind with no adapter', () => {
     const send = vi.fn();
-    startConversationWatch('nosuchkind', { doc: document, win: slackWin('/'), send });
+    startConversationWatch('nosuchkind', { doc: document, win: slackWin('/'), send, sendUnread: vi.fn() });
     vi.advanceTimersByTime(10_000);
     expect(send).not.toHaveBeenCalled();
   });
@@ -38,7 +39,7 @@ describe('startConversationWatch', () => {
   it('sends the open conversation once it settles', () => {
     document.body.innerHTML = '<div id="C0ABC">general</div>';
     const send = vi.fn();
-    startConversationWatch('slack', { doc: document, win: slackWin('/client/T1/C0ABC'), send });
+    startConversationWatch('slack', { doc: document, win: slackWin('/client/T1/C0ABC'), send, sendUnread: vi.fn() });
     vi.advanceTimersByTime(5_000);
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ key: 'C0ABC' }));
   });
@@ -46,7 +47,7 @@ describe('startConversationWatch', () => {
   it('does not re-send an unchanged conversation', () => {
     document.body.innerHTML = '<div id="C0ABC">general</div>';
     const send = vi.fn();
-    startConversationWatch('slack', { doc: document, win: slackWin('/client/T1/C0ABC'), send });
+    startConversationWatch('slack', { doc: document, win: slackWin('/client/T1/C0ABC'), send, sendUnread: vi.fn() });
     vi.advanceTimersByTime(15_000);
     expect(send).toHaveBeenCalledTimes(1);
   });
@@ -55,7 +56,7 @@ describe('startConversationWatch', () => {
     document.body.innerHTML = '<div id="C0ABC">general</div>';
     const loc = { pathname: '/client/T1/C0ABC', hash: '' };
     const send = vi.fn();
-    startConversationWatch('slack', { doc: document, win: { location: loc } as unknown as Window, send });
+    startConversationWatch('slack', { doc: document, win: { location: loc } as unknown as Window, send, sendUnread: vi.fn() });
     vi.advanceTimersByTime(5_000);
     send.mockClear();
     loc.pathname = '/client/T1';
@@ -65,7 +66,7 @@ describe('startConversationWatch', () => {
 
   it('reports the very first observation even when it is null', () => {
     const send = vi.fn();
-    startConversationWatch('slack', { doc: document, win: slackWin('/client/T1'), send });
+    startConversationWatch('slack', { doc: document, win: slackWin('/client/T1'), send, sendUnread: vi.fn() });
     vi.advanceTimersByTime(5_000);
     expect(send).toHaveBeenCalledWith(null);
   });
@@ -74,7 +75,7 @@ describe('startConversationWatch', () => {
     document.body.innerHTML = '<div id="C0ABC">general</div><div id="C0DEF">random</div>';
     const loc = { pathname: '/client/T1/C0ABC', hash: '' };
     const send = vi.fn();
-    startConversationWatch('slack', { doc: document, win: { location: loc } as unknown as Window, send });
+    startConversationWatch('slack', { doc: document, win: { location: loc } as unknown as Window, send, sendUnread: vi.fn() });
     vi.advanceTimersByTime(5_000);
     loc.pathname = '/client/T1/C0DEF';
     vi.advanceTimersByTime(3_000);
@@ -84,7 +85,7 @@ describe('startConversationWatch', () => {
   it('survives an adapter that throws, reporting null rather than dying', () => {
     const send = vi.fn();
     // A window with no location at all makes the slack adapter throw on read.
-    startConversationWatch('slack', { doc: document, win: {} as unknown as Window, send });
+    startConversationWatch('slack', { doc: document, win: {} as unknown as Window, send, sendUnread: vi.fn() });
     expect(() => vi.advanceTimersByTime(5_000)).not.toThrow();
     expect(send).toHaveBeenCalledWith(null);
   });
@@ -118,7 +119,7 @@ describe('avatars that only the page can fetch', () => {
     document.body.innerHTML = header;
     const send = vi.fn();
     const pageFetch = vi.fn(async () => ({ blob: async () => new Blob(['pretend png'], { type: 'image/png' }) }));
-    startConversationWatch('element', { doc: document, win: elementWin(pageFetch), send });
+    startConversationWatch('element', { doc: document, win: elementWin(pageFetch), send, sendUnread: vi.fn() });
 
     await vi.advanceTimersByTimeAsync(5000);
     // Sent immediately WITHOUT the avatar: initials now beat a bubble waiting on a fetch.
@@ -137,7 +138,7 @@ describe('avatars that only the page can fetch', () => {
     document.body.innerHTML = header;
     const send = vi.fn();
     const pageFetch = vi.fn(async () => { throw new Error('404'); });
-    startConversationWatch('element', { doc: document, win: elementWin(pageFetch), send });
+    startConversationWatch('element', { doc: document, win: elementWin(pageFetch), send, sendUnread: vi.fn() });
 
     await vi.advanceTimersByTimeAsync(6000);
     for (const call of send.mock.calls) expect(call[0]?.avatarUrl).toBeUndefined();
@@ -153,11 +154,75 @@ describe('avatars that only the page can fetch', () => {
       doc: document,
       win: { location: { pathname: '/client/T1/D0ABC', hash: '', href: 'https://app.slack.com/' }, fetch: pageFetch } as unknown as Window,
       send,
+      sendUnread: vi.fn(),
     });
     await vi.advanceTimersByTimeAsync(5000);
     expect(pageFetch).not.toHaveBeenCalled();
     expect(send).toHaveBeenLastCalledWith(expect.objectContaining({
       avatarUrl: 'https://slack.example/a-72',
     }));
+  });
+});
+
+/**
+ * The transport, tested against a STUBBED adapter.
+ *
+ * Deliberate: no adapter has an unreadKeys until the per-service tasks land, and afterwards
+ * every one of them does — so a test driving a real adapter would fail now and change meaning
+ * later. This task owns the push; the adapters own what they see.
+ */
+describe('unread key push', () => {
+  const win2 = (pathname: string): Window =>
+    ({ location: { pathname, hash: '', href: 'https://app.slack.com/' } } as unknown as Window);
+
+  let original: ConversationAdapter['unreadKeys'];
+  beforeEach(() => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '';
+    original = CONVERSATION_ADAPTERS.slack.unreadKeys;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    CONVERSATION_ADAPTERS.slack.unreadKeys = original;
+  });
+
+  /** Drive the watcher with a stubbed adapter and return what it pushed. */
+  const run = (unreadKeys: ConversationAdapter['unreadKeys'], ms = 5000): ReturnType<typeof vi.fn> => {
+    CONVERSATION_ADAPTERS.slack.unreadKeys = unreadKeys;
+    const sendUnread = vi.fn();
+    startConversationWatch('slack', {
+      doc: document, win: win2('/client/T1/C0ABC'), send: vi.fn(), sendUnread,
+    });
+    vi.advanceTimersByTime(ms);
+    return sendUnread;
+  };
+
+  it('pushes the keys the adapter reports', () => {
+    expect(run(() => ['C0ABC'])).toHaveBeenCalledWith(['C0ABC']);
+  });
+
+  it('sorts and dedupes, so the same set never looks like a different one', () => {
+    expect(run(() => ['C0B', 'C0A', 'C0B'])).toHaveBeenCalledWith(['C0A', 'C0B']);
+  });
+
+  // This runs every two seconds per loaded service; an unchanged set must not cross IPC.
+  it('pushes only when the set changes', () => {
+    expect(run(() => ['C0ABC'], 20_000)).toHaveBeenCalledTimes(1);
+  });
+
+  // A page that reloads from "two unread" to "none" must say so, or main keeps stale dots for
+  // the life of the session.
+  it('pushes an EMPTY set on the first scan, so a fresh page clears stale state', () => {
+    expect(run(() => [])).toHaveBeenCalledWith([]);
+  });
+
+  it('reports nothing for a kind whose adapter has no unreadKeys', () => {
+    expect(run(undefined)).toHaveBeenCalledWith([]);
+  });
+
+  it('survives an adapter that throws mid-navigation', () => {
+    let sendUnread: ReturnType<typeof vi.fn> | undefined;
+    expect(() => { sendUnread = run(() => { throw new Error('mid-navigation'); }); }).not.toThrow();
+    expect(sendUnread!).toHaveBeenCalledWith([]);
   });
 });

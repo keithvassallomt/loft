@@ -4,6 +4,8 @@ export interface WatchDeps {
   doc: Document;
   win: Window;
   send(conversation: CapturedConversation | null): void;
+  /** Keys of conversations currently unread; see ConversationAdapter.unreadKeys. */
+  sendUnread(keys: string[]): void;
 }
 
 /** Same cadence the badge scanner uses — see src/preload/badge/scanner.ts. */
@@ -86,10 +88,33 @@ export function startConversationWatch(kind: string, deps: WatchDeps): void {
     deps.send(next);
   };
 
+  // `null`, not '': the first scan must ALWAYS send, including when nothing is unread. A
+  // reloaded page whose unread chats have all been read would otherwise never say so, and
+  // main would hold stale dots for the life of the session.
+  let lastUnread: string | null = null;
+
+  const scanUnread = (): void => {
+    let keys: string[] = [];
+    // Same containment as capture(): a page mid-navigation can make any adapter throw, and
+    // that is an ordinary transient rather than an error.
+    try { keys = adapter.unreadKeys?.(deps.doc) ?? []; } catch { keys = []; }
+    const sorted = [...new Set(keys)].sort();
+    // Sorted join, so an unchanged set does not cross IPC every two seconds — the same
+    // discipline sameConversation applies, for the same reason. NUL separated, so no key's
+    // own content can forge a boundary between two keys.
+    const fingerprint = sorted.join('\u0000');
+    if (fingerprint === lastUnread) return;
+    lastUnread = fingerprint;
+    deps.sendUnread(sorted);
+  };
+
+  /** One tick drives both: they read the same DOM at the same cadence. */
+  const tick = (): void => { scan(); scanUnread(); };
+
   let debounce: ReturnType<typeof setTimeout> | null = null;
   const onMutation = (): void => {
     if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(scan, DEBOUNCE_MS);
+    debounce = setTimeout(tick, DEBOUNCE_MS);
   };
 
   const start = (): void => {
@@ -101,6 +126,6 @@ export function startConversationWatch(kind: string, deps: WatchDeps): void {
   // For a URL-routed service the conversation can change with no DOM mutation the observer
   // would see, so this interval is not merely a safety net — it is the PRIMARY trigger for
   // Slack, Telegram, Element and Talk.
-  setInterval(scan, POLL_MS);
-  setTimeout(scan, FIRST_SCAN_MS);
+  setInterval(tick, POLL_MS);
+  setTimeout(tick, FIRST_SCAN_MS);
 }

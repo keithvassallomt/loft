@@ -24,6 +24,7 @@ if (serviceId) {
     doc: document,
     win: window,
     send: (conversation) => ipcRenderer.send('service:conversation', conversation),
+    sendUnread: (keys) => ipcRenderer.send('service:unread', keys),
   });
 
   // A bubble was clicked. Build the plan for this kind and carry it out; the outcome is

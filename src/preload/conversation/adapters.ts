@@ -58,6 +58,20 @@ export interface ConversationAdapter {
   plan(key: string, doc: Document, win: Window): OpenPlan;
   /** For `row` plans: the scrollable container to step when the row is not rendered. */
   scroller?(doc: Document): Element | null;
+  /**
+   * The keys of every conversation the sidebar currently shows as UNREAD.
+   *
+   * Returns ALL of them, not just the pinned ones — the page has no idea what is pinned, that
+   * lives in main's config. Main intersects.
+   *
+   * These keys MUST be in the same form `capture()` produces, or a conversation can never be
+   * matched: main compares by string equality, so a mismatch fails SILENTLY — the dot simply
+   * never appears. Messenger is the one that bites, its capture key being canonicalised to
+   * `/messages/t/<id>` rather than the raw href.
+   *
+   * Optional: a kind without one contributes no keys and its bubbles never show a dot.
+   */
+  unreadKeys?(doc: Document): string[];
 }
 
 /** Titles land in a 34px tooltip and a config file; neither wants an unbounded string. */
