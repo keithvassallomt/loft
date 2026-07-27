@@ -18,9 +18,19 @@ describe('buildBubbleItems', () => {
 
   it('carries the KIND for the corner badge, not the instance id', () => {
     const items = buildBubbleItems([b('whatsapp-2', '1@lid', 'Dan')], new Set(['whatsapp-2']), kindOf);
-    expect(items[0]).toEqual({
+    expect(items[0]).toMatchObject({
       id: bubbleId('whatsapp-2', '1@lid'), title: 'Dan', serviceId: 'whatsapp-2', kind: 'whatsapp',
     });
+  });
+
+  it('carries a glyph and hue for the no-avatar fallback', () => {
+    const items = buildBubbleItems(
+      [b('slack', 'C1', '#general'), b('slack', 'C2', '#random')],
+      new Set(['slack']), kindOf);
+    // The point of the change: two channels must not look identical.
+    expect(items[0].glyph).toBe('GE');
+    expect(items[1].glyph).toBe('RA');
+    expect(items[0].hue).not.toBe(items[1].hue);
   });
 
   it('hides bubbles whose service is no longer installed, rather than rendering a dead button', () => {

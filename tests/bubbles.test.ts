@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   bubbleId, addBubble, removeBubble, removeServiceBubbles, refreshBubbleTitle,
-  findBubble, sanitizeBubbles, type Bubble,
+  findBubble, sanitizeBubbles, bubbleGlyph, bubbleHue, type Bubble,
 } from '../src/main/bubbles';
 
 const b = (serviceId: string, key: string, title: string): Bubble =>
@@ -94,5 +94,65 @@ describe('sanitizeBubbles', () => {
     ]);
     expect(out).toHaveLength(1);
     expect(out[0].title).toBe('first');
+  });
+});
+
+describe('bubbleGlyph', () => {
+  // The defect this exists to fix: initials() split on whitespace only, so every Slack
+  // channel — one token beginning with '#' — rendered as a bare '#'.
+  it('gives DIFFERENT glyphs to different single-word channels', () => {
+    const glyphs = ['#general', '#random', '#git', '#design'].map(bubbleGlyph);
+    expect(glyphs).toEqual(['GE', 'RA', 'GI', 'DE']);
+    expect(new Set(glyphs).size).toBe(4);
+  });
+
+  it('uses one letter per word for multi-word names', () => {
+    expect(bubbleGlyph('Keith Vassallo')).toBe('KV');
+    expect(bubbleGlyph('Test User')).toBe('TU');
+  });
+
+  it('splits hyphens and underscores, which channels use instead of spaces', () => {
+    expect(bubbleGlyph('#dev-team')).toBe('DT');
+    expect(bubbleGlyph('#ice_campus')).toBe('IC');
+  });
+
+  it('splits camelCase', () => {
+    expect(bubbleGlyph('BotFather')).toBe('BF');
+  });
+
+  it('strips a leading # or @ rather than spending a character on it', () => {
+    expect(bubbleGlyph('#general')).not.toContain('#');
+    expect(bubbleGlyph('@someone')).toBe('SO');
+  });
+
+  it('does not split an emoji across surrogate halves', () => {
+    expect([...bubbleGlyph('🎉🎊')].length).toBe(2);
+  });
+
+  it('degrades to ? rather than an empty bubble', () => {
+    expect(bubbleGlyph('')).toBe('?');
+    expect(bubbleGlyph('#')).toBe('?');
+    expect(bubbleGlyph('   ')).toBe('?');
+  });
+});
+
+describe('bubbleHue', () => {
+  it('is stable for a key', () => {
+    expect(bubbleHue('C01S1LHKXUM')).toBe(bubbleHue('C01S1LHKXUM'));
+  });
+  it('is in range', () => {
+    for (const k of ['a', 'C01S1LHKXUM', '#general', '262135443656788@lid']) {
+      const h = bubbleHue(k);
+      expect(h).toBeGreaterThanOrEqual(0);
+      expect(h).toBeLessThan(360);
+    }
+  });
+  it('separates conversations that would otherwise look alike', () => {
+    const hues = ['C0001', 'C0002', 'C0003', 'C0004'].map(bubbleHue);
+    expect(new Set(hues).size).toBeGreaterThan(1);
+  });
+  // Keyed on the conversation, not the label, so a rename does not recolour the bubble.
+  it('does not depend on the title', () => {
+    expect(bubbleHue('C01')).toBe(bubbleHue('C01'));
   });
 });

@@ -63,6 +63,45 @@ export function refreshBubbleTitle(
   return out;
 }
 
+/**
+ * The 1-2 character label a bubble draws when it has no avatar.
+ *
+ * The rail's own `initials()` splits on whitespace only, which is right for people
+ * ("Keith Vassallo" -> KV) and useless for the names that actually reach this path: every
+ * Slack channel is one token starting with '#', so `#general`, `#random` and `#dev-team` all
+ * rendered as a bare '#' — identical bubbles with only a tooltip to tell them apart.
+ *
+ * So: drop a leading '#', split on separators AND camelCase, take one letter per word, and
+ * fall back to the first two letters when there is only one word.
+ */
+export function bubbleGlyph(title: string): string {
+  const stripped = title.trim().replace(/^[#@]+/, '');
+  if (!stripped) return '?';
+  const words = stripped
+    // BotFather -> Bot Father, so a camelCase name yields two distinct letters.
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[\s\-_./|]+/)
+    .filter(Boolean);
+  if (words.length === 0) return '?';
+  const letters = words.length > 1
+    ? words.slice(0, 2).map((w) => [...w][0]).join('')
+    // One word: two letters beat one, which is the whole point — '#general' and '#git'
+    // must not collapse to the same glyph.
+    : [...words[0]].slice(0, 2).join('');
+  return letters.toUpperCase();
+}
+
+/**
+ * A stable hue for a bubble with no avatar, so two lettered bubbles differ by colour as well
+ * as by glyph. Derived from the conversation key rather than the title, so renaming a group
+ * does not make its bubble change colour under the user.
+ */
+export function bubbleHue(key: string): number {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) % 360;
+  return h;
+}
+
 export interface PinTargetInput {
   /** The selected service tab, if any. */
   activeId: string | undefined;

@@ -130,3 +130,6 @@ body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
   .bubble { background: #2d2d2f; border-color: #424245; }
   .bubble .service { border-color: #3d3d3f; background: #2d2d2f; }
 }
+/* The lettered fallback: two characters at 34px need to be legible, and the inline hue set
+   in rail.ts supplies the contrast behind them. */
+.bubble .glyph { font: 700 12px/1 system-ui, sans-serif; letter-spacing: .02em; }

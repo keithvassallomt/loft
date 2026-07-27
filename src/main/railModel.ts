@@ -1,6 +1,6 @@
 import type { LoftConfig } from './config';
 import type { ServiceKind } from './registry';
-import type { Bubble } from './bubbles';
+import { bubbleGlyph, bubbleHue, type Bubble } from './bubbles';
 import { GRID_ID, services as gridServices, type GridNode } from './gridTree';
 
 /** One entry in the Loft window's service rail. */
@@ -26,6 +26,11 @@ export interface BubbleItem {
   serviceId: string;
   /** Kind — selects the small service icon badged bottom-right. */
   kind: string;
+  /** 1-2 characters drawn when there is no avatar — every Slack channel, and anyone with no
+   *  profile picture. Computed here rather than in the renderer, which cannot import. */
+  glyph: string;
+  /** Stable hue for that lettered fallback, so two of them differ by colour as well. */
+  hue: number;
 }
 
 /**
@@ -42,7 +47,14 @@ export function buildBubbleItems(
 ): BubbleItem[] {
   return bubbles
     .filter((b) => installed.has(b.serviceId))
-    .map((b) => ({ id: b.id, title: b.title, serviceId: b.serviceId, kind: kindOf(b.serviceId) }));
+    .map((b) => ({
+      id: b.id,
+      title: b.title,
+      serviceId: b.serviceId,
+      kind: kindOf(b.serviceId),
+      glyph: bubbleGlyph(b.title),
+      hue: bubbleHue(b.key),
+    }));
 }
 
 /** The rail renderer's full state: the service items, plus which of the two pinned

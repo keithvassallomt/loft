@@ -156,7 +156,14 @@ function bubbleButton(item: BubbleItem, iconEpoch: number): HTMLButtonElement {
     img.remove();
     const g = document.createElement('span');
     g.className = 'glyph';
-    g.textContent = initials(item.title);
+    // Computed in main (bubbleGlyph): the rail's own initials() splits on whitespace only,
+    // which turned every Slack channel into an identical bare '#'. The hue separates two
+    // lettered bubbles further, and is keyed on the conversation so a rename cannot
+    // recolour it.
+    g.textContent = item.glyph;
+    b.style.background = `hsl(${item.hue} 45% 45%)`;
+    b.style.borderColor = `hsl(${item.hue} 45% 38%)`;
+    b.style.color = '#fff';
     b.prepend(g);
   });
   b.append(img);
