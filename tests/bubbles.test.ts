@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   bubbleId, addBubble, removeBubble, removeServiceBubbles, refreshBubbleTitle,
-  findBubble, sanitizeBubbles, bubbleGlyph, bubbleHue, type Bubble,
+  findBubble, sanitizeBubbles, bubbleGlyph, bubbleHue, clearUnread, type Bubble,
 } from '../src/main/bubbles';
 
 const b = (serviceId: string, key: string, title: string): Bubble =>
@@ -165,5 +165,39 @@ describe('bubbleHue', () => {
   // Keyed on the conversation, not the label, so a rename does not recolour the bubble.
   it('does not depend on the title', () => {
     expect(bubbleHue('C01')).toBe(bubbleHue('C01'));
+  });
+});
+
+/**
+ * Both identifier forms, in one place.
+ *
+ * Five services report unread by conversation KEY; Element reports by room TITLE, its markup
+ * carrying no room id at all. Every clear path therefore has to try both — and the whole-
+ * feature review found that they tried only the key, so an Element dot could not be cleared
+ * by opening the room or by clicking the bubble. It self-corrected on the next scrape, which
+ * is what would have made it read as lag rather than as a bug.
+ */
+describe('clearUnread', () => {
+  it('clears by key, which is how five of the six services report', () => {
+    const set = new Set(['/messages/t/111', '/messages/t/222']);
+    expect(clearUnread(set, { key: '/messages/t/111', title: 'Pulcina' })).toBe(true);
+    expect([...set]).toEqual(['/messages/t/222']);
+  });
+
+  it('clears by TITLE, which is how Element reports', () => {
+    const set = new Set(['Test User', 'Extensions']);
+    expect(clearUnread(set, { key: '#/room/!abc:example.org', title: 'Test User' })).toBe(true);
+    expect([...set]).toEqual(['Extensions']);
+  });
+
+  it('reports false when the conversation was not unread, so callers can skip a refresh', () => {
+    expect(clearUnread(new Set(['other']), { key: 'k', title: 't' })).toBe(false);
+  });
+
+  // Not `a || b`: short-circuiting would leave the title behind whenever the key matched.
+  it('removes BOTH forms when both are present', () => {
+    const set = new Set(['k', 't']);
+    clearUnread(set, { key: 'k', title: 't' });
+    expect([...set]).toEqual([]);
   });
 });

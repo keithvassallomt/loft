@@ -111,6 +111,22 @@ export function bubbleHue(key: string): number {
   return h;
 }
 
+/**
+ * Drop a conversation from a service's unread set, by EITHER identifier form.
+ *
+ * Five services report unread by conversation key; Element reports by room title, its room
+ * list containing no room id at all (see ConversationAdapter.unreadKeys). Every clear path
+ * therefore has to try both, or Element's dot can only ever be cleared by the scrape.
+ *
+ * Both deletes always run — `a || b` would short-circuit and leave the title behind whenever
+ * the key matched. Returns whether anything changed, so callers can skip a rail refresh.
+ */
+export function clearUnread(set: Set<string>, conv: { key: string; title: string }): boolean {
+  const byKey = set.delete(conv.key);
+  const byTitle = set.delete(conv.title);
+  return byKey || byTitle;
+}
+
 export interface PinTargetInput {
   /** The selected service tab, if any. */
   activeId: string | undefined;

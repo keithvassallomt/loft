@@ -38,7 +38,7 @@ import {
   bubbleAvatarPath, saveBubbleAvatar, deleteBubbleAvatar, type BubbleAvatarDeps,
 } from './bubbleAvatars';
 import {
-  addBubble, removeBubble, removeServiceBubbles, refreshBubbleTitle, findBubble,
+  addBubble, removeBubble, removeServiceBubbles, refreshBubbleTitle, findBubble, clearUnread,
   bubbleClickAction, bubbleId, pinTarget,
 } from './bubbles';
 import { iconsDir } from './paths';
@@ -1543,7 +1543,8 @@ if (!app.requestSingleInstanceLock()) {
     // tick; this clears the dot at the moment it was actually read rather than up to a poll
     // later, and it is the signal that still works when the row has scrolled out of a
     // virtualised list, which is exactly where the scrape goes blind.
-    if (notifications?.isWatching(id) && unreadKeys.get(id)?.delete(conv.key)) loft?.refreshRail();
+    const openSet = unreadKeys.get(id);
+    if (notifications?.isWatching(id) && openSet && clearUnread(openSet, conv)) loft?.refreshRail();
     // A pinned conversation seen open gets its label refreshed, so a rename stops showing
     // stale. Reference comparison, not deep equality: refreshBubbleTitle returns the SAME
     // array when nothing changed, which is what keeps this off the config-write path — it
@@ -1574,19 +1575,8 @@ if (!app.requestSingleInstanceLock()) {
     // test the notification gate uses (focused AND visible AND active), minus DND — a
     // service on Do Not Disturb is still being read when you are looking at it.
     const open = currentConversation.get(id);
-    if (open && notifications?.isWatching(id)) set.delete(open.key);
+    if (open && notifications?.isWatching(id)) clearUnread(set, open);
     unreadKeys.set(id, set);
-    // Both sides of the match, on one line. A key the page reports that does not equal the
-    // key a bubble stored produces NO error anywhere — the dot simply never appears — so
-    // this is the only place the mismatch is observable. Cheap: the preload sends only when
-    // the set changes, so this logs on change, not on every poll.
-    const pinned = (config.bubbles ?? []).filter((b) => b.serviceId === id);
-    const matched = pinned.filter((b) => set.has(b.key) || set.has(b.title));
-    console.log(
-      `[unread] ${id}: seen=${JSON.stringify([...set])}`
-      + ` pinned=${JSON.stringify(pinned.map((b) => b.key))}`
-      + ` -> ${matched.length} match${matched.length === 1 ? '' : 'es'}`,
-    );
     loft?.refreshRail();
   });
 
@@ -1595,7 +1585,8 @@ if (!app.requestSingleInstanceLock()) {
     if (!bubble) return;
     // Optimistic: the click IS the read. The open-conversation signal would clear this within
     // a poll anyway, but a dot that lingers after the click that dismissed it looks broken.
-    if (unreadKeys.get(bubble.serviceId)?.delete(bubble.key)) loft?.refreshRail();
+    const clickedSet = unreadKeys.get(bubble.serviceId);
+    if (clickedSet && clearUnread(clickedSet, bubble)) loft?.refreshRail();
     const action = bubbleClickAction({
       serviceId: bubble.serviceId,
       detached: isDetached(bubble.serviceId),
