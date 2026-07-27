@@ -98,6 +98,15 @@ let iconEpoch = 0;
  * looking at.
  */
 const currentConversation = new Map<string, { key: string; title: string; avatarUrl?: string } | null>();
+
+/**
+ * Conversation keys each loaded service currently reports as unread, pushed by its preload.
+ *
+ * EPHEMERAL by design — never persisted. A dot restored from disk at startup would be
+ * asserting something no view has verified. This mirrors service badges, which are 0 until
+ * the service loads.
+ */
+const unreadKeys = new Map<string, Set<string>>();
 // Set once chat.loft.Loft's D-Bus service comes up — undefined until whenReady's startup
 // sequence reaches it, so every add/remove call site optional-chains it (a hub action
 // taken in that window must not throw, just skip the D-Bus side of the update).
@@ -641,6 +650,7 @@ function quitService(id: string): void {
   // service, and taking either would pin a conversation read off a page that no longer
   // exists — recording something nobody is looking at.
   currentConversation.delete(id);
+  unreadKeys.delete(id);
   bgStatus?.refresh();
   loft?.refreshRail();
   loft?.refreshTitlebar();
@@ -1528,6 +1538,11 @@ if (!app.requestSingleInstanceLock()) {
       avatarUrl: typeof p.avatarUrl === 'string' ? p.avatarUrl : undefined,
     };
     currentConversation.set(id, conv);
+    // Opening a conversation reads it. The scrape agrees on its next tick; this clears the
+    // dot at the moment the user actually read it rather than up to a poll later — and it is
+    // the signal that still works when the row has scrolled out of a virtualised list, which
+    // is exactly where the scrape goes blind.
+    if (unreadKeys.get(id)?.delete(conv.key)) loft?.refreshRail();
     // A pinned conversation seen open gets its label refreshed, so a rename stops showing
     // stale. Reference comparison, not deep equality: refreshBubbleTitle returns the SAME
     // array when nothing changed, which is what keeps this off the config-write path — it
@@ -1544,9 +1559,26 @@ if (!app.requestSingleInstanceLock()) {
     windows.get(id)?.setCanPin(true);
   });
 
+  // Which conversations each loaded service currently shows as unread. Every key it can see,
+  // not just the pinned ones — the page has no idea what is pinned; main intersects.
+  ipcMain.on('service:unread', (e, keys?: unknown) => {
+    const sw = findBySenderId(e.sender.id);
+    if (!sw || !Array.isArray(keys)) return;
+    const id = sw.def.id;
+    const set = new Set(keys.filter((k): k is string => typeof k === 'string'));
+    // The conversation currently open is read BY DEFINITION.
+    const open = currentConversation.get(id);
+    if (open) set.delete(open.key);
+    unreadKeys.set(id, set);
+    loft?.refreshRail();
+  });
+
   ipcMain.on('rail:selectBubble', (_e, id: string) => {
     const bubble = findBubble(config.bubbles ?? [], id);
     if (!bubble) return;
+    // Optimistic: the click IS the read. The open-conversation signal would clear this within
+    // a poll anyway, but a dot that lingers after the click that dismissed it looks broken.
+    if (unreadKeys.get(bubble.serviceId)?.delete(bubble.key)) loft?.refreshRail();
     const action = bubbleClickAction({
       serviceId: bubble.serviceId,
       detached: isDetached(bubble.serviceId),
@@ -1842,6 +1874,7 @@ if (!app.requestSingleInstanceLock()) {
       onQuit: () => quitting,
       onPersisted: () => boundsFlush.schedule(),
       badge: (id) => currentBadge.get(id) ?? 0,
+      unreadKeys: (id) => unreadKeys.get(id) ?? new Set<string>(),
       iconEpoch: () => iconEpoch,
       detached: isDetached,
       hasConversation: (id) => !!currentConversation.get(id),

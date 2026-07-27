@@ -31,6 +31,26 @@ export interface BubbleItem {
   glyph: string;
   /** Stable hue for that lettered fallback, so two of them differ by colour as well. */
   hue: number;
+  /** Unread mark. Already gated: false when the service sleeps or has badges disabled. */
+  unread: boolean;
+  /**
+   * Service not loaded — rendered greyed, exactly as a sleeping service icon is.
+   *
+   * Without this a bubble with no dot would be ambiguous between "nothing unread" and "nobody
+   * is looking", and those are very different things to someone deciding whether they have
+   * been messaged.
+   */
+  sleeping: boolean;
+}
+
+export interface BubbleItemInput {
+  bubbles: readonly Bubble[];
+  installed: ReadonlySet<string>;
+  kindOf(serviceId: string): string;
+  /** No view -> no honest unread answer; the bubble renders greyed. */
+  sleeping(serviceId: string): boolean;
+  /** Fully gated by the caller — see buildRailState. */
+  unread(serviceId: string, key: string): boolean;
 }
 
 /**
@@ -40,20 +60,18 @@ export interface BubbleItem {
  * could only fail. Config cleanup happens on service removal; this filter is the safety net
  * for a hand-edited config, and for the window between the two.
  */
-export function buildBubbleItems(
-  bubbles: readonly Bubble[],
-  installed: ReadonlySet<string>,
-  kindOf: (serviceId: string) => string,
-): BubbleItem[] {
-  return bubbles
-    .filter((b) => installed.has(b.serviceId))
+export function buildBubbleItems(i: BubbleItemInput): BubbleItem[] {
+  return i.bubbles
+    .filter((b) => i.installed.has(b.serviceId))
     .map((b) => ({
       id: b.id,
       title: b.title,
       serviceId: b.serviceId,
-      kind: kindOf(b.serviceId),
+      kind: i.kindOf(b.serviceId),
       glyph: bubbleGlyph(b.title),
       hue: bubbleHue(b.key),
+      unread: i.unread(b.serviceId, b.key),
+      sleeping: i.sleeping(b.serviceId),
     }));
 }
 
@@ -138,6 +156,8 @@ export interface RailStateInput extends RailModelInput {
   bubbles: readonly Bubble[];
   /** Instance id -> kind, for the corner badge. */
   kindOf(serviceId: string): string;
+  /** Conversation keys currently unread for a service, as reported by its preload. */
+  unreadKeys(serviceId: string): ReadonlySet<string>;
 }
 
 /**
@@ -151,11 +171,20 @@ export function buildRailState(i: RailStateInput): RailState {
     managerActive: i.activeId === undefined,
     gridActive: i.activeId === GRID_ID,
     gridCount: gridServices(i.grid).length,
-    bubbles: buildBubbleItems(
-      i.bubbles,
-      new Set(i.services.filter((d) => i.config.services[d.id] !== undefined).map((d) => d.id)),
-      i.kindOf,
-    ),
+    bubbles: buildBubbleItems({
+      bubbles: i.bubbles,
+      installed: new Set(i.services.filter((d) => i.config.services[d.id] !== undefined).map((d) => d.id)),
+      kindOf: i.kindOf,
+      sleeping: (sid) => !i.loaded(sid),
+      // The same two gates buildRailModel applies to a service's own badge, for the same
+      // reasons: a sleeping service has no view and so cannot have an honest answer, and a
+      // service with badges disabled should not get one by another route. DND is deliberately
+      // NOT a gate — it does not suppress service badges, and the rail shows it separately
+      // with its own mark.
+      unread: (sid, key) => i.loaded(sid)
+        && i.config.services[sid]?.badgesEnabled !== false
+        && i.unreadKeys(sid).has(key),
+    }),
     iconEpoch: i.iconEpoch,
   };
 }

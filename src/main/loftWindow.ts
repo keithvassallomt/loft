@@ -102,6 +102,8 @@ export interface LoftWindowDeps {
   onPersisted?(): void;
   /** Live unread for a service, ungated (the rail model applies badgesEnabled itself). */
   badge(id: string): number;
+  /** Conversation keys currently unread for a service; empty for a sleeping one. */
+  unreadKeys(serviceId: string): ReadonlySet<string>;
   /** Monotonic icon cache-buster, bumped by main when any icon is re-deployed. Threaded into
    *  the rail/grid/titlebar loft://icon/<id> URLs so a changed icon actually re-fetches
    *  instead of showing Chromium's cached copy under the (stable) URL. */
@@ -270,6 +272,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       grid: deps.cfg.grid ?? null,
       iconEpoch: deps.iconEpoch(),
       bubbles: deps.cfg.bubbles ?? [],
+      unreadKeys: deps.unreadKeys,
       kindOf: (id) => kindOf(id, deps.cfg),
     }));
 
