@@ -166,10 +166,15 @@ const slack: ConversationAdapter = {
 
 // --- Telegram ---------------------------------------------------------------
 // Measured: the hash IS the conversation (#8623934162 etc., changing per chat), and the
-// sidebar renders a real anchor per chat whose href is that exact hash. So reopen clicks the
-// anchor rather than assigning location.hash — the same mechanism as Messenger, and it
-// inherits the retry-and-scroll behaviour that assignment cannot have. Avatars are blob:
-// urls (no https on the page at all), converted downstream by watch.ts.
+// sidebar renders a real anchor per chat whose href is that exact hash. So reopen finds that
+// anchor rather than assigning location.hash, and inherits the retry-and-scroll behaviour
+// assignment cannot have. Avatars are blob: urls (no https on the page at all), converted
+// downstream by watch.ts.
+//
+// The anchor is found but NOT `.click()`ed: measured on the real app, `anchor.click()` leaves
+// Telegram on the previous chat and a leaf-originated sequence moves it. Its handler is on a
+// descendant of <a class="ListItem-button">, and events bubble up but never down — the same
+// rule WhatsApp and Slack both needed.
 
 const TELEGRAM_ROW = 'a[href^="#"]';
 
@@ -188,7 +193,7 @@ const telegram: ConversationAdapter = {
     const row = telegramAnchor(doc, hash)?.closest('.ListItem') ?? telegramAnchor(doc, hash);
     return { key: hash, title, avatarUrl: usableAvatarUrl(row?.querySelector('img')?.getAttribute('src'), win) };
   },
-  plan: (key) => ({ kind: 'row', via: 'anchor', find: (doc) => telegramAnchor(doc, key) }),
+  plan: (key) => ({ kind: 'row', find: (doc) => telegramAnchor(doc, key) }),
   scroller: (doc) => doc.querySelector(TELEGRAM_ROW)?.closest('[class*="chat-list" i]')
     ?? doc.querySelector('.chat-list, [class*="ChatList" i]'),
 };

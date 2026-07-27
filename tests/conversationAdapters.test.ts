@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
 import { CONVERSATION_ADAPTERS, bumpSlackAvatarSize } from '../src/preload/conversation/adapters';
+import { executePlan } from '../src/preload/conversation/open';
 
 /** Attach a React-style props object to a node, the way React does. */
 function withProps(el: Element, props: unknown): Element {
@@ -163,13 +164,36 @@ describe('telegram adapter', () => {
 
   // The fix for "clicking a bubble shows no chat selected": assigning location.hash cannot
   // retry, so it loses to a still-booting app. The sidebar anchor can.
-  it('plans an ANCHOR click on the sidebar row, not a hash assignment', () => {
+  it('plans a row click on the sidebar anchor, not a hash assignment', () => {
     document.body.innerHTML = '<div class="ListItem"><a href="#8623934162">Nick</a></div>';
     const plan = tg.plan('#8623934162', document, win);
     expect(plan.kind).toBe('row');
     if (plan.kind !== 'row') throw new Error('unreachable');
-    expect(plan.via).toBe('anchor');
     expect(plan.find(document)).toBe(document.querySelector('a'));
+  });
+
+  /**
+   * Measured on the real app: the anchor IS found, `anchor.click()` does NOT move Telegram,
+   * and a leaf-originated sequence does — the same rule WhatsApp and Slack both needed.
+   * `via: 'anchor'` was carried over from Messenger on the assumption that it was already
+   * proven; it was not, for this app.
+   *
+   * The DOM below is the asymmetry itself: a click dispatched AT the anchor bubbles up and can
+   * never reach a handler on its descendant.
+   */
+  it('opens a chat whose handler sits on a DESCENDANT of the anchor', async () => {
+    document.body.innerHTML =
+      '<div class="ListItem"><a href="#8623934162"><div><div class="leaf">Nick</div></div></a></div>';
+    let opened = false;
+    document.querySelector('.leaf')!.addEventListener('click', () => { opened = true; });
+
+    const plan = tg.plan('#8623934162', document, win);
+    const outcome = await executePlan(plan, {
+      doc: document, win: window, sleep: async () => {}, scroller: null,
+    });
+
+    expect(outcome).toBe('done');
+    expect(opened).toBe(true);
   });
 
   it('finds no row when that chat is not rendered', () => {
