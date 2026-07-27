@@ -418,3 +418,175 @@ describe('unknown kind', () => {
     expect(CONVERSATION_ADAPTERS.nosuchkind).toBeUndefined();
   });
 });
+
+// --- unread keys -----------------------------------------------------------
+// Every DOM below is taken from probe output measured 2026-07-27, not invented.
+// See dev_local/bubbles_spike/FINDINGS-unread.md.
+
+describe('slack unreadKeys', () => {
+  const slack = CONVERSATION_ADAPTERS.slack;
+
+  // MEASURED: the unread row's OWN id is empty and the conversation id sits on an ANCESTOR.
+  // A row.id implementation would have found nothing at all.
+  it('finds the id on the ancestor, which is where Slack actually puts it', () => {
+    document.body.innerHTML = `
+      <div id="D04K1K54VKQ">
+        <div class="p-channel_sidebar__channel p-channel_sidebar__channel--unread">
+          <div id="mask__small-member"></div>Dan
+        </div>
+      </div>`;
+    expect(slack.unreadKeys!(document)).toEqual(['D04K1K54VKQ']);
+  });
+
+  // The same row carries a descendant id="mask__small-member": without the format guard,
+  // querySelector('[id]') would have produced that as a key.
+  it('rejects a descendant id that is not a conversation id', () => {
+    document.body.innerHTML = `
+      <div class="p-channel_sidebar__channel--unread"><div id="mask__small-member"></div></div>`;
+    expect(slack.unreadKeys!(document)).toEqual([]);
+  });
+
+  it('reports several unread conversations', () => {
+    document.body.innerHTML = `
+      <div id="C0ABCDEF"><div class="p-channel_sidebar__channel--unread">general</div></div>
+      <div id="D0GHIJKL"><div class="p-channel_sidebar__channel--unread">Dan</div></div>
+      <div id="C0MNOPQR"><div class="p-channel_sidebar__channel">random</div></div>`;
+    expect(slack.unreadKeys!(document).sort()).toEqual(['C0ABCDEF', 'D0GHIJKL']);
+  });
+
+  // The badge parser excludes this row from its count; so must this.
+  it('ignores the "add more items" affordance', () => {
+    document.body.innerHTML = `
+      <div id="C0ABCDEF"><div class="p-channel_sidebar__channel--unread">
+        <div class="p-channel_sidebar__link--add-more-items">more</div>
+      </div></div>`;
+    expect(slack.unreadKeys!(document)).toEqual([]);
+  });
+
+  it('reports nothing when nothing is unread', () => {
+    document.body.innerHTML = '<div id="C0ABCDEF">general</div>';
+    expect(slack.unreadKeys!(document)).toEqual([]);
+  });
+});
+
+describe('messenger unreadKeys', () => {
+  const mg = CONVERSATION_ADAPTERS.messenger;
+  const unreadRow = (href: string, muted = false) => `
+    <a href="${href}">
+      <span>Unread message:</span><span>RAOB Currock Lodge</span>
+      ${muted ? '<div style="--disabled-icon: 1"></div>' : ''}
+    </a>`;
+
+  // MEASURED: an unread e2ee DM's href is /messages/e2ee/t/<id>/, and capture() stores the
+  // canonical /messages/t/<id>. Main matches by string equality, so these must agree.
+  it('reports the CANONICAL key, not the raw href', () => {
+    document.body.innerHTML = unreadRow('/messages/e2ee/t/6382594055138206/');
+    expect(mg.unreadKeys!(document)).toEqual(['/messages/t/6382594055138206']);
+  });
+
+  // MEASURED: one of the two unread rows was muted. A muted conversation contributes no
+  // service badge, so it must contribute no dot.
+  it('ignores read rows and muted ones', () => {
+    document.body.innerHTML =
+      unreadRow('/messages/t/111/') + '<a href="/messages/t/222/"><span>Read</span></a>'
+      + unreadRow('/messages/t/5969460249764223/', true);
+    expect(mg.unreadKeys!(document)).toEqual(['/messages/t/111']);
+  });
+
+  // Messenger renders the same thread as more than one anchor; the badge parser dedupes too.
+  it('dedupes a thread rendered as two anchors', () => {
+    document.body.innerHTML = unreadRow('/messages/t/111/') + unreadRow('/messages/t/111');
+    expect(mg.unreadKeys!(document)).toEqual(['/messages/t/111']);
+  });
+});
+
+describe('telegram unreadKeys', () => {
+  const tg = CONVERSATION_ADAPTERS.telegram;
+
+  it('reports the hash of each chat with a numeric unread badge', () => {
+    document.body.innerHTML = `
+      <div class="ListItem"><a href="#8623934162"><div class="shown chat-badge-transition open">3</div></a></div>
+      <div class="ListItem"><a href="#93372553"><div class="chat-badge-transition">1</div></a></div>
+      <div class="ListItem"><a href="#8078674329">read</a></div>`;
+    // The read chat (#8078674329) must NOT appear.
+    expect(tg.unreadKeys!(document).sort()).toEqual(['#8623934162', '#93372553']);
+  });
+
+  // The badge parser skips non-numeric badges (action buttons like "Open"); so must this.
+  it('ignores a non-numeric badge', () => {
+    document.body.innerHTML =
+      '<div class="ListItem"><a href="#111"><div class="chat-badge-transition">Open</div></a></div>';
+    expect(tg.unreadKeys!(document)).toEqual([]);
+  });
+
+  it('reports nothing when no badge is inside a chat anchor', () => {
+    document.body.innerHTML = '<div class="chat-badge-transition">3</div>';
+    expect(tg.unreadKeys!(document)).toEqual([]);
+  });
+});
+
+describe('talk unreadKeys', () => {
+  const tk = CONVERSATION_ADAPTERS.talk;
+
+  it('reports the call path of each conversation with a counter', () => {
+    document.body.innerHTML = `
+      <a href="/call/37egz8x9"><div class="counter-bubble__counter counter-bubble__counter--highlighted">1</div></a>
+      <a href="/call/abc12345"><div class="counter-bubble__counter">@</div></a>
+      <a href="/call/nounread">read</a>`;
+    // No numeric filter, unlike Telegram: the badge parser counts a non-numeric bubble (a
+    // mention marker) as 1, so it is unread too.
+    expect(tk.unreadKeys!(document).sort()).toEqual(['/call/37egz8x9', '/call/abc12345']);
+  });
+
+  it('reports nothing when a counter is not inside a conversation anchor', () => {
+    document.body.innerHTML = '<div class="counter-bubble__counter">2</div>';
+    expect(tk.unreadKeys!(document)).toEqual([]);
+  });
+});
+
+describe('whatsapp unreadKeys', () => {
+  const wa = CONVERSATION_ADAPTERS.whatsapp;
+
+  /** A rendered row: the jid lives on an ancestor fiber, exactly as the spike measured. */
+  const row = (jid: string, unread: boolean): Element => {
+    const el = document.createElement('div');
+    el.setAttribute('role', 'listitem');
+    // MEASURED: an unread row carries BOTH an aria-label span and a numeric badge span. The
+    // aria-label is the one keyed on — semantic rather than incidental, and it cannot be
+    // confused with any other number in the row.
+    el.innerHTML = unread
+      ? '<span aria-label="3 unread messages">3</span>'
+      : '<span>12:04</span>';
+    Object.defineProperty(el, '__reactFiber$test', {
+      value: { key: null, return: { key: null, return: { key: `chat-${jid}`, return: null } } },
+      enumerable: true, configurable: true,
+    });
+    return el;
+  };
+
+  it('reports the jid of each unread row', () => {
+    document.body.innerHTML = '<div id="pane-side"></div>';
+    const pane = document.getElementById('pane-side')!;
+    pane.append(
+      row('447720388804-1549977754@g.us', true),
+      row('456@c.us', false),
+      row('120363042640138349@g.us', true),
+    );
+    expect(wa.unreadKeys!(document).sort())
+      .toEqual(['120363042640138349@g.us', '447720388804-1549977754@g.us']);
+  });
+
+  it('reports nothing when the chat list is not rendered', () => {
+    document.body.innerHTML = '';
+    expect(wa.unreadKeys!(document)).toEqual([]);
+  });
+
+  it('skips an unread row whose jid cannot be read', () => {
+    document.body.innerHTML = '<div id="pane-side"></div>';
+    const el = document.createElement('div');
+    el.setAttribute('role', 'listitem');
+    el.innerHTML = '<span aria-label="3 unread messages">3</span>';
+    document.getElementById('pane-side')!.append(el);
+    expect(wa.unreadKeys!(document)).toEqual([]);
+  });
+});

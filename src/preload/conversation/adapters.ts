@@ -142,6 +142,19 @@ const whatsapp: ConversationAdapter = {
     find: (doc) => waRows(doc).find((el) => waRowJid(el) === key) ?? null,
   }),
   scroller: (doc) => doc.querySelector('#pane-side'),
+  // Per-ROW, unlike the badge parser, which reads one document-wide total. Measured: an
+  // unread row carries BOTH an aria-label span and a numeric badge span; the aria-label is
+  // keyed on because it is semantic rather than incidental, and cannot be confused with any
+  // other number in a row. Case-insensitive so singular and plural both qualify.
+  unreadKeys: (doc) => {
+    const out = new Set<string>();
+    for (const row of waRows(doc)) {
+      if (!row.querySelector('[aria-label*="unread" i]')) continue;
+      const jid = waRowJid(row);
+      if (jid) out.add(jid);
+    }
+    return [...out];
+  },
 };
 
 // --- Slack ------------------------------------------------------------------
@@ -155,6 +168,23 @@ const SLACK_HOME_TAB = '[data-qa="tab_rail_home_button"]';
 /** Slack serves a size-suffixed avatar (`…-24`); a 34px bubble wants more pixels than that. */
 export function bumpSlackAvatarSize(src: string): string {
   return src.replace(/-\d{2,3}$/, '-72');
+}
+
+/**
+ * The conversation id on or near an unread sidebar row.
+ *
+ * Measured 2026-07-27: the unread row's OWN id is EMPTY and the conversation id sits on an
+ * ANCESTOR, so `row.id` finds nothing. A descendant of the same row carries
+ * `id="mask__small-member"`, which is why the format guard is load-bearing rather than
+ * defensive: only a real conversation id (C/D/G plus at least six upper-case alphanumerics)
+ * is accepted, so neither climbing nor descending can produce a false key.
+ */
+function slackConversationId(row: Element): string | null {
+  for (const el of [row, row.closest('[id]'), row.querySelector('[id]')]) {
+    const id = (el as HTMLElement | null)?.id ?? '';
+    if (/^[CDG][A-Z0-9]{6,}$/.test(id)) return id;
+  }
+  return null;
 }
 
 const slack: ConversationAdapter = {
@@ -190,6 +220,16 @@ const slack: ConversationAdapter = {
     },
   }),
   scroller: (doc) => doc.querySelector('[role="tree"]')?.parentElement ?? null,
+  unreadKeys: (doc) => {
+    const out = new Set<string>();
+    doc.querySelectorAll('.p-channel_sidebar__channel--unread').forEach((row) => {
+      // Same exclusion the badge parser applies — an affordance, not a conversation.
+      if (row.querySelector('.p-channel_sidebar__link--add-more-items')) return;
+      const id = slackConversationId(row);
+      if (id) out.add(id);
+    });
+    return [...out];
+  },
 };
 
 // --- Telegram ---------------------------------------------------------------
@@ -224,6 +264,16 @@ const telegram: ConversationAdapter = {
   plan: (key) => ({ kind: 'row', find: (doc) => telegramAnchor(doc, key) }),
   scroller: (doc) => doc.querySelector(TELEGRAM_ROW)?.closest('[class*="chat-list" i]')
     ?? doc.querySelector('.chat-list, [class*="ChatList" i]'),
+  unreadKeys: (doc) => {
+    const out = new Set<string>();
+    doc.querySelectorAll('.chat-badge-transition').forEach((badge) => {
+      // Numeric only — the badge parser skips action buttons like "Open" the same way.
+      if (!/^\d+$/.test((badge.textContent || '').trim())) return;
+      const href = badge.closest(TELEGRAM_ROW)?.getAttribute('href');
+      if (href) out.add(href);
+    });
+    return [...out];
+  },
 };
 
 // --- Element ----------------------------------------------------------------
@@ -310,6 +360,21 @@ function messengerRowName(anchor: Element): string {
   return '';
 }
 
+/** NodeFilter.SHOW_TEXT, inlined: notify/messenger.ts does the same, because that module runs
+ *  under a plain 'node' vitest environment where the NodeFilter global is not guaranteed. */
+const SHOW_TEXT = 0x4;
+
+/** A row is unread when a text node inside it reads exactly "Unread message:" — the rule the
+ *  shipped badge parser and notification scraper both already use. */
+function messengerRowUnread(doc: Document, anchor: Element): boolean {
+  const walker = doc.createTreeWalker(anchor, SHOW_TEXT);
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    if ((node.textContent ?? '').trim() === 'Unread message:') return true;
+  }
+  return false;
+}
+
 const messenger: ConversationAdapter = {
   capture(doc, win) {
     const id = messengerThreadId(win.location.pathname);
@@ -331,6 +396,19 @@ const messenger: ConversationAdapter = {
     };
   },
   plan: (key) => ({ kind: 'row', via: 'anchor', find: (doc) => findMessengerAnchor(doc, key) }),
+  unreadKeys: (doc) => {
+    const out = new Set<string>();
+    for (const a of doc.querySelectorAll('a[href*="/messages/"]')) {
+      // Muted. A muted conversation contributes no service badge, so it contributes no dot —
+      // and one of the two unread rows measured on the real page was muted.
+      if (a.querySelector('[style*="--disabled-icon"]')) continue;
+      if (!messengerRowUnread(doc, a)) continue;
+      const id = messengerThreadId(a.getAttribute('href') ?? '');
+      // CANONICAL form — the same key capture() stores. Main matches by string equality.
+      if (id) out.add(`/messages/t/${id}`);
+    }
+    return [...out];
+  },
 };
 
 /**
@@ -380,6 +458,16 @@ const talk: ConversationAdapter = {
   },
   plan: (key) => ({ kind: 'row', via: 'anchor', find: (doc) => talkAnchor(doc, key) }),
   scroller: (doc) => doc.querySelector('.app-navigation__list, .app-navigation ul, .app-navigation'),
+  unreadKeys: (doc) => {
+    const out = new Set<string>();
+    // No numeric filter here, unlike Telegram: the badge parser deliberately counts a
+    // non-numeric bubble (a mention marker) as 1, so it is unread too.
+    doc.querySelectorAll('.counter-bubble__counter').forEach((counter) => {
+      const href = counter.closest('a[href^="/call/"]')?.getAttribute('href');
+      if (href) out.add(href);
+    });
+    return [...out];
+  },
 };
 
 /**
