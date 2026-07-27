@@ -23,7 +23,7 @@ body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
 .item:hover { border-color: #86868b; }
 .item.active { border-color: #0071e3; color: #0071e3; box-shadow: inset 3px 0 0 #0071e3; }
 .item .icon { width: 22px; height: 22px; border-radius: 5px; display: block; }
-.item.sleeping { opacity: .45; filter: grayscale(1); }
+.item.sleeping, .bubble.sleeping { opacity: .45; filter: grayscale(1); }
 .item.dragging { opacity: .5; cursor: grabbing; }
 
 .home {
@@ -125,10 +125,21 @@ body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
   width: 14px; height: 14px; border-radius: 4px;
   border: 1px solid #e5e5e7; background: #fff;
 }
+/* Unread. Top-right, the one corner the service badge leaves free. Ringed in the rail's own
+   background colour so it reads as a mark sitting ON the avatar rather than part of the
+   image — the same trick the service badge uses. Declared BEFORE the dark-mode block: a
+   media query adds no specificity, so a light rule written after it would win in dark mode
+   too. */
+.bubble .unread {
+  position: absolute; top: -2px; right: -2px;
+  width: 11px; height: 11px; border-radius: 50%;
+  background: #0071e3; border: 2px solid #e5e5e7;
+}
 
 @media (prefers-color-scheme: dark) {
   .bubble { background: #2d2d2f; border-color: #424245; }
   .bubble .service { border-color: #3d3d3f; background: #2d2d2f; }
+  .bubble .unread { background: #0a84ff; border-color: #3d3d3f; }
 }
 /* The lettered fallback: two characters at 34px need to be legible, and the inline hue set
    in rail.ts supplies the contrast behind them. */

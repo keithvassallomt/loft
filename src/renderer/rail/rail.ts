@@ -142,7 +142,9 @@ function bubbleButton(item: BubbleItem, iconEpoch: number): HTMLButtonElement {
   const b = document.createElement('button');
   b.className = 'bubble';
   b.title = item.title;
-  b.setAttribute('aria-label', item.title);
+  b.setAttribute('aria-label', item.unread ? `${item.title} (unread)` : item.title);
+  // Same treatment as a sleeping service icon, sharing its CSS rule rather than restating it.
+  b.classList.toggle('sleeping', item.sleeping);
   b.dataset.id = item.id;
 
   // Same mechanism the service icons use: on error the image is replaced by initials. That
@@ -178,6 +180,16 @@ function bubbleButton(item: BubbleItem, iconEpoch: number): HTMLButtonElement {
   badge.alt = '';
   badge.addEventListener('error', () => badge.remove());
   b.append(badge);
+
+  // Top-right, opposite the service badge — the one free corner. Appended last so it sits
+  // above the avatar. A sleeping bubble never has one: main gates it (no view, no honest
+  // answer), and the greyed treatment is what says so.
+  if (item.unread) {
+    const dot = document.createElement('span');
+    dot.className = 'unread';
+    dot.setAttribute('aria-hidden', 'true');
+    b.append(dot);
+  }
 
   // A plain click, with no pointerdown/drag handlers: bubbles are not draggable in v1, so
   // they never enter the rail's drag machinery — which is what keeps this change clear of
