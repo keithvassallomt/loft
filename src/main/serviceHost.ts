@@ -40,6 +40,8 @@ export interface ServiceHost {
   setDebug(enabled: boolean): void;
   /** Ask the page to navigate to a conversation (notification click). */
   navigate(url: string): void;
+  /** Ask the page to open a pinned conversation by its per-service key (bubble click). */
+  openConversation(key: string): void;
   /** Replay a notification click into the page's own handler (notification click). */
   notifyClick(notifyId: number, epoch: string): void;
   /** Navigate, hiding any stale recovery overlay and re-arming stuck detection. */

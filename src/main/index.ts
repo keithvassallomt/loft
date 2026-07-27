@@ -1,7 +1,7 @@
 import { app, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, session } from 'electron';
 import { readFile } from 'node:fs/promises';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
 import { getKind, KINDS, ServiceKind, effectiveUrl } from './registry';
@@ -34,7 +34,13 @@ import {
   BRAND_ICON, CUSTOM_ICON, type ServiceInstance,
 } from './instances';
 import { scanVariants, iconCandidates, variantPngPath } from './icons';
-import { bubbleAvatarPath } from './bubbleAvatars';
+import {
+  bubbleAvatarPath, saveBubbleAvatar, deleteBubbleAvatar, type BubbleAvatarDeps,
+} from './bubbleAvatars';
+import {
+  addBubble, removeBubble, removeServiceBubbles, refreshBubbleTitle, findBubble,
+  bubbleClickAction, bubbleId,
+} from './bubbles';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
 import { RAIL_WIDTH, type Rect } from './layout';
@@ -85,6 +91,13 @@ let appearanceWatcher: AppearanceWatcher | undefined;
 // URL, so every renderer that draws it (rail, grid, titlebar, hub) would keep Chromium's
 // cached copy; bumping this on each change and appending it as `?e=<n>` forces a re-fetch.
 let iconEpoch = 0;
+/**
+ * The conversation each loaded service currently has open, pushed by its preload. Absent or
+ * null means nothing is open, which is what greys the pin controls. Not persisted: it
+ * describes the live page, and a stale value would offer to pin a conversation nobody is
+ * looking at.
+ */
+const currentConversation = new Map<string, { key: string; title: string; avatarUrl?: string } | null>();
 // Set once chat.loft.Loft's D-Bus service comes up — undefined until whenReady's startup
 // sequence reaches it, so every add/remove call site optional-chains it (a hub action
 // taken in that window must not throw, just skip the D-Bus side of the update).
@@ -229,6 +242,39 @@ const isDetached = (id: string): boolean => {
   if (loft?.has(id)) return false;
   return wantsOwnWindow(id);
 };
+
+/**
+ * Services on screen in the Loft window's content rect right now: the selected tab, or EVERY
+ * grid leaf when the grid is the selection, or none when the manager is showing.
+ *
+ * Used by a bubble click to decide whether the rail selection needs to change at all — which
+ * is what lets a click on a grid cell's conversation stay in the grid.
+ */
+const visibleServiceIds = (): string[] => {
+  const active = loft?.activeId();
+  if (active === undefined) return [];
+  if (active === GRID_ID) return gridServicesOf(config.grid ?? null);
+  return [active];
+};
+
+/**
+ * Avatar I/O for one service's bubbles.
+ *
+ * The fetch goes through that INSTANCE's own partition session, so an authenticated avatar
+ * (Element, Talk) works — the same mechanism notification avatars already use. Resized to
+ * 64px because the rail draws at 34 and a hidpi display asks for more.
+ */
+function bubbleAvatarDeps(serviceId: string): BubbleAvatarDeps {
+  return {
+    fetch: (url) => session.fromPartition(`persist:${serviceId}`).fetch(url),
+    write: (p, bytes) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, bytes); },
+    remove: (p) => rmSync(p, { force: true }),
+    toPng: (bytes) => {
+      const img = nativeImage.createFromBuffer(bytes);
+      return img.isEmpty() ? Buffer.alloc(0) : img.resize({ width: 64, height: 64 }).toPNG();
+    },
+  };
+}
 
 /**
  * Is the user looking at this service right now? — the `active` axis of the notification
@@ -1325,6 +1371,14 @@ if (!app.requestSingleInstanceLock()) {
       // service keeps its leaf, it is persisted, and opening Grid draws a header strip for a
       // service that no longer exists with no page behind it. No-op by identity otherwise.
       loft?.dropFromGrid(id);
+      // Same reasoning as dropFromGrid above: a bubble outliving its service would draw a
+      // button whose click can only fail. The avatar files go too — nothing else would ever
+      // collect them, since their names are derived from bubbles that no longer exist.
+      for (const b of (config.bubbles ?? []).filter((x) => x.serviceId === id)) {
+        deleteBubbleAvatar(b.id, { remove: (p) => rmSync(p, { force: true }) });
+      }
+      config.bubbles = removeServiceBubbles(config.bubbles ?? [], id);
+      if (config.bubbles.length === 0) delete config.bubbles;
       removeInstance(inst, config, deleteData);
       saveConfig(configPath(), config);
       dbusApi?.unexportInstance(inst);
@@ -1405,6 +1459,98 @@ if (!app.requestSingleInstanceLock()) {
     const sw = findBySenderId(e.sender.id);
     if (!sw || !p || typeof p.title !== 'string' || typeof p.body !== 'string') return;
     void notifications?.handle(sw.def.id, { title: p.title, body: p.body, icon: p.icon, href: p.href, notifyId: p.notifyId, epoch: p.epoch });
+  });
+
+  // Which conversation each loaded service currently has open, pushed by its preload. This
+  // is what pinning reads, so no request/response round trip is needed, and what decides
+  // whether the pin controls are enabled.
+  ipcMain.on('service:conversation', (e, p?: { key?: unknown; title?: unknown; avatarUrl?: unknown } | null) => {
+    const sw = findBySenderId(e.sender.id);
+    if (!sw) return;
+    const id = sw.def.id;
+    if (!p || typeof p.key !== 'string' || typeof p.title !== 'string') {
+      currentConversation.set(id, null);
+      loft?.refreshTitlebar();
+      return;
+    }
+    const conv = {
+      key: p.key,
+      title: p.title,
+      avatarUrl: typeof p.avatarUrl === 'string' ? p.avatarUrl : undefined,
+    };
+    currentConversation.set(id, conv);
+    // A pinned conversation seen open gets its label refreshed, so a rename stops showing
+    // stale. Reference comparison, not deep equality: refreshBubbleTitle returns the SAME
+    // array when nothing changed, which is what keeps this off the config-write path — it
+    // runs every couple of seconds per loaded service.
+    const before = config.bubbles ?? [];
+    const after = refreshBubbleTitle(before, id, conv.key, conv.title);
+    if (after !== before) {
+      config.bubbles = after;
+      saveConfig(configPath(), config);
+      loft?.refreshRail();
+    }
+    loft?.refreshTitlebar();
+  });
+
+  ipcMain.on('bubble:pin', (_e, m?: { serviceId?: unknown }) => {
+    const serviceId = typeof m?.serviceId === 'string' ? m.serviceId : undefined;
+    if (!serviceId) return;
+    const conv = currentConversation.get(serviceId);
+    if (!conv) return; // nothing open — the control should already be greyed
+    const before = config.bubbles ?? [];
+    const after = addBubble(before, serviceId, conv.key, conv.title);
+    if (after.length === before.length) return; // already pinned; pinning is idempotent
+    config.bubbles = after;
+    saveConfig(configPath(), config);
+    loft?.refreshRail();
+    // The avatar arrives asynchronously; the bubble is already on the rail showing initials,
+    // and bumping the epoch is what makes it re-fetch once the file exists.
+    void saveBubbleAvatar(bubbleId(serviceId, conv.key), conv.avatarUrl, bubbleAvatarDeps(serviceId))
+      .then((saved) => { if (saved) { iconEpoch += 1; loft?.refreshRail(); } });
+  });
+
+  ipcMain.on('rail:selectBubble', (_e, id: string) => {
+    const bubble = findBubble(config.bubbles ?? [], id);
+    if (!bubble) return;
+    const action = bubbleClickAction({
+      serviceId: bubble.serviceId,
+      detached: isDetached(bubble.serviceId),
+      visibleIds: visibleServiceIds(),
+    });
+    if (action.kind === 'focus-detached') windows.get(bubble.serviceId)?.show();
+    else if (action.kind === 'select') {
+      const def = getService(bubble.serviceId);
+      if (def) showService(def);
+    }
+    // Whatever live view the service ended up with. The preload retries internally while the
+    // page wakes, so this is safe to send the moment the view exists.
+    const host = windows.get(bubble.serviceId) ?? loft?.hostOf(bubble.serviceId);
+    host?.openConversation(bubble.key);
+  });
+
+  ipcMain.on('rail:bubbleMenu', (_e, id: string) => {
+    const bubble = findBubble(config.bubbles ?? [], id);
+    if (!bubble) return;
+    Menu.buildFromTemplate([
+      { label: bubble.title, enabled: false },
+      { type: 'separator' },
+      {
+        label: 'Unpin',
+        click: () => {
+          config.bubbles = removeBubble(config.bubbles ?? [], id);
+          saveConfig(configPath(), config);
+          deleteBubbleAvatar(id, { remove: (p) => rmSync(p, { force: true }) });
+          loft?.refreshRail();
+        },
+      },
+    ]).popup();
+  });
+
+  // Advisory only: a not-found leaves the user on the service, which is where they were
+  // going. Logged so a future stale-bubble indicator has a signal to build on.
+  ipcMain.on('bubble:opened', (_e, m?: { key?: unknown; outcome?: unknown }) => {
+    if (m?.outcome === 'not-found') console.warn('bubble: conversation not found:', m.key);
   });
 
   // Shift+right-click on a service view, forwarded by its preload (contextMenu.ts) only while

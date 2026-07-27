@@ -63,6 +63,33 @@ export function refreshBubbleTitle(
   return out;
 }
 
+export type BubbleAction =
+  | { kind: 'focus-detached'; serviceId: string }
+  | { kind: 'navigate-only'; serviceId: string }
+  | { kind: 'select'; serviceId: string };
+
+export interface BubbleClickInput {
+  serviceId: string;
+  detached: boolean;
+  /** Services currently visible in the content rect: the active tab, or every grid leaf. */
+  visibleIds: readonly string[];
+}
+
+/**
+ * Where a bubble click lands.
+ *
+ * One uniform rule rather than a case per view mode: send the open command to whatever live
+ * view the service already has, and change the rail selection only when it is not already
+ * visible. That is what keeps a grid cell in the grid and a detached window in its own
+ * window, without this function needing to know anything about either — and it avoids
+ * fighting the grid/detach mutual-exclusion invariant rather than special-casing around it.
+ */
+export function bubbleClickAction(i: BubbleClickInput): BubbleAction {
+  if (i.detached) return { kind: 'focus-detached', serviceId: i.serviceId };
+  if (i.visibleIds.includes(i.serviceId)) return { kind: 'navigate-only', serviceId: i.serviceId };
+  return { kind: 'select', serviceId: i.serviceId };
+}
+
 /**
  * Validate persisted bubbles. Malformed entries are dropped individually and the rest
  * survive — a corrupt bubble must cost you the bubble, never the ability to start Loft.

@@ -58,6 +58,8 @@ export interface ServiceView {
   setDebug(enabled: boolean): void;
   /** Ask the page to navigate to a conversation (notification click). */
   navigate(url: string): void;
+  /** Open a pinned conversation by its per-service key (bubble click). */
+  openConversation(key: string): void;
   /** Replay a notification click into the page's own handler. */
   notifyClick(notifyId: number, epoch: string): void;
   /** Navigate, hiding any stale recovery overlay and re-arming stuck detection. */
@@ -373,6 +375,7 @@ export function createServiceView(def: ServiceInstance, cfg: LoftConfig): Servic
     pushHidden: (hidden) => safeSend(serviceView, 'service:visibility', hidden),
     setDebug: (enabled) => { debugEnabled = enabled; safeSend(serviceView, 'service:debug', enabled); },
     navigate: (url) => safeSend(serviceView, 'service:navigate', url),
+    openConversation: (key) => safeSend(serviceView, 'bubble:open', { key }),
     notifyClick: (notifyId, epoch) => safeSend(serviceView, 'service:notify-click', { notifyId, epoch }),
     loadUrl,
     reload: () => {

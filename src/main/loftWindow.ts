@@ -52,6 +52,9 @@ export interface LoftWindow {
   ids(): string[];
   setBadge(id: string, count: number): void;
   refreshRail(): void;
+  /** Re-push titlebar state only — used when the open conversation changes, which alters
+   *  whether the pin button is enabled but nothing the rail draws. */
+  refreshTitlebar(): void;
   showManager(): void;
   /** Select the grid view. */
   showGrid(): void;
@@ -601,6 +604,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
         pushHidden: (v) => sv.pushHidden(v),
         setDebug: (v) => sv.setDebug(v),
         navigate: (u) => sv.navigate(u),
+        openConversation: (k) => sv.openConversation(k),
         notifyClick: (n, e) => sv.notifyClick(n, e),
         loadUrl: (u) => sv.loadUrl(u),
         reload: () => sv.reload(),
@@ -705,6 +709,7 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     },
 
     refreshRail: refreshAll,
+    refreshTitlebar,
     showManager,
     showGrid,
     refreshGrid,
