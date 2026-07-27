@@ -101,12 +101,25 @@ already shows DND separately with its own mark.
 One rule to learn, applied to a second control — the same principle `pinTarget` followed in
 reusing the grid's focused cell.
 
+### A sleeping service's bubbles look asleep
+
+`BubbleItem` also gains `sleeping: boolean`, and the rail renders those bubbles greyed, with
+**the same values the service icons already use** — `opacity: .45; filter: grayscale(1)`,
+shared rather than restated, so the two cannot drift apart.
+
+This closes the gap that "no dot when asleep" would otherwise leave: a bubble with no dot is
+ambiguous between *nothing unread* and *nobody is looking*, and those are very different
+things to a user deciding whether they have been messaged. Greying it out says which. It also
+makes the rule visible rather than documented — a greyed bubble reads as "click me to wake
+this", which is exactly what clicking it does.
+
 ### Renderer
 
 `bubbleButton` (`src/renderer/rail/rail.ts`) appends a `<span class="unread">` when
-`item.unread`. Top-right, opposite the service badge, ringed in the rail's background colour
-so it reads on top of a photo. Computed in main and shipped on `BubbleItem`, because the rail
-renderer shares one global scope with the other renderer scripts and cannot import.
+`item.unread`, and toggles `.sleeping` on the button. The dot sits top-right, opposite the
+service badge, ringed in the rail's background colour so it reads on top of a photo. Both
+flags are computed in main and shipped on `BubbleItem`, because the rail renderer shares one
+global scope with the other renderer scripts and cannot import.
 
 ### Optimistic clear on click
 
@@ -135,7 +148,7 @@ smoke test, and in every one of those cases the wrong answer was the plausible o
   service, including "nothing unread" and "unread row not rendered".
 - Main-side: merge, the open-conversation clear, the sleeping and `badgesEnabled` gates, and
   clearing on unload/remove.
-- Rail model: `BubbleItem.unread` is derived, not stored.
+- Rail model: `BubbleItem.unread` and `.sleeping` are derived, not stored.
 
 ## Known limitation
 
@@ -149,8 +162,9 @@ would make the dot flicker off whenever the list scrolls.
 ## Out of scope
 
 - **Counts.** Explicitly not wanted.
-- **Unread for a sleeping service.** Not knowable without a live view. This is a real
-  limitation of the design — arguably the most useful case for a bubble is "tell me when this
-  person messages me" — but no amount of design work gets round having no page to scrape.
+- **Unread for a sleeping service.** Not knowable without a live view — arguably the most
+  useful case for a bubble is "tell me when this person messages me", but no amount of design
+  work gets round having no page to scrape. Rather than let that failure hide, the bubble is
+  greyed out (above) so the absence of a dot is never mistaken for "nothing unread".
 - **Persisting unread across a restart.** See "State in main".
 - The other two recorded follow-ups: dragging bubbles to reorder, and automatic bubbles.
