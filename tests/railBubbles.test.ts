@@ -28,8 +28,8 @@ describe('buildBubbleItems', () => {
       [b('slack', 'C1', '#general'), b('slack', 'C2', '#random')],
       new Set(['slack']), kindOf);
     // The point of the change: two channels must not look identical.
-    expect(items[0].glyph).toBe('GE');
-    expect(items[1].glyph).toBe('RA');
+    expect(items[0].glyph).toBe('#GE');
+    expect(items[1].glyph).toBe('#RA');
     expect(items[0].hue).not.toBe(items[1].hue);
   });
 

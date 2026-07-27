@@ -161,6 +161,9 @@ function bubbleButton(item: BubbleItem, iconEpoch: number): HTMLButtonElement {
     // lettered bubbles further, and is keyed on the conversation so a rename cannot
     // recolour it.
     g.textContent = item.glyph;
+    // A Slack channel keeps its '#' and so is three characters wide where everything else is
+    // two; without this it overflows a 34px circle.
+    g.classList.toggle('wide', item.glyph.length > 2);
     b.style.background = `hsl(${item.hue} 45% 45%)`;
     b.style.borderColor = `hsl(${item.hue} 45% 38%)`;
     b.style.color = '#fff';

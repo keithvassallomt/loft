@@ -71,11 +71,20 @@ export function refreshBubbleTitle(
  * Slack channel is one token starting with '#', so `#general`, `#random` and `#dev-team` all
  * rendered as a bare '#' — identical bubbles with only a tooltip to tell them apart.
  *
- * So: drop a leading '#', split on separators AND camelCase, take one letter per word, and
- * fall back to the first two letters when there is only one word.
+ * So: split on separators AND camelCase, take one letter per word, and fall back to the first
+ * two letters when there is only one word.
+ *
+ * A leading '#' is KEPT (Keith's call) — it is the mark that says "Slack channel" at a glance,
+ * and it is only ever present because the Slack adapter puts it there. '@' is dropped: it
+ * distinguishes nothing, and would cost a third of the glyph. So a channel is three characters
+ * where everything else is two, which the renderer sizes down.
  */
 export function bubbleGlyph(title: string): string {
-  const stripped = title.trim().replace(/^[#@]+/, '');
+  const trimmed = title.trim();
+  const marker = trimmed.startsWith('#') ? '#' : '';
+  const stripped = trimmed.replace(/^[#@]+/, '');
+  // A bare '#' means capture produced no name at all; '?' says that, where '#' would look
+  // like a channel we simply failed to label.
   if (!stripped) return '?';
   const words = stripped
     // BotFather -> Bot Father, so a camelCase name yields two distinct letters.
@@ -88,7 +97,7 @@ export function bubbleGlyph(title: string): string {
     // One word: two letters beat one, which is the whole point — '#general' and '#git'
     // must not collapse to the same glyph.
     : [...words[0]].slice(0, 2).join('');
-  return letters.toUpperCase();
+  return marker + letters.toUpperCase();
 }
 
 /**

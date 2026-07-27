@@ -102,7 +102,7 @@ describe('bubbleGlyph', () => {
   // channel — one token beginning with '#' — rendered as a bare '#'.
   it('gives DIFFERENT glyphs to different single-word channels', () => {
     const glyphs = ['#general', '#random', '#git', '#design'].map(bubbleGlyph);
-    expect(glyphs).toEqual(['GE', 'RA', 'GI', 'DE']);
+    expect(glyphs).toEqual(['#GE', '#RA', '#GI', '#DE']);
     expect(new Set(glyphs).size).toBe(4);
   });
 
@@ -112,17 +112,28 @@ describe('bubbleGlyph', () => {
   });
 
   it('splits hyphens and underscores, which channels use instead of spaces', () => {
-    expect(bubbleGlyph('#dev-team')).toBe('DT');
-    expect(bubbleGlyph('#ice_campus')).toBe('IC');
+    expect(bubbleGlyph('#dev-team')).toBe('#DT');
+    expect(bubbleGlyph('#ice_campus')).toBe('#IC');
   });
 
   it('splits camelCase', () => {
     expect(bubbleGlyph('BotFather')).toBe('BF');
   });
 
-  it('strips a leading # or @ rather than spending a character on it', () => {
-    expect(bubbleGlyph('#general')).not.toContain('#');
+  // Keith's call: '#' is what says "Slack channel" at a glance, so it is kept and the two
+  // distinguishing letters are kept as well.
+  it("keeps Slack's channel marker, and still distinguishes two channels", () => {
+    expect(bubbleGlyph('#general')).toBe('#GE');
+    expect(bubbleGlyph('#git')).toBe('#GI');
+  });
+
+  it('strips a leading @, which marks nothing worth two thirds of the glyph', () => {
     expect(bubbleGlyph('@someone')).toBe('SO');
+  });
+
+  it('marks a channel glyph as wide so the renderer can shrink it', () => {
+    expect(bubbleGlyph('#general').length).toBe(3);
+    expect(bubbleGlyph('Keith Vassallo').length).toBe(2);
   });
 
   it('does not split an emoji across surrogate halves', () => {
