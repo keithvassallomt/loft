@@ -104,3 +104,29 @@ body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
   line-height: 13px;
   text-align: center;
 }
+
+/* Round, to read as a person rather than an app — the services above are rounded squares.
+   overflow stays visible so the service badge can overhang the circle. */
+.bubble {
+  position: relative; flex: none;
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid #d1d1d6; border-radius: 50%;
+  background: #fff; color: #86868b;
+  font: 700 10px/1 system-ui, sans-serif;
+  cursor: pointer; padding: 0;
+}
+.bubble:hover { border-color: #86868b; }
+.bubble .avatar { width: 32px; height: 32px; border-radius: 50%; display: block; }
+/* The service this conversation belongs to. Bordered in the rail's own background colour so
+   it reads as a badge sitting on the avatar rather than part of the image. */
+.bubble .service {
+  position: absolute; bottom: -2px; right: -2px;
+  width: 14px; height: 14px; border-radius: 4px;
+  border: 1px solid #e5e5e7; background: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+  .bubble { background: #2d2d2f; border-color: #424245; }
+  .bubble .service { border-color: #3d3d3f; background: #2d2d2f; }
+}

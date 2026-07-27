@@ -17,6 +17,8 @@ const base = {
   badge: () => 0,
   activeId: undefined as string | undefined,
   iconEpoch: 0,
+  bubbles: [],
+  kindOf: (id: string) => id,
 };
 
 describe('buildRailState', () => {

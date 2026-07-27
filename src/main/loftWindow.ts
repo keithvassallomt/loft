@@ -1,5 +1,5 @@
 import { BrowserWindow, WebContentsView, Menu } from 'electron';
-import type { ServiceInstance } from './instances';
+import { kindOf, type ServiceInstance } from './instances';
 import type { LoftConfig } from './config';
 import { computeLayout, RAIL_WIDTH, type Rect } from './layout';
 import { formatWindowTitle } from './serviceTitle';
@@ -262,6 +262,8 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       activeId: active,
       grid: deps.cfg.grid ?? null,
       iconEpoch: deps.iconEpoch(),
+      bubbles: deps.cfg.bubbles ?? [],
+      kindOf: (id) => kindOf(id, deps.cfg),
     }));
 
   const refreshTitlebar = (): void => {

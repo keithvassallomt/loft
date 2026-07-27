@@ -8,6 +8,10 @@ export interface RailBridge {
   select(id: string): void;
   /** Ask main to pop the native per-service context menu for this item. */
   menu(id: string): void;
+  /** Go to a pinned conversation: main resolves the service and navigates it. */
+  selectBubble(id: string): void;
+  /** Pop the per-bubble context menu (Remove). */
+  bubbleMenu(id: string): void;
   /** Open the manager view (the rail's Loft "home" button). */
   showManager(): void;
   /** Open the grid view (the rail's pinned Grid button). */
@@ -39,6 +43,8 @@ export function buildRailBridge(ipc: IpcRenderer): RailBridge {
     },
     select: (id) => ipc.send('rail:select', id),
     menu: (id) => ipc.send('rail:menu', id),
+    selectBubble: (id) => ipc.send('rail:selectBubble', id),
+    bubbleMenu: (id) => ipc.send('rail:bubbleMenu', id),
     showManager: () => ipc.send('rail:showManager'),
     showGrid: () => ipc.send('rail:showGrid'),
     dragEnd: (id, releaseX, releaseY) => ipc.send('rail:dragEnd', { id, releaseX, releaseY }),

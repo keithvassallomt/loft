@@ -1,5 +1,6 @@
 import type { LoftConfig } from './config';
 import type { ServiceKind } from './registry';
+import type { Bubble } from './bubbles';
 import { GRID_ID, services as gridServices, type GridNode } from './gridTree';
 
 /** One entry in the Loft window's service rail. */
@@ -17,6 +18,33 @@ export interface RailItem {
   active: boolean;
 }
 
+/** One pinned conversation as the rail renders it. */
+export interface BubbleItem {
+  id: string;
+  title: string;
+  /** Instance id — what a click resolves against. */
+  serviceId: string;
+  /** Kind — selects the small service icon badged bottom-right. */
+  kind: string;
+}
+
+/**
+ * Bubbles for the rail, in pin order.
+ *
+ * A bubble whose service is no longer installed is omitted rather than drawn: clicking it
+ * could only fail. Config cleanup happens on service removal; this filter is the safety net
+ * for a hand-edited config, and for the window between the two.
+ */
+export function buildBubbleItems(
+  bubbles: readonly Bubble[],
+  installed: ReadonlySet<string>,
+  kindOf: (serviceId: string) => string,
+): BubbleItem[] {
+  return bubbles
+    .filter((b) => installed.has(b.serviceId))
+    .map((b) => ({ id: b.id, title: b.title, serviceId: b.serviceId, kind: kindOf(b.serviceId) }));
+}
+
 /** The rail renderer's full state: the service items, plus which of the two pinned
  *  entries — the Loft "home" button and the Grid button — is the current selection. */
 export interface RailState {
@@ -27,6 +55,8 @@ export interface RailState {
   gridActive: boolean;
   /** How many services are in the grid; the entry renders a count when non-zero. */
   gridCount: number;
+  /** Pinned conversations, drawn below the services behind their own divider. */
+  bubbles: BubbleItem[];
   /** Cache-buster for loft://icon/<id> URLs. The URL is stable across an icon change, so
    *  the rail would otherwise keep Chromium's cached image; the renderer appends `?e=<n>`,
    *  and main bumps this whenever an icon is re-deployed. */
@@ -92,6 +122,10 @@ export interface RailStateInput extends RailModelInput {
   grid: GridNode | null;
   /** Current icon cache-buster (see RailState.iconEpoch). */
   iconEpoch: number;
+  /** Pinned conversations, in pin order. */
+  bubbles: readonly Bubble[];
+  /** Instance id -> kind, for the corner badge. */
+  kindOf(serviceId: string): string;
 }
 
 /**
@@ -105,6 +139,11 @@ export function buildRailState(i: RailStateInput): RailState {
     managerActive: i.activeId === undefined,
     gridActive: i.activeId === GRID_ID,
     gridCount: gridServices(i.grid).length,
+    bubbles: buildBubbleItems(
+      i.bubbles,
+      new Set(i.services.filter((d) => i.config.services[d.id] !== undefined).map((d) => d.id)),
+      i.kindOf,
+    ),
     iconEpoch: i.iconEpoch,
   };
 }

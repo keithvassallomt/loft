@@ -2,6 +2,7 @@
 // module boilerplate that would throw under `<script type="module">`.
 type RailItem = import('../../main/railModel').RailItem;
 type RailState = import('../../main/railModel').RailState;
+type BubbleItem = import('../../main/railModel').BubbleItem;
 
 const root = document.getElementById('rail')!;
 const slotLine = document.getElementById('slot')!;
@@ -137,6 +138,48 @@ function serviceButton(item: RailItem, iconEpoch: number): HTMLButtonElement {
   return b;
 }
 
+function bubbleButton(item: BubbleItem, iconEpoch: number): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.className = 'bubble';
+  b.title = item.title;
+  b.setAttribute('aria-label', item.title);
+  b.dataset.id = item.id;
+
+  // Same mechanism the service icons use: on error the image is replaced by initials. That
+  // IS the whole fallback for a conversation with no avatar — every Slack channel, whose
+  // title is stored as "#general" and so renders as "#".
+  const img = document.createElement('img');
+  img.className = 'avatar';
+  img.src = `loft://bubble/${item.id}?e=${iconEpoch}`;
+  img.alt = '';
+  img.addEventListener('error', () => {
+    img.remove();
+    const g = document.createElement('span');
+    g.className = 'glyph';
+    g.textContent = initials(item.title);
+    b.prepend(g);
+  });
+  b.append(img);
+
+  // Which service this conversation belongs to, bottom-right.
+  const badge = document.createElement('img');
+  badge.className = 'service';
+  badge.src = `loft://icon/${item.serviceId}?e=${iconEpoch}`;
+  badge.alt = '';
+  badge.addEventListener('error', () => badge.remove());
+  b.append(badge);
+
+  // A plain click, with no pointerdown/drag handlers: bubbles are not draggable in v1, so
+  // they never enter the rail's drag machinery — which is what keeps this change clear of
+  // the grid/detach invariants that machinery carries.
+  b.addEventListener('click', () => window.loftRail.selectBubble(item.id));
+  b.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    window.loftRail.bubbleMenu(item.id);
+  });
+  return b;
+}
+
 function homeButton(active: boolean): HTMLButtonElement {
   const b = document.createElement('button');
   b.className = 'home';
@@ -185,14 +228,22 @@ function render(state: RailState): void {
   // state is flushed by endDrag(). This also makes the drag's measured geometry stay valid
   // for its whole duration, which is why no mid-drag re-measure is needed.
   if (dragging) { pendingState = state; return; }
-  const divider = document.createElement('div');
-  divider.className = 'divider';
-  divider.setAttribute('aria-hidden', 'true');
+  const dividerEl = (): HTMLDivElement => {
+    const d = document.createElement('div');
+    d.className = 'divider';
+    d.setAttribute('aria-hidden', 'true');
+    return d;
+  };
   root.replaceChildren(
     homeButton(state.managerActive),
     gridButton(state.gridActive, state.gridCount),
     ...(state.items.length
-      ? [divider, ...state.items.map((it) => serviceButton(it, state.iconEpoch))]
+      ? [dividerEl(), ...state.items.map((it) => serviceButton(it, state.iconEpoch))]
+      : []),
+    // Below the services, behind their own divider, so the service list stays a fixed spine
+    // that never shifts as bubbles come and go.
+    ...(state.bubbles.length
+      ? [dividerEl(), ...state.bubbles.map((bu) => bubbleButton(bu, state.iconEpoch))]
       : []),
   );
 }
