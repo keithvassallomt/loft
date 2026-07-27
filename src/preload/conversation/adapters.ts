@@ -4,7 +4,11 @@ import { findJid, normalizeJid, reactProp } from './whatsappJid';
 export interface CapturedConversation {
   key: string;
   title: string;
-  /** Absent when the conversation has no image (every Slack channel) or a non-https one. */
+  /**
+   * Absent when the conversation has no image at all (every Slack channel). May be https, an
+   * absolute url resolved from a relative one, or a `blob:` — watch.ts converts the last of
+   * those to a data URI before it leaves the page, since main cannot read a blob.
+   */
   avatarUrl?: string;
 }
 
@@ -30,10 +34,29 @@ export interface ConversationAdapter {
 /** Titles land in a 34px tooltip and a config file; neither wants an unbounded string. */
 const clean = (s: string | null | undefined): string => (s ?? '').trim().slice(0, 120);
 
-/** Main fetches avatars over https from the service's partition session; it cannot read a
- *  `blob:` or `data:` url, which only exist inside the page. */
-const httpsOnly = (src: string | null | undefined): string | undefined =>
-  src && src.startsWith('https://') ? src : undefined;
+/**
+ * An avatar reference main can actually turn into a file.
+ *
+ * Three schemes reach us and each needs different handling, which is why this is not simply
+ * an https check (it was, and it silently dropped every Telegram and Talk avatar):
+ *   - absolute https — fetched from the service's partition session as-is;
+ *   - RELATIVE (`/avatar/user/64`, what NextCloud Talk serves) — resolved against the page
+ *     origin here, since main has no idea what host the view is on;
+ *   - `blob:` (what Telegram serves — 8 to 37 per page, and no https at all) — passed
+ *     through for watch.ts to convert to a data URI, because a blob url exists only inside
+ *     this page and main cannot read one.
+ * Anything else (data:, javascript:, empty) is refused.
+ */
+function usableAvatarUrl(src: string | null | undefined, win: Window): string | undefined {
+  if (!src) return undefined;
+  if (src.startsWith('https://') || src.startsWith('blob:')) return src;
+  if (src.startsWith('http://')) return src;
+  if (src.startsWith('data:')) return src;
+  if (src.startsWith('/') || src.startsWith('./')) {
+    try { return new URL(src, win.location.href).href; } catch { return undefined; }
+  }
+  return undefined;
+}
 
 // --- WhatsApp ---------------------------------------------------------------
 // No per-chat URL exists. The open chat's jid lives in #main's React props, from two
@@ -60,7 +83,7 @@ function waRowJid(el: Element): string | null {
 }
 
 const whatsapp: ConversationAdapter = {
-  capture(doc) {
+  capture(doc, win) {
     const main = doc.querySelector('#main');
     if (!main) return null; // #main exists only while a chat is open
     const fiber = reactProp(main, '__reactFiber') as { memoizedProps?: unknown } | undefined;
@@ -69,7 +92,7 @@ const whatsapp: ConversationAdapter = {
     const header = main.querySelector('header');
     const title = clean(header?.querySelector('span[title]')?.getAttribute('title'))
       || clean(header?.textContent);
-    return { key, title, avatarUrl: httpsOnly(header?.querySelector('img')?.getAttribute('src')) };
+    return { key, title, avatarUrl: usableAvatarUrl(header?.querySelector('img')?.getAttribute('src'), win) };
   },
   plan: (key) => ({
     kind: 'row',
@@ -101,7 +124,7 @@ const slack: ConversationAdapter = {
     // header, and no channel emoji. Prefixing '#' costs nothing and makes the rail's existing
     // initials fallback render '#', which is exactly what a channel should look like.
     const isChannel = id.startsWith('C') || id.startsWith('G');
-    const src = httpsOnly(row?.querySelector('img')?.getAttribute('src'));
+    const src = usableAvatarUrl(row?.querySelector('img')?.getAttribute('src'), win);
     return {
       key: id,
       title: isChannel ? `#${name}` : name,
@@ -112,24 +135,51 @@ const slack: ConversationAdapter = {
   scroller: (doc) => doc.querySelector('[role="tree"]')?.parentElement ?? null,
 };
 
-// --- Hash-routed: Telegram, Element -----------------------------------------
-// Setting location.hash routes these in place with no reload, which makes them the cheapest
-// services in the feature. Both are INFERRED rather than measured (no account was available
-// during the spike); the title selectors in particular are best guesses, which is why they
-// fall back to document.title rather than to an empty string.
+// --- Telegram ---------------------------------------------------------------
+// Measured: the hash IS the conversation (#8623934162 etc., changing per chat), and the
+// sidebar renders a real anchor per chat whose href is that exact hash. So reopen clicks the
+// anchor rather than assigning location.hash — the same mechanism as Messenger, and it
+// inherits the retry-and-scroll behaviour that assignment cannot have. Avatars are blob:
+// urls (no https on the page at all), converted downstream by watch.ts.
 
-function hashAdapter(titleSelector: string): ConversationAdapter {
-  return {
-    capture(doc, win) {
-      const hash = win.location.hash;
-      if (!hash || hash === '#') return null;
-      const title = clean(doc.querySelector(titleSelector)?.textContent) || clean(doc.title);
-      const img = doc.querySelector(`${titleSelector} img`) ?? doc.querySelector('header img');
-      return { key: hash, title, avatarUrl: httpsOnly(img?.getAttribute('src')) };
-    },
-    plan: (key) => ({ kind: 'hash', hash: key }),
-  };
+const TELEGRAM_ROW = 'a[href^="#"]';
+
+function telegramAnchor(doc: Document, key: string): Element | null {
+  try { return doc.querySelector(`a[href="${key}"]`); } catch { return null; }
 }
+
+const telegram: ConversationAdapter = {
+  capture(doc, win) {
+    const hash = win.location.hash;
+    if (!hash || hash === '#') return null;
+    // document.title is the open chat's name and nothing else — verified across three chats.
+    // The sidebar's own .title divs are per-ROW, so selecting one would name whichever chat
+    // happened to render first. A leading unread count is stripped defensively.
+    const title = clean(doc.title).replace(/^\(\d+\)\s*/, '');
+    const row = telegramAnchor(doc, hash)?.closest('.ListItem') ?? telegramAnchor(doc, hash);
+    return { key: hash, title, avatarUrl: usableAvatarUrl(row?.querySelector('img')?.getAttribute('src'), win) };
+  },
+  plan: (key) => ({ kind: 'row', via: 'anchor', find: (doc) => telegramAnchor(doc, key) }),
+  scroller: (doc) => doc.querySelector(TELEGRAM_ROW)?.closest('[class*="chat-list" i]')
+    ?? doc.querySelector('.chat-list, [class*="ChatList" i]'),
+};
+
+// --- Element ----------------------------------------------------------------
+// Hash-routed (#/room/!id:server). INFERRED, not measured — no account was available. The
+// title selector is a best guess, which is why it falls back to document.title rather than
+// to an empty string.
+
+const element: ConversationAdapter = {
+  capture(doc, win) {
+    const hash = win.location.hash;
+    if (!hash || hash === '#') return null;
+    const sel = '.mx_RoomHeader_nametext, .mx_RoomHeader_name';
+    const title = clean(doc.querySelector(sel)?.textContent) || clean(doc.title);
+    const img = doc.querySelector(`${sel} img`) ?? doc.querySelector('.mx_RoomHeader img');
+    return { key: hash, title, avatarUrl: usableAvatarUrl(img?.getAttribute('src'), win) };
+  },
+  plan: (key) => ({ kind: 'hash', hash: key }),
+};
 
 // --- Messenger --------------------------------------------------------------
 // Rows are real anchors, and anchor.click() is the mechanism already shipped and proven for
@@ -145,7 +195,7 @@ const messenger: ConversationAdapter = {
     return {
       key,
       title: clean(anchor?.textContent) || clean(doc.title),
-      avatarUrl: httpsOnly(anchor?.querySelector('img')?.getAttribute('src')),
+      avatarUrl: usableAvatarUrl(anchor?.querySelector('img')?.getAttribute('src'), win),
     };
   },
   plan: (key) => ({ kind: 'row', via: 'anchor', find: (doc) => findMessengerAnchor(doc, key) }),
@@ -168,7 +218,7 @@ const talk: ConversationAdapter = {
       key: win.location.pathname,
       title: clean(doc.querySelector('#app-content h2, .app-navigation .active')?.textContent)
         || clean(doc.title),
-      avatarUrl: httpsOnly(doc.querySelector('#app-content img.avatar')?.getAttribute('src')),
+      avatarUrl: usableAvatarUrl(doc.querySelector('#app-content img.avatar')?.getAttribute('src'), win),
     };
   },
   plan: (key) => ({ kind: 'url', url: key }),
@@ -183,6 +233,6 @@ export const CONVERSATION_ADAPTERS: Record<string, ConversationAdapter> = {
   slack,
   messenger,
   talk,
-  telegram: hashAdapter('.chat-info .title, .ChatInfo .title'),
-  element: hashAdapter('.mx_RoomHeader_nametext, .mx_RoomHeader_name'),
+  telegram,
+  element,
 };

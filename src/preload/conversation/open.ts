@@ -12,6 +12,8 @@ export const SCROLL_STEPS = 60;
 export const SCROLL_INTERVAL_MS = 100;
 /** Pause between re-checks once scrolling is exhausted — see READY_TIMEOUT_MS. */
 export const RETRY_INTERVAL_MS = 500;
+/** How long to keep re-asserting a hash while a waking app decides where it is going. */
+export const HASH_SETTLE_MS = 8000;
 /**
  * Total budget for a `row` plan. Much longer than the scrolling phase on purpose:
  * `did-finish-load` fires well before WhatsApp has populated its chat list, so once scrolling
@@ -125,8 +127,20 @@ function stepScroll(scroller: Element): void {
  */
 export async function executePlan(plan: OpenPlan, deps: ExecDeps): Promise<OpenOutcome> {
   if (plan.kind === 'none') return 'not-found';
-  if (plan.kind === 'hash') { deps.win.location.hash = plan.hash; return 'done'; }
   if (plan.kind === 'url') { deps.win.location.href = plan.url; return 'done'; }
+
+  if (plan.kind === 'hash') {
+    // Assigning once is NOT enough, and this is what made Telegram land on "no chat
+    // selected": a bubble click can arrive before the app's router exists, and the app then
+    // boots into its default state, discarding the hash we set. So set it, verify it stuck,
+    // and keep re-asserting for a bounded window while the page comes up.
+    for (let waited = 0; waited < HASH_SETTLE_MS; waited += SCROLL_INTERVAL_MS) {
+      deps.win.location.hash = plan.hash;
+      await deps.sleep(SCROLL_INTERVAL_MS);
+      if (deps.win.location.hash === plan.hash) return 'done';
+    }
+    return 'not-found';
+  }
 
   // Elapsed rather than a fixed attempt count, because the two phases tick at different
   // rates: scrolling is fast and hunting-while-waking is slow.

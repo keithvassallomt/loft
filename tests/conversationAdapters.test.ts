@@ -38,8 +38,16 @@ describe('whatsapp adapter', () => {
     });
   });
 
-  it('drops a non-https avatar — main cannot fetch a blob: url', () => {
+  // blob: is KEPT now, not dropped: watch.ts inlines it to a data URI before it leaves the
+  // page. Dropping it is what left Telegram with no avatars at all.
+  it('keeps a blob avatar for downstream inlining', () => {
     document.body.innerHTML = '<div id="main"><header><span title="X">X</span><img src="blob:abc"></header></div>';
+    withProps(document.querySelector('#main')!, { children: [null, { key: '1@lid' }] });
+    expect(wa.capture(document, fakeWin('https://web.whatsapp.com/'))?.avatarUrl).toBe('blob:abc');
+  });
+
+  it('drops an avatar whose scheme main could never resolve', () => {
+    document.body.innerHTML = '<div id="main"><header><span title="X">X</span><img src="javascript:x"></header></div>';
     withProps(document.querySelector('#main')!, { children: [null, { key: '1@lid' }] });
     expect(wa.capture(document, fakeWin('https://web.whatsapp.com/'))?.avatarUrl).toBeUndefined();
   });
@@ -122,31 +130,89 @@ describe('bumpSlackAvatarSize', () => {
   });
 });
 
-describe('hash-routed adapters', () => {
-  it('telegram captures and plans its hash', () => {
-    const tg = CONVERSATION_ADAPTERS.telegram;
-    const win = fakeWin('https://web.telegram.org/a/#-1001234');
-    expect(tg.capture(document, win)?.key).toBe('#-1001234');
-    expect(tg.plan('#-1001234', document, win)).toEqual({ kind: 'hash', hash: '#-1001234' });
+describe('telegram adapter', () => {
+  const tg = CONVERSATION_ADAPTERS.telegram;
+  const win = fakeWin('https://web.telegram.org/a/#8623934162');
+
+  it('captures the hash as the key', () => {
+    document.body.innerHTML = '';
+    document.title = 'Nick Scerri';
+    expect(tg.capture(document, win)?.key).toBe('#8623934162');
   });
 
-  it('element captures and plans its room hash', () => {
-    const el = CONVERSATION_ADAPTERS.element;
-    const win = fakeWin('https://app.element.io/#/room/!abc:example.org');
+  // Measured: document.title is the open chat and nothing else. The sidebar's own .title
+  // divs are per-ROW, so selecting one names whichever chat rendered first.
+  it('takes the title from document.title, not from a sidebar row', () => {
+    document.body.innerHTML = '<div class="ListItem"><div class="title">Keith Vassallo</div></div>';
+    document.title = 'Nick Scerri';
+    expect(tg.capture(document, win)?.title).toBe('Nick Scerri');
+  });
+
+  it('strips a leading unread count from the title', () => {
+    document.body.innerHTML = '';
+    document.title = '(3) Nick Scerri';
+    expect(tg.capture(document, win)?.title).toBe('Nick Scerri');
+  });
+
+  // Telegram serves blob: avatars and no https at all; watch.ts inlines them downstream.
+  it('keeps a blob avatar from the matching sidebar row', () => {
+    document.body.innerHTML =
+      '<div class="ListItem"><a href="#8623934162"><img src="blob:https://web.telegram.org/x"></a></div>';
+    expect(tg.capture(document, win)?.avatarUrl).toBe('blob:https://web.telegram.org/x');
+  });
+
+  // The fix for "clicking a bubble shows no chat selected": assigning location.hash cannot
+  // retry, so it loses to a still-booting app. The sidebar anchor can.
+  it('plans an ANCHOR click on the sidebar row, not a hash assignment', () => {
+    document.body.innerHTML = '<div class="ListItem"><a href="#8623934162">Nick</a></div>';
+    const plan = tg.plan('#8623934162', document, win);
+    expect(plan.kind).toBe('row');
+    if (plan.kind !== 'row') throw new Error('unreachable');
+    expect(plan.via).toBe('anchor');
+    expect(plan.find(document)).toBe(document.querySelector('a'));
+  });
+
+  it('finds no row when that chat is not rendered', () => {
+    document.body.innerHTML = '<div class="ListItem"><a href="#999">Other</a></div>';
+    const plan = tg.plan('#8623934162', document, win);
+    if (plan.kind !== 'row') throw new Error('unreachable');
+    expect(plan.find(document)).toBeNull();
+  });
+
+  it('captures nothing with an empty hash', () => {
+    expect(tg.capture(document, fakeWin('https://web.telegram.org/a/'))).toBeNull();
+  });
+});
+
+describe('element adapter', () => {
+  const el = CONVERSATION_ADAPTERS.element;
+  const win = fakeWin('https://app.element.io/#/room/!abc:example.org');
+
+  it('captures and plans its room hash', () => {
     expect(el.capture(document, win)?.key).toBe('#/room/!abc:example.org');
     expect(el.plan('#/room/!abc:example.org', document, win).kind).toBe('hash');
   });
 
-  it('captures nothing with an empty hash', () => {
-    expect(CONVERSATION_ADAPTERS.telegram.capture(document, fakeWin('https://web.telegram.org/a/')))
-      .toBeNull();
-  });
-
   it('falls back to document.title when the title selector misses', () => {
     document.body.innerHTML = '';
-    document.title = 'Telegram Web';
-    expect(CONVERSATION_ADAPTERS.telegram.capture(document, fakeWin('https://web.telegram.org/a/#-1'))?.title)
-      .toBe('Telegram Web');
+    document.title = 'Element | #general';
+    expect(el.capture(document, win)?.title).toBe('Element | #general');
+  });
+});
+
+describe('avatar url handling', () => {
+  // This filter was https-only and silently dropped every Telegram and Talk avatar.
+  it('resolves a RELATIVE avatar against the page origin (NextCloud Talk)', () => {
+    document.body.innerHTML = '<div id="app-content"><img class="avatar" src="/avatar/keith/64"></div>';
+    const got = CONVERSATION_ADAPTERS.talk.capture(
+      document, fakeWin('https://cloud.example.org/call/abc123'));
+    expect(got?.avatarUrl).toBe('https://cloud.example.org/avatar/keith/64');
+  });
+
+  it('rejects a scheme main could never resolve', () => {
+    document.body.innerHTML = '<div id="app-content"><img class="avatar" src="javascript:alert(1)"></div>';
+    expect(CONVERSATION_ADAPTERS.talk.capture(
+      document, fakeWin('https://cloud.example.org/call/abc123'))?.avatarUrl).toBeUndefined();
   });
 });
 

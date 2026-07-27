@@ -39,6 +39,18 @@ export async function saveBubbleAvatar(
 ): Promise<boolean> {
   if (!url) return false;
   try {
+    // Already inlined by the preload — a blob url that could only be read inside the page
+    // (Telegram serves nothing else). No fetch to do; decode and write.
+    if (url.startsWith('data:')) {
+      const comma = url.indexOf(',');
+      if (comma < 0) return false;
+      const raw = Buffer.from(url.slice(comma + 1), 'base64');
+      if (raw.length < MIN_IMAGE_BYTES) return false;
+      const png = deps.toPng(raw);
+      if (png.length === 0) return false;
+      deps.write(bubbleAvatarPath(id, env), png);
+      return true;
+    }
     const res = await deps.fetch(url);
     if (!res.ok) return false;
     const raw = Buffer.from(await res.arrayBuffer());
