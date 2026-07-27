@@ -62,6 +62,15 @@ export function startNotifyBridge(serviceId: string, deps: BridgeDeps): void {
       icon = n.icon || findSlackAvatar(doc, slackCache, n.title, n.tag);
     } else if (serviceId === 'talk') {
       icon = resolveIconUrl(pickTalkAvatarSrc(doc, n.title) || n.icon, win.location.href);
+    } else if (serviceId === 'element') {
+      // Element's media is AUTHENTICATED: the url its own page renders returns 404 to
+      // everyone else, main's session.fetch included, because the access token lives in the
+      // page (its service worker attaches it) rather than in a cookie. Talk's avatars are
+      // fetched by main precisely because those ARE cookie-authenticated; Element's are not.
+      // So the bytes are read here, where the credential is. Same fix, same reason, as
+      // CapturedConversation.inlineAvatar for bubble avatars.
+      const url = n.icon.startsWith('blob:') ? n.icon : resolveIconUrl(n.icon, win.location.href);
+      icon = url ? await blobToDataUri(url) : '';
     } else {
       icon = n.icon.startsWith('blob:') ? await blobToDataUri(n.icon) : resolveIconUrl(n.icon, win.location.href);
     }

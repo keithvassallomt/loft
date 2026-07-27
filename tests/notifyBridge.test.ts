@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { startNotifyBridge } from '../src/preload/notify/bridge';
 import { MessengerNotifier } from '../src/preload/notify/messenger';
 import { TelegramNotifier } from '../src/preload/notify/telegram';
@@ -42,11 +42,15 @@ function fakeEnv() {
 }
 
 describe('startNotifyBridge routing', () => {
-  it('relays a page Notification for slack/whatsapp/element/talk', () => {
+  // Awaited, not synchronous: Element resolves its icon in the page before relaying (its
+  // media is authenticated — see 'element notification icons' below), and the blob path has
+  // always been async too.
+  it('relays a page Notification for slack/whatsapp/element/talk', async () => {
     for (const id of ['whatsapp', 'slack', 'element', 'talk']) {
       const { win, doc, ipc } = fakeEnv();
       startNotifyBridge(id, { ipc, win, doc });
       new win.Notification('Ann', { body: 'hi', icon: 'https://x/a.png' });
+      await new Promise((r) => { setTimeout(r, 5); });
       const notifyCalls = ipc.send.mock.calls.filter((c) => c[0] === 'service:notify');
       expect(notifyCalls.length, `${id} should relay`).toBe(1);
       expect(notifyCalls[0][1]).toMatchObject({ title: 'Ann', body: 'hi' });
@@ -162,5 +166,71 @@ describe('startNotifyBridge routing', () => {
     expect(() => handlers['service:notify-click']({}, { notifyId: 'nope', epoch: 'x' })).not.toThrow();
     expect(() => handlers['service:notify-click']({}, { notifyId: 1 })).not.toThrow();
     expect(clicked).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Element's media is authenticated: the URL its page renders returns 404 to anyone without
+ * the access token, and that token lives in the page rather than in a cookie — so main's
+ * session.fetch cannot get it. Measured on a real homeserver 2026-07-27 while fixing the
+ * same defect in bubble avatars.
+ */
+describe('element notification icons', () => {
+  const ICON = 'https://matrix.example.org/_matrix/media/v3/thumbnail/vassallo.cloud/tYsJ';
+  const realFetch = (globalThis as any).fetch;
+  const realFileReader = (globalThis as any).FileReader;
+  afterEach(() => {
+    (globalThis as any).fetch = realFetch;
+    (globalThis as any).FileReader = realFileReader;
+  });
+
+  function stubPageFetch(): ReturnType<typeof vi.fn> {
+    const fetchSpy = vi.fn(async () => ({ blob: async () => ({}) }));
+    (globalThis as any).fetch = fetchSpy;
+    (globalThis as any).FileReader = class {
+      onloadend: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      result = 'data:image/png;base64,AAA';
+      readAsDataURL(): void { setTimeout(() => this.onloadend?.(), 0); }
+    };
+    return fetchSpy;
+  }
+  const settle = (): Promise<void> => new Promise((r) => { setTimeout(r, 5); });
+
+  it('inlines the icon in the page rather than sending main a url it cannot fetch', async () => {
+    const fetchSpy = stubPageFetch();
+    const { win, doc, ipc } = fakeEnv();
+    startNotifyBridge('element', { ipc, win, doc });
+    new win.Notification('Ann', { body: 'hi', icon: ICON });
+    await settle();
+
+    expect(fetchSpy).toHaveBeenCalledWith(ICON);
+    const call = ipc.send.mock.calls.find((c) => c[0] === 'service:notify');
+    expect(call![1]).toMatchObject({ icon: 'data:image/png;base64,AAA' });
+  });
+
+  it('still notifies, without an icon, when even the page cannot fetch it', async () => {
+    (globalThis as any).fetch = vi.fn(async () => { throw new Error('404'); });
+    const { win, doc, ipc } = fakeEnv();
+    startNotifyBridge('element', { ipc, win, doc });
+    new win.Notification('Ann', { body: 'hi', icon: ICON });
+    await settle();
+
+    const call = ipc.send.mock.calls.find((c) => c[0] === 'service:notify');
+    expect(call![1]).toMatchObject({ title: 'Ann', icon: '' });
+  });
+
+  // WhatsApp's icons are public CDN urls that main fetches fine, and fetching them twice
+  // would be pure waste.
+  it('does not inline for a service whose icons main can fetch', async () => {
+    const fetchSpy = stubPageFetch();
+    const { win, doc, ipc } = fakeEnv();
+    startNotifyBridge('whatsapp', { ipc, win, doc });
+    new win.Notification('Ann', { body: 'hi', icon: 'https://cdn.example/a.png' });
+    await settle();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const call = ipc.send.mock.calls.find((c) => c[0] === 'service:notify');
+    expect(call![1]).toMatchObject({ icon: 'https://cdn.example/a.png' });
   });
 });
