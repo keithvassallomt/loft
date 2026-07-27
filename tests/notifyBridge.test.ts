@@ -45,7 +45,21 @@ describe('startNotifyBridge routing', () => {
   // Awaited, not synchronous: Element resolves its icon in the page before relaying (its
   // media is authenticated — see 'element notification icons' below), and the blob path has
   // always been async too.
+  //
+  // fetch is STUBBED for the same reason. Without it, Element's leg of this loop issues a
+  // real network request for https://x/a.png and the relay races a 5ms wait — the test then
+  // passes or fails on machine load, which is worse than no test.
   it('relays a page Notification for slack/whatsapp/element/talk', async () => {
+    const realFetch = (globalThis as any).fetch;
+    const realFileReader = (globalThis as any).FileReader;
+    (globalThis as any).fetch = vi.fn(async () => ({ blob: async () => ({}) }));
+    (globalThis as any).FileReader = class {
+      onloadend: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      result = 'data:image/png;base64,AAA';
+      readAsDataURL(): void { setTimeout(() => this.onloadend?.(), 0); }
+    };
+    try {
     for (const id of ['whatsapp', 'slack', 'element', 'talk']) {
       const { win, doc, ipc } = fakeEnv();
       startNotifyBridge(id, { ipc, win, doc });
@@ -54,6 +68,10 @@ describe('startNotifyBridge routing', () => {
       const notifyCalls = ipc.send.mock.calls.filter((c) => c[0] === 'service:notify');
       expect(notifyCalls.length, `${id} should relay`).toBe(1);
       expect(notifyCalls[0][1]).toMatchObject({ title: 'Ann', body: 'hi' });
+    }
+    } finally {
+      (globalThis as any).fetch = realFetch;
+      (globalThis as any).FileReader = realFileReader;
     }
   });
 
