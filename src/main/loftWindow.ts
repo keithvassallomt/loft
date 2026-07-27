@@ -1,5 +1,6 @@
 import { BrowserWindow, WebContentsView, Menu } from 'electron';
 import { kindOf, type ServiceInstance } from './instances';
+import { pinTarget } from './bubbles';
 import type { LoftConfig } from './config';
 import { computeLayout, RAIL_WIDTH, type Rect } from './layout';
 import { formatWindowTitle } from './serviceTitle';
@@ -107,6 +108,9 @@ export interface LoftWindowDeps {
   iconEpoch(): number;
   /** Is this service detached? Detached services appear in the rail but aren't tabs. */
   detached(id: string): boolean;
+  /** Does this service currently have a conversation open? Drives the pin button's enabled
+   *  state; main owns the cache the preloads push into. */
+  hasConversation(id: string): boolean;
   /** Is this service loaded somewhere ELSE — i.e. in its own window? The rail lists every
    *  installed service, detached ones included (spec §3), and this window can only see its
    *  own views: without this it would draw a live detached service as sleeping, badge and
@@ -270,6 +274,15 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
     }));
 
   const refreshTitlebar = (): void => {
+    // Whether the pin button is live, and for which service. In the grid this is the focused
+    // cell — the same notion of "current service" the grid already uses for zoom, rather than
+    // a second one invented for this control.
+    safeSend(titlebar, 'titlebar:set-can-pin', pinTarget({
+      activeId: active === GRID_ID ? undefined : active,
+      gridFocusId: active === GRID_ID ? focusedCell : undefined,
+      hasConversation: deps.hasConversation,
+    }) !== null);
+
     // set-context tells the titlebar which service it is showing, or null for the manager
     // view — which is what hides the service-only controls (reload/zoom) and the icon.
     //

@@ -63,6 +63,28 @@ export function refreshBubbleTitle(
   return out;
 }
 
+export interface PinTargetInput {
+  /** The selected service tab, if any. */
+  activeId: string | undefined;
+  /** The grid's focused cell, when the grid is the selection. */
+  gridFocusId: string | undefined;
+  hasConversation(serviceId: string): boolean;
+}
+
+/**
+ * Which service the titlebar's pin button acts on, or null when it should be disabled.
+ *
+ * The grid is why this needs deciding at all: it shows several services at once, so a
+ * whole-window control has no single obvious subject. It reuses the focused cell the grid
+ * already tracks for zoom rather than introducing a second notion of "the current service" —
+ * one rule the user has already learned, applied to a second control.
+ */
+export function pinTarget(i: PinTargetInput): string | null {
+  const id = i.activeId ?? i.gridFocusId;
+  if (!id) return null;
+  return i.hasConversation(id) ? id : null;
+}
+
 export type BubbleAction =
   | { kind: 'focus-detached'; serviceId: string }
   | { kind: 'navigate-only'; serviceId: string }

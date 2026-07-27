@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld('loft', {
   attach: () => ipcRenderer.send('titlebar:attach'),
   /** ＋ while the grid is selected: main pops the native "add to grid" menu. */
   addToGrid: () => ipcRenderer.send('titlebar:addToGrid'),
+  /** Pin the conversation this titlebar's service currently has open. */
+  pin: () => ipcRenderer.send('titlebar:pin'),
+  onSetCanPin: (cb: (canPin: boolean) => void) =>
+    ipcRenderer.on('titlebar:set-can-pin', (_e, canPin: boolean) => cb(canPin)),
   onSetAttachable: (cb: (id: string | null) => void) =>
     ipcRenderer.on('titlebar:set-attachable', (_e, id: string | null) => cb(id)),
   onSetContext: (cb: (id: string | null, iconEpoch: number) => void) =>

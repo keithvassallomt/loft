@@ -25,3 +25,6 @@ html, body { height: 40px; overflow: hidden; font-family: system-ui, sans-serif;
 .controls button:hover { background: var(--tb-hover); }
 #close:hover { background: #e01b24; color: #fff; }
 .arr { font-size: 9px; vertical-align: super; }
+
+/* Greyed rather than hidden when no conversation is open — see titlebar.ts. */
+#pin:disabled { opacity: .35; cursor: default; }

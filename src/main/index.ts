@@ -39,7 +39,7 @@ import {
 } from './bubbleAvatars';
 import {
   addBubble, removeBubble, removeServiceBubbles, refreshBubbleTitle, findBubble,
-  bubbleClickAction, bubbleId,
+  bubbleClickAction, bubbleId, pinTarget,
 } from './bubbles';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
@@ -264,6 +264,29 @@ const visibleServiceIds = (): string[] => {
  * (Element, Talk) works — the same mechanism notification avatars already use. Resized to
  * 64px because the rail draws at 34 and a hidpi display asks for more.
  */
+/**
+ * Pin whatever conversation this service currently has open. Shared by both entry points —
+ * the titlebar button and the rail context menu — so the two can never drift.
+ *
+ * No-op when nothing is open: both entry points are meant to be disabled in that state, and
+ * this is the backstop for the window between a conversation closing and that state arriving.
+ */
+function pinConversation(serviceId: string): void {
+  const conv = currentConversation.get(serviceId);
+  if (!conv) return;
+  const before = config.bubbles ?? [];
+  const after = addBubble(before, serviceId, conv.key, conv.title);
+  if (after.length === before.length) return; // already pinned; pinning is idempotent
+  config.bubbles = after;
+  saveConfig(configPath(), config);
+  loft?.refreshRail();
+  // The avatar is fetched AFTER the bubble is on the rail: it appears immediately showing
+  // initials, and bumping the epoch is what makes it re-fetch once the file lands. Pinning
+  // never blocks on the network.
+  void saveBubbleAvatar(bubbleId(serviceId, conv.key), conv.avatarUrl, bubbleAvatarDeps(serviceId))
+    .then((saved) => { if (saved) { iconEpoch += 1; loft?.refreshRail(); } });
+}
+
 function bubbleAvatarDeps(serviceId: string): BubbleAvatarDeps {
   return {
     fetch: (url) => session.fromPartition(`persist:${serviceId}`).fetch(url),
@@ -680,6 +703,11 @@ function buildServiceMenu(id: string): Electron.MenuItemConstructorOptions[] {
     // RAIL_SHOW: this menu hangs off a rail icon, so "Go to X" is the same intent as clicking
     // that icon — full-size, grid merely deselected (spec D2) — not "reveal X in its cell".
     { label: `Go to ${def?.displayName ?? id}`, click: () => { if (def) showService(def, RAIL_SHOW); } },
+    // Disabled rather than absent when nothing is open, so the entry teaches its own meaning.
+    // Unlike the titlebar button this is never ambiguous: the menu names its own service.
+    { label: 'Pin current conversation',
+      enabled: currentConversation.get(id) !== undefined && currentConversation.get(id) !== null,
+      click: () => pinConversation(id) },
     { type: 'separator' },
     { label: 'Do Not Disturb', type: 'checkbox', checked: cfg.dnd === true,
       click: (mi) => setServiceSetting(id, { dnd: mi.checked }) },
@@ -924,6 +952,19 @@ if (!app.requestSingleInstanceLock()) {
   // The ＋ is only rendered while the titlebar's context is the grid, so no sender check
   // beyond that: the per-service windows' titlebars never show the button.
   ipcMain.on('titlebar:addToGrid', () => loft?.popGridAddMenu());
+  // Which service the pin acts on differs by window. A detached window's titlebar owns
+  // exactly one service; the Loft window's is showing either a tab or the grid, and in the
+  // grid it is the focused cell — the same "current service" zoom already uses.
+  ipcMain.on('titlebar:pin', (e) => {
+    const serviceId = isLoftChrome(e.sender.id)
+      ? pinTarget({
+        activeId: loft?.activeId() === GRID_ID ? undefined : loft?.activeId(),
+        gridFocusId: loft?.activeId() === GRID_ID ? loft?.focusedCellId() : undefined,
+        hasConversation: (id) => !!currentConversation.get(id),
+      })
+      : findBySenderId(e.sender.id)?.def.id ?? null;
+    if (serviceId) pinConversation(serviceId);
+  });
   ipcMain.on('titlebar:attach', (e) => {
     const id = titlebarTarget(e.sender.id)?.def.id;
     if (id) setDetached(id, false);
@@ -1493,23 +1534,6 @@ if (!app.requestSingleInstanceLock()) {
     loft?.refreshTitlebar();
   });
 
-  ipcMain.on('bubble:pin', (_e, m?: { serviceId?: unknown }) => {
-    const serviceId = typeof m?.serviceId === 'string' ? m.serviceId : undefined;
-    if (!serviceId) return;
-    const conv = currentConversation.get(serviceId);
-    if (!conv) return; // nothing open — the control should already be greyed
-    const before = config.bubbles ?? [];
-    const after = addBubble(before, serviceId, conv.key, conv.title);
-    if (after.length === before.length) return; // already pinned; pinning is idempotent
-    config.bubbles = after;
-    saveConfig(configPath(), config);
-    loft?.refreshRail();
-    // The avatar arrives asynchronously; the bubble is already on the rail showing initials,
-    // and bumping the epoch is what makes it re-fetch once the file exists.
-    void saveBubbleAvatar(bubbleId(serviceId, conv.key), conv.avatarUrl, bubbleAvatarDeps(serviceId))
-      .then((saved) => { if (saved) { iconEpoch += 1; loft?.refreshRail(); } });
-  });
-
   ipcMain.on('rail:selectBubble', (_e, id: string) => {
     const bubble = findBubble(config.bubbles ?? [], id);
     if (!bubble) return;
@@ -1802,6 +1826,7 @@ if (!app.requestSingleInstanceLock()) {
       badge: (id) => currentBadge.get(id) ?? 0,
       iconEpoch: () => iconEpoch,
       detached: isDetached,
+      hasConversation: (id) => !!currentConversation.get(id),
       loadedElsewhere: (id) => windows.has(id),
       buildServiceMenu,
       buildGridAddMenu,

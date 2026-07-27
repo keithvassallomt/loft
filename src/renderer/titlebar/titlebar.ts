@@ -52,10 +52,20 @@ const reloadEl = document.getElementById('reload') as HTMLButtonElement;
 const zoomEls = ['zoom-out', 'zoom-in']
   .map((el) => document.getElementById(el) as HTMLButtonElement);
 const addGridEl = document.getElementById('add-to-grid') as HTMLButtonElement;
+const pinEl = document.getElementById('pin') as HTMLButtonElement;
 
 iconEl.addEventListener('error', () => { iconEl.hidden = true; });
 
 addGridEl.addEventListener('click', () => window.loft.addToGrid());
+
+pinEl.addEventListener('click', () => window.loft.pin());
+// Disabled rather than hidden when nothing is open: a control that vanishes and reappears as
+// you move between chats reads as a glitch, and the greyed state is what teaches the button's
+// meaning. Main decides — it holds the conversation each service has open.
+window.loft.onSetCanPin((canPin) => {
+  pinEl.disabled = !canPin;
+  pinEl.title = canPin ? 'Pin this conversation' : 'No conversation open';
+});
 
 window.loft.onSetContext((id, iconEpoch) => {
   const isGrid = id === TITLEBAR_GRID_CONTEXT;
@@ -71,4 +81,7 @@ window.loft.onSetContext((id, iconEpoch) => {
   // the manager, which has nothing to zoom.
   for (const el of zoomEls) el.hidden = !isService && !isGrid;
   addGridEl.hidden = !isGrid;
+  // Same visibility rule as zoom, and for the same reason: both act on "the current service",
+  // which exists for a service tab and for the grid's focused cell, but not in the manager.
+  pinEl.hidden = !isService && !isGrid;
 });
