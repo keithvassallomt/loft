@@ -1,4 +1,6 @@
 import { findJid, normalizeJid, reactProp } from './whatsappJid';
+// Runtime import, but not a cycle: open.ts imports only the TYPES from this file.
+import { deepestLeaf, dispatchRealClick } from './open';
 
 /** What is open right now in a service view. */
 export interface CapturedConversation {
@@ -20,7 +22,20 @@ export interface CapturedConversation {
  */
 export type OpenPlan =
   | { kind: 'hash'; hash: string }
-  | { kind: 'row'; find(doc: Document): Element | null; via?: 'leaf' | 'anchor' }
+  | {
+    kind: 'row';
+    find(doc: Document): Element | null;
+    via?: 'leaf' | 'anchor';
+    /**
+     * Run once, only if `find` misses, to make the row reachable at all — as opposed to
+     * merely off-screen, which scrolling handles. Slack needs it: while the DMs tab is
+     * showing, a channel row does not exist in the DOM at any scroll position.
+     *
+     * Deliberately on the first MISS rather than up front, so a reopen that would have
+     * worked never disturbs the user's current view.
+     */
+    prepare?(doc: Document, win: Window): void;
+  }
   | { kind: 'url'; url: string }
   | { kind: 'none' };
 
@@ -106,6 +121,8 @@ const whatsapp: ConversationAdapter = {
 // lookup needs no React internals at all.
 
 const SLACK_ROUTE = /\/client\/(T[A-Z0-9]+)\/([CDG][A-Z0-9]+)/;
+/** The top-level tab rail's Home button, which carries aria-selected. */
+const SLACK_HOME_TAB = '[data-qa="tab_rail_home_button"]';
 
 /** Slack serves a size-suffixed avatar (`…-24`); a 34px bubble wants more pixels than that. */
 export function bumpSlackAvatarSize(src: string): string {
@@ -131,7 +148,19 @@ const slack: ConversationAdapter = {
       avatarUrl: isChannel || !src ? undefined : bumpSlackAvatarSize(src),
     };
   },
-  plan: (key) => ({ kind: 'row', find: (doc) => doc.getElementById(key) }),
+  plan: (key) => ({
+    kind: 'row',
+    find: (doc) => doc.getElementById(key),
+    // Slack's sidebar shows only the active top-level tab's contents, so from the DMs tab a
+    // channel row is absent entirely — not scrolled away. Returning to Home is what makes it
+    // exist. Guarded on aria-selected so an already-Home window is left alone.
+    prepare: (doc, win) => {
+      const home = doc.querySelector(SLACK_HOME_TAB);
+      if (home && home.getAttribute('aria-selected') !== 'true') {
+        dispatchRealClick(deepestLeaf(home), win);
+      }
+    },
+  }),
   scroller: (doc) => doc.querySelector('[role="tree"]')?.parentElement ?? null,
 };
 

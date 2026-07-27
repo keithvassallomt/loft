@@ -146,12 +146,19 @@ export async function executePlan(plan: OpenPlan, deps: ExecDeps): Promise<OpenO
   // rates: scrolling is fast and hunting-while-waking is slow.
   let elapsed = 0;
   let step = 0;
+  let prepared = false;
   while (elapsed < READY_TIMEOUT_MS) {
     const el = plan.find(deps.doc);
     if (el) {
       if (plan.via === 'anchor') (el as HTMLElement).click();
       else dispatchRealClick(deepestLeaf(el), deps.win);
       return 'done';
+    }
+    // Only on the first miss: a row that is merely scrolled away needs no intervention, and
+    // preparing unconditionally would change the user's view for nothing.
+    if (!prepared && plan.prepare) {
+      prepared = true;
+      try { plan.prepare(deps.doc, deps.win); } catch { /* best effort */ }
     }
     const scrolling = !!deps.scroller && step < SCROLL_STEPS;
     if (scrolling) stepScroll(deps.scroller!);

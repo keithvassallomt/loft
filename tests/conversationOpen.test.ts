@@ -171,3 +171,38 @@ describe('executePlan', () => {
     expect(await executePlan({ kind: 'row', find: () => null }, d)).toBe('not-found');
   });
 });
+
+describe('prepare', () => {
+  it('is not called when the row is found straight away', async () => {
+    document.body.innerHTML = '<div id="row"></div>';
+    let calls = 0;
+    await executePlan({
+      kind: 'row', find: (d) => d.querySelector('#row'), prepare: () => { calls++; },
+    }, deps());
+    expect(calls).toBe(0);
+  });
+
+  it('is called once on the first miss, not on every retry', async () => {
+    let calls = 0;
+    await executePlan({ kind: 'row', find: () => null, prepare: () => { calls++; } }, deps());
+    expect(calls).toBe(1);
+  });
+
+  it('lets the row appear after preparing', async () => {
+    document.body.innerHTML = '';
+    let ready = false;
+    const out = await executePlan({
+      kind: 'row',
+      find: () => (ready ? document.body : null),
+      prepare: () => { ready = true; },
+    }, deps());
+    expect(out).toBe('done');
+  });
+
+  it('survives a prepare that throws', async () => {
+    const out = await executePlan({
+      kind: 'row', find: () => null, prepare: () => { throw new Error('boom'); },
+    }, deps());
+    expect(out).toBe('not-found');
+  });
+});
