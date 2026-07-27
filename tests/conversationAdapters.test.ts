@@ -212,15 +212,52 @@ describe('element adapter', () => {
   const el = CONVERSATION_ADAPTERS.element;
   const win = fakeWin('https://app.element.io/#/room/!abc:example.org');
 
+  /** The real header, measured 2026-07-27. The room avatar and the FacePile's MEMBER avatars
+   *  are both .mx_BaseAvatar images inside it; only the layout-hashed classes distinguish
+   *  them, and those change every Element release. */
+  const header = `
+    <header class="_flex_4dswl_9 mx_RoomHeader light-panel">
+      <button class="_avatar_va14e_8 mx_BaseAvatar">
+        <img class="_image_va14e_43" src="https://matrix.example.org/_matrix/media/v3/thumbnail/gnome.org/room">
+      </button>
+      <button class="mx_RoomHeader_infoWrapper">
+        <div class="mx_RoomHeader_info">
+          <span class="mx_RoomHeader_truncated mx_lineClamp">Extensions</span>
+        </div>
+      </button>
+      <div class="mx_AccessibleButton mx_FacePile">
+        <img class="_image_va14e_43" src="https://matrix.example.org/_matrix/media/v3/thumbnail/vassallo.cloud/member">
+      </div>
+    </header>`;
+
   it('captures and plans its room hash', () => {
     expect(el.capture(document, win)?.key).toBe('#/room/!abc:example.org');
     expect(el.plan('#/room/!abc:example.org', document, win).kind).toBe('hash');
   });
 
-  it('falls back to document.title when the title selector misses', () => {
+  // Item 3: the old selectors (.mx_RoomHeader_nametext/.mx_RoomHeader_name) were guessed with
+  // no account to check against, and match nothing in current Element -- so every room fell
+  // back to document.title, "Element | Test User", which the glyph then read as "ET".
+  it('takes the room name from the header', () => {
+    document.body.innerHTML = header;
+    document.title = 'Element | Extensions';
+    expect(el.capture(document, win)?.title).toBe('Extensions');
+  });
+
+  it('takes the ROOM avatar, not the first member in the FacePile', () => {
+    document.body.innerHTML = header;
+    expect(el.capture(document, win)?.avatarUrl)
+      .toBe('https://matrix.example.org/_matrix/media/v3/thumbnail/gnome.org/room');
+  });
+
+  // The fallback has to be usable in its own right, since the header classes above are the
+  // ones that already drifted once.
+  it('falls back to document.title with the Element prefix stripped', () => {
     document.body.innerHTML = '';
     document.title = 'Element | #general';
-    expect(el.capture(document, win)?.title).toBe('Element | #general');
+    expect(el.capture(document, win)?.title).toBe('#general');
+    document.title = '[3] Element | Test User';
+    expect(el.capture(document, win)?.title).toBe('Test User');
   });
 });
 
@@ -244,6 +281,15 @@ describe('messenger adapter', () => {
   const mg = CONVERSATION_ADAPTERS.messenger;
   const win = fakeWin('https://www.facebook.com/messages/t/12345');
 
+  /** A sidebar row as Messenger really renders it: the href carries a TRAILING SLASH that
+   *  location.pathname does not, and the row text is the name run together with presence,
+   *  preview and timestamp. Measured 2026-07-27. */
+  const row = (href: string, name: string, current = false) => `
+    <a href="${href}"${current ? ' aria-current="page"' : ''}>
+      <img src="https://scontent-lhr11-1.xx.fbcdn.net/v/t39.30808-1/732069033.jpg">
+      <span>Active now</span><span>${name}</span><span>Mike: Opening at 11</span><span>2h</span>
+    </a>`;
+
   it('captures the thread path', () => {
     document.body.innerHTML = '<a href="/messages/t/12345">Dan</a>';
     expect(mg.capture(document, win)?.key).toBe('/messages/t/12345');
@@ -253,8 +299,60 @@ describe('messenger adapter', () => {
     expect(mg.capture(document, fakeWin('https://www.facebook.com/somepost'))).toBeNull();
   });
 
-  it('plans an ANCHOR click — the mechanism already shipped for notification clicks', () => {
-    document.body.innerHTML = '<a href="/messages/t/12345">Dan</a>';
+  // Item 4: Messenger's DMs are end-to-end encrypted by default and most groups are not, so
+  // "/messages/t/" alone disabled the pin on exactly the one-to-one chats.
+  it('captures an e2ee DM, whose path carries an extra segment', () => {
+    const dm = fakeWin('https://www.facebook.com/messages/e2ee/t/6382594055138206');
+    document.body.innerHTML = row('/messages/e2ee/t/6382594055138206/', 'Pulcina', true);
+    // The key is CANONICAL rather than the raw pathname: the same chat is reachable at two
+    // paths, and each would otherwise mint its own bubble for the one conversation.
+    expect(mg.capture(document, dm)).toMatchObject({
+      key: '/messages/t/6382594055138206',
+      title: 'Pulcina',
+    });
+  });
+
+  it('gives one chat one key, whichever path it was pinned from', () => {
+    document.body.innerHTML = row('/messages/e2ee/t/777/', 'Josette', true);
+    const viaE2ee = mg.capture(document, fakeWin('https://www.facebook.com/messages/e2ee/t/777'));
+    const viaPlain = mg.capture(document, fakeWin('https://www.facebook.com/messages/t/777/'));
+    expect(viaE2ee?.key).toBe(viaPlain?.key);
+  });
+
+  // Items 5 and 6, which are one bug: location.pathname has no trailing slash and the anchor
+  // href does, so the exact-match lookup found nothing -- costing both the name (it fell back
+  // to document.title, "(2) Messenger | Facebook") and the reopen.
+  it('finds the row despite the trailing slash location.pathname omits', () => {
+    const group = fakeWin('https://www.facebook.com/messages/t/2746217722122776');
+    document.body.innerHTML = row('/messages/t/2746217722122776/', 'RAOB Currock Lodge', true);
+    const got = mg.capture(document, group);
+    expect(got?.title).toBe('RAOB Currock Lodge');
+    expect(got?.avatarUrl).toContain('fbcdn.net');
+
+    const plan = mg.plan('/messages/t/2746217722122776', document, group);
+    if (plan.kind !== 'row') throw new Error('unreachable');
+    expect(plan.find(document)).toBe(document.querySelector('a'));
+  });
+
+  // The row's own textContent is "Active nowRAOB Currock LodgeMike: Opening at 112h" -- so
+  // finding the anchor is necessary but not sufficient.
+  it('takes the NAME from the row, not the row text run together', () => {
+    const group = fakeWin('https://www.facebook.com/messages/t/999');
+    document.body.innerHTML = row('/messages/t/999/', 'Familja Vassallo', true);
+    expect(mg.capture(document, group)?.title).toBe('Familja Vassallo');
+  });
+
+  it('does not confuse a thread id with one that merely starts the same way', () => {
+    document.body.innerHTML = row('/messages/t/1234/', 'Wrong chat');
+    const plan = mg.plan('/messages/t/123', document, win);
+    if (plan.kind !== 'row') throw new Error('unreachable');
+    expect(plan.find(document)).toBeNull();
+  });
+
+  // Measured: anchor.click() DOES move Messenger, unlike Telegram. Keeping via:'anchor' here
+  // is now an observation rather than the assumption it was.
+  it('plans an ANCHOR click — measured working on the real app', () => {
+    document.body.innerHTML = '<a href="/messages/t/12345/">Dan</a>';
     const plan = mg.plan('/messages/t/12345', document, win);
     if (plan.kind !== 'row') throw new Error('unreachable');
     expect(plan.via).toBe('anchor');

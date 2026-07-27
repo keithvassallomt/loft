@@ -199,46 +199,120 @@ const telegram: ConversationAdapter = {
 };
 
 // --- Element ----------------------------------------------------------------
-// Hash-routed (#/room/!id:server). INFERRED, not measured — no account was available. The
-// title selector is a best guess, which is why it falls back to document.title rather than
-// to an empty string.
+// Hash-routed (#/room/!id:server). Measured 2026-07-27, against the account that did not
+// exist when this first shipped: the room name is `.mx_RoomHeader_truncated` and the room
+// avatar is the first `.mx_BaseAvatar img` in the header. The previous selectors were
+// guesses, matched nothing, and sent every room to the document.title fallback.
+
+/** Room-name selectors, newest Element first. The older two are kept because they cost
+ *  nothing and this is exactly the surface that already drifted once. */
+const ELEMENT_NAME = '.mx_RoomHeader_truncated, .mx_RoomHeader_nametext, .mx_RoomHeader_name';
+
+/**
+ * "[3] Element | Test User" -> "Test User".
+ *
+ * Element's document.title is the room name behind a fixed prefix and Element's own unread
+ * count, so the fallback is usable once both are stripped — where the raw title was not: its
+ * glyph read "ET", from "Element" and "Test".
+ */
+function elementDocTitle(title: string): string {
+  return clean(title).replace(/^\[\d+\]\s*/, '').replace(/^Element\s*\|\s*/, '');
+}
 
 const element: ConversationAdapter = {
   capture(doc, win) {
     const hash = win.location.hash;
     if (!hash || hash === '#') return null;
-    const sel = '.mx_RoomHeader_nametext, .mx_RoomHeader_name';
-    const title = clean(doc.querySelector(sel)?.textContent) || clean(doc.title);
-    const img = doc.querySelector(`${sel} img`) ?? doc.querySelector('.mx_RoomHeader img');
+    const header = doc.querySelector('.mx_RoomHeader');
+    const title = clean(header?.querySelector(ELEMENT_NAME)?.textContent) || elementDocTitle(doc.title);
+    // The FacePile in the same header is a row of MEMBER avatars, and they are .mx_BaseAvatar
+    // too — only the per-release hashed layout classes tell them apart, so exclude by name.
+    const img = [...(header?.querySelectorAll('.mx_BaseAvatar img') ?? [])]
+      .find((im) => !im.closest('.mx_FacePile'));
     return { key: hash, title, avatarUrl: usableAvatarUrl(img?.getAttribute('src'), win) };
   },
   plan: (key) => ({ kind: 'hash', hash: key }),
 };
 
 // --- Messenger --------------------------------------------------------------
-// Rows are real anchors, and anchor.click() is the mechanism already shipped and proven for
-// notification clicks. `via: 'anchor'` is explicit so the executor is told rather than
-// guessing from a tag name — leaf dispatch would probably work here too, but "probably" is
-// not a reason to change a working path.
+// Rows are real anchors and anchor.click() moves the app — measured on the real page, not
+// inferred this time, which is why `via: 'anchor'` stays here and was removed from Telegram.
+//
+// Two path facts, both measured 2026-07-27, and both of which the string-equality lookup this
+// replaced got wrong:
+//   - a DM's path is /messages/E2EE/t/<id> (Messenger encrypts one-to-one chats by default)
+//     while a group's is /messages/t/<id>, so requiring the latter disabled the pin on every
+//     DM;
+//   - location.pathname has NO trailing slash and the sidebar anchor's href HAS one, so
+//     a[href="<pathname>"] matched nothing — costing the name AND the reopen at once.
+// So both are reduced to a thread id and compared as ids.
+
+const MESSENGER_THREAD = /^\/messages\/(?:[^/]+\/)?t\/([^/?#]+)/;
+const MESSENGER_TIMESTAMP = /^\d+[smhdw]$/;
+const MESSENGER_PRESENCE = /^Active\b/;
+
+/** The thread id in a pathname or an href; null when it is not a conversation at all. */
+function messengerThreadId(path: string): string | null {
+  return MESSENGER_THREAD.exec(path)?.[1] ?? null;
+}
+
+/**
+ * The conversation NAME from a sidebar row.
+ *
+ * The row's textContent is the name run together with presence, preview and timestamp —
+ * "Active nowRAOB Currock LodgeMike: Opening at 112h" — so finding the anchor is necessary
+ * but not sufficient. This is the rule the shipped notification scraper already uses for
+ * `sender` (src/preload/notify/messenger.ts): the first LEAF span carrying real text.
+ */
+function messengerRowName(anchor: Element): string {
+  for (const span of anchor.querySelectorAll('span')) {
+    const text = (span.textContent ?? '').trim();
+    if (text.length < 2 || text.length > 100) continue;
+    if (text === 'Unread message:' || text === '·') continue;
+    if (MESSENGER_TIMESTAMP.test(text) || MESSENGER_PRESENCE.test(text)) continue;
+    if (span.querySelector('span')) continue;
+    return text;
+  }
+  return '';
+}
 
 const messenger: ConversationAdapter = {
   capture(doc, win) {
-    if (!win.location.pathname.startsWith('/messages/t/')) return null;
-    const key = win.location.pathname;
+    const id = messengerThreadId(win.location.pathname);
+    if (!id) return null;
+    // CANONICAL, not the raw pathname: one chat is reachable at two paths (with and without
+    // the e2ee segment, with and without a trailing slash) and each would otherwise mint its
+    // own bubble for the same conversation. This form is also what existing group pins
+    // already hold, so they keep working untouched.
+    const key = `/messages/t/${id}`;
     const anchor = findMessengerAnchor(doc, key);
+    const img = anchor?.querySelector('img[src*="fbcdn.net"]') ?? anchor?.querySelector('img');
     return {
       key,
-      title: clean(anchor?.textContent) || clean(doc.title),
-      avatarUrl: usableAvatarUrl(anchor?.querySelector('img')?.getAttribute('src'), win),
+      // Last resort is document.title — always "(2) Messenger | Facebook", i.e. useless, but
+      // it is only reached when the row has not rendered, and the watcher replaces it with
+      // the real name within a poll.
+      title: (anchor && messengerRowName(anchor)) || clean(anchor?.textContent) || clean(doc.title),
+      avatarUrl: usableAvatarUrl(img?.getAttribute('src'), win),
     };
   },
   plan: (key) => ({ kind: 'row', via: 'anchor', find: (doc) => findMessengerAnchor(doc, key) }),
 };
 
-/** A malformed key (a stray quote) breaks the attribute selector and throws. Treat it as
- *  "no anchor" — the same containment navigate.ts already applies. */
+/**
+ * The row for a thread, matched by ID rather than by href string.
+ *
+ * Comparing ids rather than substrings is what keeps thread 123 from matching thread 1234, and
+ * it removes the attribute-selector injection hazard entirely: a malformed key simply reduces
+ * to an id that equals nothing.
+ */
 function findMessengerAnchor(doc: Document, key: string): Element | null {
-  try { return doc.querySelector(`a[href="${key}"]`); } catch { return null; }
+  const id = messengerThreadId(key);
+  if (!id) return null;
+  for (const a of doc.querySelectorAll('a[href*="/messages/"]')) {
+    if (messengerThreadId(a.getAttribute('href') ?? '') === id) return a;
+  }
+  return null;
 }
 
 // --- NextCloud Talk ---------------------------------------------------------

@@ -39,6 +39,23 @@ Telegram and Talk are **not** configured on the development machine, so they are
 measured. Both are hash/URL-routed and Telegram's hash navigation is already in production code
 for notification clicks. Implementation must verify both before they ship.
 
+#### Corrections after the smoke tests (2026-07-27)
+
+Every inferred row above turned out wrong in some way, and the "already shipped" column is
+where the errors came from: it described a mechanism proven for a *different feature on a
+different app's DOM* and presented it as evidence for this one. The measured replacements:
+
+| Service | Capture | Reopen | How it was wrong |
+|---|---|---|---|
+| Messenger | `/messages/`**`(e2ee/)?`**`t/<id>`, keyed on the **id** | anchor click — **measured** | DMs are e2ee by default, so `/messages/t/` disabled the pin on all of them; and `location.pathname` has no trailing slash where the row's `href` does, so exact matching found no row — costing the name *and* the reopen |
+| Telegram | `#<chatId>` | **leaf dispatch** | `anchor.click()` does not move Telegram: its handler is on a descendant of the anchor |
+| Element | `#/room/<id>` | set `location.hash` | routing was right; `.mx_RoomHeader_nametext`/`_name` match nothing — the name is `.mx_RoomHeader_truncated` and the avatar the first non-FacePile `.mx_BaseAvatar img` |
+| NextCloud Talk | `/call/<token>` | anchor click — **measured** | a full `location.href` navigation reloaded the whole app; the list has real anchors |
+
+**The rule this cost:** a mechanism is only evidence for the app it was measured on. "Already
+shipped for notifications" is a reason to *try* something first, never a reason to skip
+measuring it.
+
 Four findings from the spike are load-bearing and are stated as decisions below: the leaf
 dispatch rule, WhatsApp's extractor rule, the `pushState` trap, and Slack's avatar split.
 
@@ -120,11 +137,15 @@ export interface CapturedConversation {
 Registered per **kind** in a `CONVERSATION_ADAPTERS` map keyed exactly like `BADGE_PARSERS`, and
 selected by the `--loft-service=<kind>` preload argument.
 
-`via` is explicit rather than inferred, and defaults to `'leaf'`. **Messenger sets
-`via: 'anchor'`** because its conversation rows are real `<a href>` elements and
-`anchor.click()` is the mechanism already shipped and proven for notification clicks
-(`navigateAction`). Leaf dispatch would probably work there too, but "probably" is not a reason
-to change a working path, and an explicit hint beats the executor guessing from the tag name.
+`via` is explicit rather than inferred, and defaults to `'leaf'`. **Messenger and Talk set
+`via: 'anchor'`** — both measured on the real app, where `anchor.click()` does move them.
+
+Telegram does **not**, despite its rows also being real `<a href>` elements: measured
+2026-07-27, `anchor.click()` leaves it on the previously selected chat and leaf dispatch moves
+it first try, because its handler sits on a descendant of the anchor. It shipped with
+`via: 'anchor'` on the reasoning that this was "already proven for notification clicks" — an
+inference from Messenger's DOM, applied to a different app, and stated in the code comment as
+though it were a measurement. **Being an `<a>` does not tell you where the handler is.**
 
 ### WhatsApp's extractor must match whole values, anchored
 
