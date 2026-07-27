@@ -1538,11 +1538,12 @@ if (!app.requestSingleInstanceLock()) {
       avatarUrl: typeof p.avatarUrl === 'string' ? p.avatarUrl : undefined,
     };
     currentConversation.set(id, conv);
-    // Opening a conversation reads it. The scrape agrees on its next tick; this clears the
-    // dot at the moment the user actually read it rather than up to a poll later — and it is
-    // the signal that still works when the row has scrolled out of a virtualised list, which
-    // is exactly where the scrape goes blind.
-    if (unreadKeys.get(id)?.delete(conv.key)) loft?.refreshRail();
+    // Opening a conversation reads it — but only if the user is looking at that service, for
+    // the same reason as the service:unread handler below. The scrape agrees on its next
+    // tick; this clears the dot at the moment it was actually read rather than up to a poll
+    // later, and it is the signal that still works when the row has scrolled out of a
+    // virtualised list, which is exactly where the scrape goes blind.
+    if (notifications?.isWatching(id) && unreadKeys.get(id)?.delete(conv.key)) loft?.refreshRail();
     // A pinned conversation seen open gets its label refreshed, so a rename stops showing
     // stale. Reference comparison, not deep equality: refreshBubbleTitle returns the SAME
     // array when nothing changed, which is what keeps this off the config-write path — it
@@ -1566,9 +1567,14 @@ if (!app.requestSingleInstanceLock()) {
     if (!sw || !Array.isArray(keys)) return;
     const id = sw.def.id;
     const set = new Set(keys.filter((k): k is string => typeof k === 'string'));
-    // The conversation currently open is read BY DEFINITION.
+    // The conversation open in a service the user is LOOKING AT is read; one merely left
+    // open in a background service is not. Keith found the difference: he opened a pinned
+    // Messenger chat, switched to WhatsApp, and the message that arrived in that still-open
+    // chat deleted its own key on the way in, so the dot never appeared. Same three-part
+    // test the notification gate uses (focused AND visible AND active), minus DND — a
+    // service on Do Not Disturb is still being read when you are looking at it.
     const open = currentConversation.get(id);
-    if (open) set.delete(open.key);
+    if (open && notifications?.isWatching(id)) set.delete(open.key);
     unreadKeys.set(id, set);
     // Both sides of the match, on one line. A key the page reports that does not equal the
     // key a bubble stored produces NO error anywhere — the dot simply never appears — so

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldNotify, NotificationGate } from '../src/main/notifications/gate';
+import { shouldNotify, isWatching, NotificationGate } from '../src/main/notifications/gate';
 
 // active: true here reflects the pre-Task-2 assumption baked into these fixtures — a
 // lone window has no other tab to be behind. shouldNotify() itself requires `active`
@@ -108,5 +108,40 @@ describe('NotificationGate.setActive', () => {
     expect(g.shouldNotify('slack')).toBe(true);
     g.setActive('slack', true);
     expect(g.shouldNotify('slack')).toBe(false);
+  });
+});
+
+/**
+ * "Is the user actually looking at this service?"
+ *
+ * Split out of shouldNotify because a SECOND caller needs it: bubbles treat the open
+ * conversation as read, and Keith found the hole in that — he opened a pinned Messenger chat,
+ * switched to WhatsApp, and a message arriving in that still-"open" chat cleared its own dot.
+ * A conversation left open in a background service is not being read by anyone.
+ */
+describe('isWatching', () => {
+  const base = { focused: true, visible: true, active: true };
+
+  it('is true only when focused, visible AND active', () => {
+    expect(isWatching(base)).toBe(true);
+    expect(isWatching({ ...base, focused: false })).toBe(false);
+    expect(isWatching({ ...base, visible: false })).toBe(false);
+    expect(isWatching({ ...base, active: false })).toBe(false);
+  });
+
+  // The reason it is not simply `!shouldNotify`: a service on Do Not Disturb is still being
+  // READ when you are looking at it. DND silences notifications; it does not blind the user.
+  it('ignores DND entirely, unlike shouldNotify', () => {
+    const gate = new NotificationGate();
+    gate.setFocused('slack', true);
+    gate.setVisible('slack', true);
+    gate.setActive('slack', true);
+    gate.setServiceDnd('slack', true);
+    expect(gate.shouldNotify('slack')).toBe(false);
+    expect(gate.isWatching('slack')).toBe(true);
+  });
+
+  it('defaults to NOT watching for a service nothing has reported on', () => {
+    expect(new NotificationGate().isWatching('never-seen')).toBe(false);
   });
 });

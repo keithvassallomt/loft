@@ -33,6 +33,9 @@ export interface Notifications {
   handle(id: string, p: NotifyPayload): Promise<void>;
   setServiceDnd(id: string, v: boolean): void;
   setGlobalDnd(v: boolean): void;
+  /** Is the user actually looking at this service — focused, visible AND the active tab?
+   *  Bubbles need it to decide whether an open conversation counts as read. */
+  isWatching(id: string): boolean;
   setFocused(id: string, v: boolean): void;
   setVisible(id: string, v: boolean): void;
   /** For a shared host: is this the selected tab? Detached services are always active. */
@@ -171,6 +174,10 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
     setGlobalDnd(v) {
       gate.setGlobalDnd(v);
       pushDndToAll();
+    },
+
+    isWatching(id) {
+      return gate.isWatching(id);
     },
 
     setFocused(id, v) {
