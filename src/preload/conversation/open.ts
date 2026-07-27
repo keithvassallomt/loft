@@ -3,12 +3,19 @@ import type { OpenPlan } from './adapters';
 export type OpenOutcome = 'done' | 'not-found';
 
 /** How many times to step the scroll container looking for an unrendered row. */
-export const SCROLL_STEPS = 20;
+export const SCROLL_STEPS = 60;
+/**
+ * Pause between scroll steps. Deliberately NOT the retry interval: a virtualised list
+ * re-renders within a frame or two of a scroll, so waiting half a second between steps just
+ * makes the user watch the list crawl. Sweeping a long chat list is now seconds, not tens.
+ */
+export const SCROLL_INTERVAL_MS = 100;
+/** Pause between re-checks once scrolling is exhausted — see READY_TIMEOUT_MS. */
 export const RETRY_INTERVAL_MS = 500;
 /**
- * Total budget for a `row` plan. Deliberately longer than SCROLL_STEPS * RETRY_INTERVAL_MS:
- * `did-finish-load` fires well before WhatsApp has populated its chat list, so once the
- * scrolling phase is spent we keep re-checking in place while the app finishes waking.
+ * Total budget for a `row` plan. Much longer than the scrolling phase on purpose:
+ * `did-finish-load` fires well before WhatsApp has populated its chat list, so once scrolling
+ * is spent we keep re-checking in place while the app finishes waking.
  */
 export const READY_TIMEOUT_MS = 20_000;
 
@@ -121,16 +128,23 @@ export async function executePlan(plan: OpenPlan, deps: ExecDeps): Promise<OpenO
   if (plan.kind === 'hash') { deps.win.location.hash = plan.hash; return 'done'; }
   if (plan.kind === 'url') { deps.win.location.href = plan.url; return 'done'; }
 
-  const attempts = Math.ceil(READY_TIMEOUT_MS / RETRY_INTERVAL_MS);
-  for (let i = 0; i < attempts; i++) {
+  // Elapsed rather than a fixed attempt count, because the two phases tick at different
+  // rates: scrolling is fast and hunting-while-waking is slow.
+  let elapsed = 0;
+  let step = 0;
+  while (elapsed < READY_TIMEOUT_MS) {
     const el = plan.find(deps.doc);
     if (el) {
       if (plan.via === 'anchor') (el as HTMLElement).click();
       else dispatchRealClick(deepestLeaf(el), deps.win);
       return 'done';
     }
-    if (deps.scroller && i < SCROLL_STEPS) stepScroll(deps.scroller);
-    await deps.sleep(RETRY_INTERVAL_MS);
+    const scrolling = !!deps.scroller && step < SCROLL_STEPS;
+    if (scrolling) stepScroll(deps.scroller!);
+    const wait = scrolling ? SCROLL_INTERVAL_MS : RETRY_INTERVAL_MS;
+    await deps.sleep(wait);
+    elapsed += wait;
+    step++;
   }
   return 'not-found';
 }

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from 'vitest';
 import {
-  deepestLeaf, dispatchRealClick, executePlan, SCROLL_STEPS, type ExecDeps,
+  deepestLeaf, dispatchRealClick, executePlan,
+  SCROLL_STEPS, SCROLL_INTERVAL_MS, RETRY_INTERVAL_MS, READY_TIMEOUT_MS, type ExecDeps,
 } from '../src/preload/conversation/open';
 import type { OpenPlan } from '../src/preload/conversation/adapters';
 
@@ -121,8 +122,32 @@ describe('executePlan', () => {
   it('gives up after the bounded retries rather than looping forever', async () => {
     const d = deps();
     expect(await executePlan({ kind: 'row', find: () => null }, d)).toBe('not-found');
-    expect(d.sleeps.length).toBeGreaterThan(SCROLL_STEPS);
-    expect(d.sleeps.length).toBeLessThan(200);
+    expect(d.sleeps.length).toBeGreaterThan(0);
+    expect(d.sleeps.length).toBeLessThan(300);
+    // The budget is a wall-clock one, so the two phases' waits must sum to it.
+    expect(d.sleeps.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(READY_TIMEOUT_MS);
+  });
+
+  // Scrolling a virtualised list must not tick at the wake-up cadence: the list re-renders
+  // within a frame or two, and waiting half a second per step makes the user watch it crawl.
+  it('scrolls far faster than it waits for a waking page', async () => {
+    document.body.innerHTML = '';
+    const pane = fakeScroller(100, 5000);
+    const d = deps({ scroller: pane });
+    await executePlan({ kind: 'row', find: () => null }, d);
+    const scrollPhase = d.sleeps.slice(0, SCROLL_STEPS);
+    const wakePhase = d.sleeps.slice(SCROLL_STEPS);
+    expect(scrollPhase.every((ms) => ms === SCROLL_INTERVAL_MS)).toBe(true);
+    expect(wakePhase.every((ms) => ms === RETRY_INTERVAL_MS)).toBe(true);
+    expect(SCROLL_INTERVAL_MS).toBeLessThan(RETRY_INTERVAL_MS);
+    // A whole sweep of a long list should cost seconds, not tens of seconds.
+    expect(SCROLL_STEPS * SCROLL_INTERVAL_MS).toBeLessThanOrEqual(6000);
+  });
+
+  it('uses the slow cadence throughout when there is no scroller to step', async () => {
+    const d = deps({ scroller: null });
+    await executePlan({ kind: 'row', find: () => null }, d);
+    expect(d.sleeps.every((ms) => ms === RETRY_INTERVAL_MS)).toBe(true);
   });
 
   it('keeps retrying in place after the scrolling phase, for a service still waking up', async () => {
