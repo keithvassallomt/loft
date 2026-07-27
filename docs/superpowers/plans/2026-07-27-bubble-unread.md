@@ -157,12 +157,11 @@ Six DOM assumptions is exactly the shape of thing that produced five defects in 
 })();
 ```
 
-- [ ] **Step 2: Commit the probe**
+- [ ] **Step 2: Do NOT try to commit it**
 
-```bash
-git add dev_local/bubbles_spike/probe-unread.js
-git commit -m "spike(bubbles): probe the unread row-to-key mapping"
-```
+`dev_local/` is gitignored — it holds spike artefacts deliberately kept out of the repo, as
+the bubbles spike's own probes are. `git add` will report "nothing to commit"; that is
+correct, not a failure.
 
 - [ ] **Step 3: Hand it to Keith, one service at a time**
 
@@ -172,7 +171,9 @@ The single thing to read in each report is whether `key=` is a real value or `NU
 
 - [ ] **Step 4: Record what was measured**
 
-Write `dev_local/bubbles_spike/FINDINGS-unread.md` with, per service: the unread marker selector, the element the key came from, the key format, and whether it matches that adapter's `capture()` key format. Commit it.
+Write `dev_local/bubbles_spike/FINDINGS-unread.md` with, per service: the unread marker
+selector, the element the key came from, the key format, and whether it matches that adapter's
+`capture()` key format. Also gitignored — it is the input to Tasks 5–8, not a deliverable.
 
 **Blocking:** Tasks 5–8 must not start until this task's findings exist for the services they cover. Tasks 2–4 have no DOM dependency and can proceed in parallel.
 
