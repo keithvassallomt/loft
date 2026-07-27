@@ -34,6 +34,7 @@ import {
   BRAND_ICON, CUSTOM_ICON, type ServiceInstance,
 } from './instances';
 import { scanVariants, iconCandidates, variantPngPath } from './icons';
+import { bubbleAvatarPath } from './bubbleAvatars';
 import { iconsDir } from './paths';
 import { migrateConfig } from './migrate';
 import { RAIL_WIDTH, type Rect } from './layout';
@@ -1453,6 +1454,23 @@ if (!app.requestSingleInstanceLock()) {
     // return the bytes: the main-process global fetch() does NOT support file://.
     protocol.handle('loft', async (req) => {
       const url = new URL(req.url);
+
+      // loft://bubble/<id> -> a pinned conversation's avatar. Branched on the HOST, which the
+      // icon path below ignores entirely (it reads only the pathname) — without this branch,
+      // loft://bubble/<id> would be served as if it were an icon named <id>.
+      if (url.host === 'bubble') {
+        const bubble = url.pathname.replace(/^\/+/, '');
+        try {
+          return new Response(await readFile(bubbleAvatarPath(bubble)), {
+            headers: { 'content-type': 'image/png' },
+          });
+        } catch {
+          // No avatar: every Slack channel, or a fetch that failed. The renderer's
+          // img.onerror draws initials, so this 404 is the designed path, not an error.
+          return new Response(null, { status: 404 });
+        }
+      }
+
       const name = url.pathname.replace(/^\/+/, '') || 'loft';
       const variant = url.searchParams.get('v') ?? undefined;
       const c = config.services[name];

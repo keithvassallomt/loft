@@ -23,6 +23,11 @@ export function iconsDir(env: Env = process.env): string {
   return join(loftDataDir(env), 'icons');
 }
 
+/** Per-bubble avatar PNGs, keyed by bubble id — the same shape as iconsDir. */
+export function bubblesDir(env: Env = process.env): string {
+  return join(loftDataDir(env), 'bubbles');
+}
+
 export function partitionDir(id: string, env: Env = process.env): string {
   return join(loftDataDir(env), 'Partitions', id);
 }
