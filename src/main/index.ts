@@ -290,6 +290,7 @@ function pinConversation(serviceId: string): void {
 function bubbleAvatarDeps(serviceId: string): BubbleAvatarDeps {
   return {
     fetch: (url) => session.fromPartition(`persist:${serviceId}`).fetch(url),
+    onFail: (why) => console.warn(`[bubble avatar] ${serviceId}: ${why}`),
     write: (p, bytes) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, bytes); },
     remove: (p) => rmSync(p, { force: true }),
     toPng: (bytes) => {

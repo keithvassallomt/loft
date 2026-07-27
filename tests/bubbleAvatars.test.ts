@@ -83,3 +83,52 @@ describe('deleteBubbleAvatar', () => {
     expect(() => deleteBubbleAvatar('b1', d, env)).not.toThrow();
   });
 });
+
+/**
+ * Every failure path returned a bare `false`, so an avatar that never arrived left no trace
+ * anywhere — which is exactly why Element's took a round trip of guessing to narrow down.
+ * A dropped avatar is ORDINARY (every Slack channel has none), but it should still say why.
+ */
+describe('saveBubbleAvatar failure reporting', () => {
+  const reasons = async (over: Partial<BubbleAvatarDeps>, url?: string): Promise<string[]> => {
+    const seen: string[] = [];
+    await saveBubbleAvatar('b1', url, deps({ ...over, onFail: (r) => seen.push(r) }), env);
+    return seen;
+  };
+
+  it('names an HTTP failure, with the status', async () => {
+    const got = await reasons(
+      { fetch: async () => ({ ok: false, status: 401, arrayBuffer: async () => png.buffer as ArrayBuffer }) },
+      'https://matrix.example.org/_matrix/media/v3/thumbnail/x',
+    );
+    expect(got[0]).toContain('401');
+  });
+
+  it('distinguishes a too-small response from an undecodable one', async () => {
+    const tiny = Buffer.alloc(20, 1);
+    expect((await reasons(
+      { fetch: async () => ({ ok: true, arrayBuffer: async () => tiny.buffer as ArrayBuffer }) },
+      'https://x/a.jpg',
+    ))[0]).toMatch(/small|20/);
+
+    // What a WebP or an SVG does: fetched fine, nativeImage cannot decode it.
+    expect((await reasons({ toPng: () => Buffer.alloc(0) }, 'https://x/a.webp'))[0])
+      .toMatch(/decod/i);
+  });
+
+  it('reports a thrown fetch rather than swallowing it', async () => {
+    const got = await reasons(
+      { fetch: async () => { throw new Error('net::ERR_CERT_AUTHORITY_INVALID'); } },
+      'https://x/a.jpg',
+    );
+    expect(got[0]).toContain('ERR_CERT_AUTHORITY_INVALID');
+  });
+
+  it('says nothing at all when there was simply no avatar — the designed path', async () => {
+    expect(await reasons({}, undefined)).toEqual([]);
+  });
+
+  it('says nothing on success', async () => {
+    expect(await reasons({}, 'https://x/a.jpg')).toEqual([]);
+  });
+});

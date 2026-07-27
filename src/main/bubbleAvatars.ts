@@ -10,11 +10,21 @@ export function bubbleAvatarPath(id: string, env: Env = process.env): string {
 export interface BubbleAvatarDeps {
   /** Fetched through the SERVICE's own partition session, so authenticated avatars work —
    *  the mechanism notifications already use for Element and Talk. */
-  fetch(url: string): Promise<{ ok: boolean; arrayBuffer(): Promise<ArrayBuffer> }>;
+  fetch(url: string): Promise<{ ok: boolean; status?: number; arrayBuffer(): Promise<ArrayBuffer> }>;
   write(path: string, bytes: Buffer): void;
   remove(path: string): void;
   /** Normalise format and size (nativeImage in production; identity in tests). */
   toPng(bytes: Buffer): Buffer;
+  /**
+   * Why an avatar we DID have a url for never arrived. Not called when there was no url at
+   * all, which is the ordinary no-avatar case and not a failure.
+   *
+   * Every path here used to return a bare `false`, so a missing avatar left no trace in the
+   * log, the config or the filesystem — and the five causes (no url, HTTP error, truncated
+   * body, undecodable format, thrown request) are indistinguishable on screen: all five draw
+   * initials.
+   */
+  onFail?(reason: string): void;
 }
 
 /** Below this a response is an error page or a tracking pixel, not an avatar. Same threshold
@@ -38,29 +48,32 @@ export async function saveBubbleAvatar(
   id: string, url: string | undefined, deps: BubbleAvatarDeps, env: Env = process.env,
 ): Promise<boolean> {
   if (!url) return false;
+  const fail = (reason: string): false => { deps.onFail?.(reason); return false; };
   try {
     // Already inlined by the preload — a blob url that could only be read inside the page
     // (Telegram serves nothing else). No fetch to do; decode and write.
     if (url.startsWith('data:')) {
       const comma = url.indexOf(',');
-      if (comma < 0) return false;
+      if (comma < 0) return fail('malformed data: url');
       const raw = Buffer.from(url.slice(comma + 1), 'base64');
-      if (raw.length < MIN_IMAGE_BYTES) return false;
+      if (raw.length < MIN_IMAGE_BYTES) return fail(`data: url decoded to ${raw.length} bytes`);
       const png = deps.toPng(raw);
-      if (png.length === 0) return false;
+      if (png.length === 0) return fail(`could not decode ${raw.length} inlined bytes`);
       deps.write(bubbleAvatarPath(id, env), png);
       return true;
     }
     const res = await deps.fetch(url);
-    if (!res.ok) return false;
+    if (!res.ok) return fail(`HTTP ${res.status ?? '?'} from ${url}`);
     const raw = Buffer.from(await res.arrayBuffer());
-    if (raw.length < MIN_IMAGE_BYTES) return false;
+    if (raw.length < MIN_IMAGE_BYTES) return fail(`response too small (${raw.length} bytes) from ${url}`);
     const png = deps.toPng(raw);
-    if (png.length === 0) return false; // undecodable — better no file than a broken one
+    // Undecodable — better no file than a broken one. nativeImage reads PNG and JPEG, so a
+    // WebP, AVIF or SVG avatar lands here having downloaded perfectly.
+    if (png.length === 0) return fail(`could not decode ${raw.length} bytes from ${url}`);
     deps.write(bubbleAvatarPath(id, env), png);
     return true;
-  } catch {
-    return false;
+  } catch (e) {
+    return fail(`${(e as Error).message} — ${url}`);
   }
 }
 
