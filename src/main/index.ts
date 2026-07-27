@@ -635,8 +635,14 @@ function quitService(id: string): void {
   // overlay (and `Loft (7)`) claiming messages nothing is watching for any more.
   currentBadge.delete(id);
   tray?.setBadge(id, 0);
+  // Exactly the reasoning above, applied to the pinnable conversation: an unloaded view has
+  // none. A stale entry would leave the pin button and menu entry ENABLED for a sleeping
+  // service, and taking either would pin a conversation read off a page that no longer
+  // exists — recording something nobody is looking at.
+  currentConversation.delete(id);
   bgStatus?.refresh();
   loft?.refreshRail();
+  loft?.refreshTitlebar();
   notifyHub();
 }
 
@@ -1512,6 +1518,7 @@ if (!app.requestSingleInstanceLock()) {
     if (!p || typeof p.key !== 'string' || typeof p.title !== 'string') {
       currentConversation.set(id, null);
       loft?.refreshTitlebar();
+      windows.get(id)?.setCanPin(false);
       return;
     }
     const conv = {
@@ -1532,6 +1539,8 @@ if (!app.requestSingleInstanceLock()) {
       loft?.refreshRail();
     }
     loft?.refreshTitlebar();
+    // A detached window owns its own titlebar, which refreshTitlebar above cannot reach.
+    windows.get(id)?.setCanPin(true);
   });
 
   ipcMain.on('rail:selectBubble', (_e, id: string) => {
@@ -1542,14 +1551,19 @@ if (!app.requestSingleInstanceLock()) {
       detached: isDetached(bubble.serviceId),
       visibleIds: visibleServiceIds(),
     });
-    if (action.kind === 'focus-detached') windows.get(bubble.serviceId)?.show();
-    else if (action.kind === 'select') {
+    let host = windows.get(bubble.serviceId) ?? loft?.hostOf(bubble.serviceId);
+    if (action.kind !== 'navigate-only') {
+      // showService is the one call that covers every "not on screen" case, INCLUDING a
+      // service that is asleep — detached or not. Reaching for windows.get() here instead
+      // would silently do nothing for a detached service that has not been launched yet,
+      // since no window exists to show. RAIL_SHOW because a bubble is a rail entry: clicking
+      // one means "go to that conversation", full-size, exactly as clicking a rail icon does
+      // — not "reveal it in its grid cell".
       const def = getService(bubble.serviceId);
-      if (def) showService(def);
+      if (def) host = showService(def, RAIL_SHOW);
     }
-    // Whatever live view the service ended up with. The preload retries internally while the
-    // page wakes, so this is safe to send the moment the view exists.
-    const host = windows.get(bubble.serviceId) ?? loft?.hostOf(bubble.serviceId);
+    // The preload retries internally while the page wakes, so this is safe to send the
+    // moment a view exists — no need to wait for did-finish-load here.
     host?.openConversation(bubble.key);
   });
 
@@ -1562,7 +1576,10 @@ if (!app.requestSingleInstanceLock()) {
       {
         label: 'Unpin',
         click: () => {
-          config.bubbles = removeBubble(config.bubbles ?? [], id);
+          const rest = removeBubble(config.bubbles ?? [], id);
+          // Absent, not `[]`, when the last one goes — the convention loadConfig enforces on
+          // read, kept true on write so the file never grows a no-op key.
+          if (rest.length) config.bubbles = rest; else delete config.bubbles;
           saveConfig(configPath(), config);
           deleteBubbleAvatar(id, { remove: (p) => rmSync(p, { force: true }) });
           loft?.refreshRail();

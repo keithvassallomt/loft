@@ -618,6 +618,10 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
         setDebug: (v) => sv.setDebug(v),
         navigate: (u) => sv.navigate(u),
         openConversation: (k) => sv.openConversation(k),
+        // No-op by design: this window has ONE titlebar shared by every attached service, and
+        // refreshTitlebar derives canPin for whichever is current. A per-service push here
+        // would let a background service grey out the button for the one on screen.
+        setCanPin: () => {},
         notifyClick: (n, e) => sv.notifyClick(n, e),
         loadUrl: (u) => sv.loadUrl(u),
         reload: () => sv.reload(),
@@ -732,6 +736,10 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
       if (focusedCell === service) return;
       focusedCell = service;
       refreshGrid();
+      // The focused cell is what the pin button acts on while the grid is up, so moving it
+      // changes whether that button is live. Without this it keeps the previous cell's
+      // answer — enabled over a cell with nothing open, or greyed over one that has.
+      refreshTitlebar();
     },
     focusedCellId: () => (active === GRID_ID ? focusedCell : undefined),
     sendManager: (channel, ...args) => safeSend(manager, channel, ...args),

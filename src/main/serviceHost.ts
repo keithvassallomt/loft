@@ -42,6 +42,10 @@ export interface ServiceHost {
   navigate(url: string): void;
   /** Ask the page to open a pinned conversation by its per-service key (bubble click). */
   openConversation(key: string): void;
+  /** Whether this service has a conversation open, for its own titlebar's pin button. Only
+   *  a detached window needs this pushed — the Loft window's titlebar derives it in
+   *  refreshTitlebar, which can see every service. */
+  setCanPin(canPin: boolean): void;
   /** Replay a notification click into the page's own handler (notification click). */
   notifyClick(notifyId: number, epoch: string): void;
   /** Navigate, hiding any stale recovery overlay and re-arming stuck detection. */

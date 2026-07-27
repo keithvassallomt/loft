@@ -74,7 +74,11 @@ export function createServiceWindow(
   const titlebar = new WebContentsView({
     webPreferences: { preload: join(__dirname, '../preload/titlebar.js') },
   });
+  // Held rather than only forwarded: the conversation can be reported before this titlebar
+  // has finished loading, and a send into a view with no listener yet is simply lost.
+  let canPin = false;
   titlebar.webContents.on('did-finish-load', () => {
+    safeSend(titlebar, 'titlebar:set-can-pin', canPin);
     safeSend(titlebar, 'titlebar:set-service', def.displayName);
     // The id, not a bare flag: the renderer needs it as the drag payload so the rail
     // knows which service was dropped (dataTransfer is unreadable until 'drop').
@@ -184,6 +188,7 @@ export function createServiceWindow(
     setDebug: (enabled: boolean) => sv.setDebug(enabled),
     navigate: (url: string) => sv.navigate(url),
     openConversation: (key: string) => sv.openConversation(key),
+    setCanPin: (v: boolean) => { canPin = v; safeSend(titlebar, 'titlebar:set-can-pin', v); },
     notifyClick: (notifyId: number, epoch: string) => sv.notifyClick(notifyId, epoch),
     loadUrl: (url: string) => sv.loadUrl(url),
     reload: () => sv.reload(),
