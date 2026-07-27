@@ -153,4 +153,11 @@ describe('buildRailState bubble gating', () => {
   it('shows no dot when the key is not in the unread set', () => {
     expect(state({ unreadKeys: () => new Set(['C99']) }).bubbles[0].unread).toBe(false);
   });
+
+  // Element alone reports room TITLES, its markup carrying no room id anywhere. Matching on
+  // title as well as key is what lets its contribution land at all.
+  it('matches on the TITLE too, for the one service that can only report titles', () => {
+    const s = state({ unreadKeys: () => new Set(['general']) });
+    expect(s.bubbles[0].unread).toBe(true);
+  });
 });

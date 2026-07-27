@@ -69,6 +69,11 @@ export interface ConversationAdapter {
    * never appears. Messenger is the one that bites, its capture key being canonicalised to
    * `/messages/t/<id>` rather than the raw href.
    *
+   * ONE EXCEPTION, and it is forced: an app whose markup contains no conversation id at all
+   * may return conversation TITLES instead, and main matches a bubble on its key OR its
+   * title. Element is that app — see its adapter for the measurement. Nothing else may use
+   * this: a title is not unique, and matching on one is strictly weaker.
+   *
    * Optional: a kind without one contributes no keys and its bubbles never show a dot.
    */
   unreadKeys?(doc: Document): string[];
@@ -287,6 +292,15 @@ const telegram: ConversationAdapter = {
 const ELEMENT_NAME = '.mx_RoomHeader_truncated, .mx_RoomHeader_nametext, .mx_RoomHeader_name';
 
 /**
+ * A room-list row. Measured 2026-07-27: `button.mx_RoomListItemView`, a stable mx_ class —
+ * unlike the layout classes beside it (`_notificationDecoration_vaz9j_63`), which carry a
+ * per-release hash and are worthless as selectors.
+ */
+const ELEMENT_ROW = '.mx_RoomListItemView';
+/** Present on every row, read or not; only its CONTENT means anything. */
+const ELEMENT_DECORATION = '[data-testid="notification-decoration"]';
+
+/**
  * "[3] Element | Test User" -> "Test User".
  *
  * Element's document.title is the room name behind a fixed prefix and Element's own unread
@@ -316,6 +330,37 @@ const element: ConversationAdapter = {
     };
   },
   plan: (key) => ({ kind: 'hash', hash: key }),
+  /**
+   * Element returns room NAMES, not keys — the one exception to the rule on
+   * ConversationAdapter.unreadKeys, and it is forced rather than chosen.
+   *
+   * Measured 2026-07-27, by brute-force scanning every attribute of every element in the
+   * document: the ONLY room ids present anywhere are matrix.to permalinks in the message
+   * timeline. A room-list row carries none, on itself or on any descendant, so there is
+   * nothing to match a bubble's hash key against.
+   *
+   * What a row does carry is an aria-label holding both identity and unread state:
+   * "Open room keithvassallo with 1 unread message" against "Open room Test User". That is
+   * semantic and un-hashed, which is exactly what the surrounding class names are not.
+   *
+   * English-dependent, and knowingly so: on a localised Element the label neither matches
+   * "unread" nor strips to a bare name, so no dot appears. Degrading to no dot is the right
+   * failure for a scrape — a wrong dot would be worse than none.
+   */
+  unreadKeys: (doc) => {
+    const out = new Set<string>();
+    for (const row of doc.querySelectorAll(ELEMENT_ROW)) {
+      const label = row.getAttribute('aria-label') ?? '';
+      // Two independent signals: the label says so, or the decoration has a count in it. The
+      // decoration alone catches a mention or activity marker the label does not word as
+      // "unread"; its emptiness is what every read row renders.
+      const counted = (row.querySelector(ELEMENT_DECORATION)?.textContent ?? '').trim();
+      if (!/\bunread\b/i.test(label) && counted === '') continue;
+      const name = label.replace(/^Open room\s+/i, '').replace(/\s+with\s+.*$/i, '').trim();
+      if (name) out.add(name);
+    }
+    return [...out];
+  },
 };
 
 // --- Messenger --------------------------------------------------------------

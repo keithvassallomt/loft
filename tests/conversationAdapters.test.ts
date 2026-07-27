@@ -590,3 +590,45 @@ describe('whatsapp unreadKeys', () => {
     expect(wa.unreadKeys!(document)).toEqual([]);
   });
 });
+
+describe('element unreadKeys', () => {
+  const el = CONVERSATION_ADAPTERS.element;
+
+  /** A room row as Element really renders it. Measured 2026-07-27: the row is a button with
+   *  a stable mx_ class, and its aria-label carries BOTH the room name and its unread state.
+   *  The room id appears nowhere in the row — not on it, not on any descendant. */
+  const row = (label: string, decoration = '') => `
+    <button class="mx_RoomListItemView" role="option" aria-label="${label}">
+      <div class="_notificationDecoration_vaz9j_63" data-testid="notification-decoration">${decoration}</div>
+    </button>`;
+
+  it('reports the room NAME of each unread row, there being no id in the markup', () => {
+    document.body.innerHTML =
+      row('Open room Extensions')
+      + row('Open room keithvassallo with 1 unread message', '1')
+      + row('Open room Test User');
+    expect(el.unreadKeys!(document)).toEqual(['keithvassallo']);
+  });
+
+  it('handles a plural count', () => {
+    document.body.innerHTML = row('Open room Dev Team with 12 unread messages', '12');
+    expect(el.unreadKeys!(document)).toEqual(['Dev Team']);
+  });
+
+  // The decoration carries a count even when the label does not say "unread" — a mention or
+  // an activity marker. The empty decoration every row renders must NOT count.
+  it('counts a row whose decoration has content but whose label says nothing', () => {
+    document.body.innerHTML = row('Open room Quiet Room', '3');
+    expect(el.unreadKeys!(document)).toEqual(['Quiet Room']);
+  });
+
+  it('ignores the empty decoration that every read row renders', () => {
+    document.body.innerHTML = row('Open room Extensions') + row('Open room Test User');
+    expect(el.unreadKeys!(document)).toEqual([]);
+  });
+
+  it('reports nothing when the room list is not rendered', () => {
+    document.body.innerHTML = '';
+    expect(el.unreadKeys!(document)).toEqual([]);
+  });
+});

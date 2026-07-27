@@ -49,8 +49,9 @@ export interface BubbleItemInput {
   kindOf(serviceId: string): string;
   /** No view -> no honest unread answer; the bubble renders greyed. */
   sleeping(serviceId: string): boolean;
-  /** Fully gated by the caller — see buildRailState. */
-  unread(serviceId: string, key: string): boolean;
+  /** Fully gated by the caller — see buildRailState. Takes the title as well as the key
+   *  because one service (Element) can only report titles; see ConversationAdapter.unreadKeys. */
+  unread(serviceId: string, key: string, title: string): boolean;
 }
 
 /**
@@ -70,7 +71,7 @@ export function buildBubbleItems(i: BubbleItemInput): BubbleItem[] {
       kind: i.kindOf(b.serviceId),
       glyph: bubbleGlyph(b.title),
       hue: bubbleHue(b.key),
-      unread: i.unread(b.serviceId, b.key),
+      unread: i.unread(b.serviceId, b.key, b.title),
       sleeping: i.sleeping(b.serviceId),
     }));
 }
@@ -181,9 +182,12 @@ export function buildRailState(i: RailStateInput): RailState {
       // service with badges disabled should not get one by another route. DND is deliberately
       // NOT a gate — it does not suppress service badges, and the rail shows it separately
       // with its own mark.
-      unread: (sid, key) => i.loaded(sid)
+      // Key OR title: five services report conversation keys, and Element reports room
+      // TITLES because its markup contains no room id anywhere (measured). The two cannot
+      // collide — the sets are per-service, and no service reports both forms.
+      unread: (sid, key, title) => i.loaded(sid)
         && i.config.services[sid]?.badgesEnabled !== false
-        && i.unreadKeys(sid).has(key),
+        && (i.unreadKeys(sid).has(key) || i.unreadKeys(sid).has(title)),
     }),
     iconEpoch: i.iconEpoch,
   };
