@@ -13,13 +13,17 @@ const FIRST_SCAN_MS = 3000;
 const BODY_POLL_MS = 500;
 
 /**
- * Read a blob url into a data URI, in the page that owns it.
+ * Read a url into a data URI, in the page.
+ *
+ * Two unrelated reasons an avatar can only be read here, both handled by the one fetch:
+ * a `blob:` url exists nowhere else (Telegram serves nothing but those), and Element's media
+ * needs the access token that its service worker holds inside this page.
  *
  * Mirrors notify/avatar.ts's own blobToDataUri — same problem, same shape. Kept local rather
  * than shared because that one is wired into the notification bridge's deps; duplicating six
  * lines beats threading a dependency through for it.
  */
-async function blobToDataUri(url: string, win: Window): Promise<string | undefined> {
+async function inlineToDataUri(url: string, win: Window): Promise<string | undefined> {
   try {
     const res = await (win as unknown as { fetch: typeof fetch }).fetch(url);
     const blob = await res.blob();
@@ -64,14 +68,16 @@ export function startConversationWatch(kind: string, deps: WatchDeps): void {
     if (reported && sameConversation(last, next)) return;
     reported = true;
     last = next;
-    if (next?.avatarUrl?.startsWith('blob:')) {
-      // A blob url is readable only inside this page, so it must be inlined before crossing
-      // to main. Telegram serves nothing else — the whole page had 8-37 blobs and no https.
+    const avatarUrl = next?.avatarUrl;
+    if (next && avatarUrl && (avatarUrl.startsWith('blob:') || next.inlineAvatar)) {
+      // Readable only inside this page, so it must be inlined before crossing to main —
+      // a blob url by construction (Telegram serves nothing else: 8-37 blobs, no https), or
+      // because the page holds credentials main does not (Element's authenticated media).
       // The conversation is sent immediately either way: a bubble showing initials now beats
       // one that waits on a fetch, and the avatar follows a beat later.
       const pending = next;
       deps.send({ ...pending, avatarUrl: undefined });
-      void blobToDataUri(pending.avatarUrl!, deps.win).then((dataUri) => {
+      void inlineToDataUri(avatarUrl, deps.win).then((dataUri) => {
         // Only if that conversation is still the current one — the user may have moved on.
         if (dataUri && last === pending) deps.send({ ...pending, avatarUrl: dataUri });
       });

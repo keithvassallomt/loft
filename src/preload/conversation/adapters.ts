@@ -12,6 +12,20 @@ export interface CapturedConversation {
    * those to a data URI before it leaves the page, since main cannot read a blob.
    */
   avatarUrl?: string;
+  /**
+   * Read `avatarUrl` in the PAGE and hand main a data URI, because main cannot fetch it.
+   *
+   * Element needs this and measurement is the only way anyone would know: its `<img>` renders
+   * from a URL that returns `404 application/json` to every other client, main's authenticated
+   * `session.fetch` included. Synapse serves authenticated media and Element's service worker
+   * supplies the access token — which lives in the page, not in a cookie, so no session
+   * arrangement in main can reach it.
+   *
+   * Off by default: an avatar main CAN fetch should stay a url, or every poll would push
+   * base64 across IPC. A `blob:` url is inlined regardless of this flag — it is unreadable
+   * outside the page by construction.
+   */
+  inlineAvatar?: boolean;
 }
 
 /**
@@ -229,7 +243,13 @@ const element: ConversationAdapter = {
     // too — only the per-release hashed layout classes tell them apart, so exclude by name.
     const img = [...(header?.querySelectorAll('.mx_BaseAvatar img') ?? [])]
       .find((im) => !im.closest('.mx_FacePile'));
-    return { key: hash, title, avatarUrl: usableAvatarUrl(img?.getAttribute('src'), win) };
+    return {
+      key: hash,
+      title,
+      avatarUrl: usableAvatarUrl(img?.getAttribute('src'), win),
+      // Only this page can fetch it — see CapturedConversation.inlineAvatar.
+      inlineAvatar: true,
+    };
   },
   plan: (key) => ({ kind: 'hash', hash: key }),
 };

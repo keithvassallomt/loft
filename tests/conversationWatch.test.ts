@@ -89,3 +89,75 @@ describe('startConversationWatch', () => {
     expect(send).toHaveBeenCalledWith(null);
   });
 });
+
+/**
+ * Element's avatar URL 404s for anyone but the page.
+ *
+ * Measured on Keith's homeserver 2026-07-27: the `<img>` renders, and the very same URL
+ * returns `404 application/json` to curl and to main's session.fetch. Synapse serves
+ * authenticated media, and Element's service worker rewrites the legacy media path and
+ * attaches the access token — which main has no way to supply, cookies or not.
+ *
+ * The fix does not depend on which errcode it is: the bytes are reachable from the PAGE and
+ * not from main, so they are read in the page, exactly as Telegram's blobs already are.
+ */
+describe('avatars that only the page can fetch', () => {
+  beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = ''; });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const AVATAR = 'https://matrix.example.org/_matrix/media/v3/thumbnail/vassallo.cloud/tYsJ';
+  const elementWin = (fetchImpl: unknown): Window =>
+    ({ location: { pathname: '/', hash: '#/room/!a:b', href: 'https://app.element.io/' }, fetch: fetchImpl } as unknown as Window);
+
+  const header = `<header class="mx_RoomHeader">
+      <button class="mx_BaseAvatar"><img src="${AVATAR}"></button>
+      <span class="mx_RoomHeader_truncated">Test User</span>
+    </header>`;
+
+  it('inlines an https Element avatar rather than handing main a url it cannot fetch', async () => {
+    document.body.innerHTML = header;
+    const send = vi.fn();
+    const pageFetch = vi.fn(async () => ({ blob: async () => new Blob(['pretend png'], { type: 'image/png' }) }));
+    startConversationWatch('element', { doc: document, win: elementWin(pageFetch), send });
+
+    await vi.advanceTimersByTimeAsync(5000);
+    // Sent immediately WITHOUT the avatar: initials now beat a bubble waiting on a fetch.
+    expect(send).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      title: 'Test User', avatarUrl: undefined,
+    }));
+    expect(pageFetch).toHaveBeenCalledWith(AVATAR);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(send).toHaveBeenLastCalledWith(expect.objectContaining({
+      avatarUrl: expect.stringContaining('data:'),
+    }));
+  });
+
+  it('leaves the bubble on initials when even the page cannot fetch it', async () => {
+    document.body.innerHTML = header;
+    const send = vi.fn();
+    const pageFetch = vi.fn(async () => { throw new Error('404'); });
+    startConversationWatch('element', { doc: document, win: elementWin(pageFetch), send });
+
+    await vi.advanceTimersByTimeAsync(6000);
+    for (const call of send.mock.calls) expect(call[0]?.avatarUrl).toBeUndefined();
+  });
+
+  // Slack, WhatsApp and Messenger serve avatars main CAN fetch, and those must keep crossing
+  // as urls: inlining every avatar would push base64 over IPC on every poll.
+  it('does not inline a service whose avatars main can fetch', async () => {
+    document.body.innerHTML = '<div id="D0ABC"><img src="https://slack.example/a-24">Dan</div>';
+    const send = vi.fn();
+    const pageFetch = vi.fn();
+    startConversationWatch('slack', {
+      doc: document,
+      win: { location: { pathname: '/client/T1/D0ABC', hash: '', href: 'https://app.slack.com/' }, fetch: pageFetch } as unknown as Window,
+      send,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(pageFetch).not.toHaveBeenCalled();
+    expect(send).toHaveBeenLastCalledWith(expect.objectContaining({
+      avatarUrl: 'https://slack.example/a-72',
+    }));
+  });
+});
