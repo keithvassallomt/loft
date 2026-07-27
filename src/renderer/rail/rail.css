@@ -129,17 +129,23 @@ body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
    background colour so it reads as a mark sitting ON the avatar rather than part of the
    image — the same trick the service badge uses. Declared BEFORE the dark-mode block: a
    media query adds no specificity, so a light rule written after it would win in dark mode
-   too. */
+   too.
+
+   RED, the same #ff3b30 as .badge above. In this rail red means unread and blue means
+   selection — .item.active, #slot and .grid .count are all blue — so an accent-coloured dot
+   sitting directly below a red unread badge would read as "this bubble is selected". Unlike
+   blue, it needs no dark-theme variant: .badge does not have one either. */
 .bubble .unread {
   position: absolute; top: -2px; right: -2px;
   width: 11px; height: 11px; border-radius: 50%;
-  background: #0071e3; border: 2px solid #e5e5e7;
+  background: #ff3b30; border: 2px solid #e5e5e7;
 }
 
 @media (prefers-color-scheme: dark) {
   .bubble { background: #2d2d2f; border-color: #424245; }
   .bubble .service { border-color: #3d3d3f; background: #2d2d2f; }
-  .bubble .unread { background: #0a84ff; border-color: #3d3d3f; }
+  /* Only the RING follows the theme — the dot itself stays #ff3b30, as .badge does. */
+  .bubble .unread { border-color: #3d3d3f; }
 }
 /* The lettered fallback: two characters at 34px need to be legible, and the inline hue set
    in rail.ts supplies the contrast behind them. */
