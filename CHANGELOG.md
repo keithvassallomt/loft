@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Pin a conversation to the rail.** Any chat, channel or room you keep coming back to can now live below your services as its own round button, showing that person's or group's picture with a small badge for the service it came from. Clicking it takes you straight there — waking the service first if it was asleep, and finding the conversation even when it has scrolled out of a long list. Pin from the titlebar's pin button, or by right-clicking a service in the rail. Works across WhatsApp, Messenger, Slack, Telegram, Element and NextCloud Talk.
+- **Pinned conversations show an unread dot.** A dot rather than a count, gated exactly like a service's own badge: nothing while that service is asleep or has badges switched off. Reading the chat anywhere clears it — including in the service's own tab, and including when the app is on your phone. A pinned conversation whose service isn't running is greyed out, so an absent dot never gets mistaken for "nothing new".
+- **Reorder pinned conversations by dragging them**, the same way service icons already reorder.
+- **Pinned conversations keep their picture up to date.** Previously the picture was fetched once, when you pinned, so a contact changing theirs never showed — and one that hadn't loaded yet stayed blank forever.
+- Conversations with no picture at all — most Slack channels — now show distinguishable initials on a stable colour instead of an identical blank circle. Slack channels keep their `#`.
+
+### Fixed
+
+- **Signing back in to Messenger no longer throws you out to your browser.** When Messenger logs you out, the "Continue" button that approves the login on another device opened in your default browser, where it could never finish, because the session is in Loft.
+- **Do Not Disturb is now detected on GNOME when running as a Flatpak.** Loft could not see the system's own Do Not Disturb switch from inside the sandbox, so notifications kept arriving with it on. It now reads the setting through the Loft GNOME extension. This needs the extension installed and up to date; without it, Loft's own global and per-service Do Not Disturb still work as before.
+- **Do Not Disturb is now detected on more desktops.** Loft previously only looked for the system setting on KDE. It now asks every desktop's notification service, so any that answers — including several that were silently unsupported — works without Loft needing to know its name.
+- Element notifications now show the sender's picture. Element serves its images behind a login token that only the page itself holds, so Loft was asking for them without it and getting nothing back.
+- The Loft GNOME extension no longer fails to load entirely when one optional setting is missing from the system.
+
 ## [1.0.1] - 2026-07-25
 
 > [!IMPORTANT]
