@@ -10,6 +10,10 @@ const HELPER_NAME = 'chat.loft.ShellHelper';
 const HELPER_PATH = '/chat/loft/ShellHelper';
 const HELPER_DND_PROP = 'SystemDnd';
 
+const NOTIFY_NAME = 'org.freedesktop.Notifications';
+const NOTIFY_PATH = '/org/freedesktop/Notifications';
+const NOTIFY_DND_PROP = 'Inhibited';
+
 /** Extract the show-banners boolean from `gsettings get`/`monitor` output; null if unparseable. */
 export function parseShowBanners(text: string): boolean | null {
   const t = text.trim();
@@ -68,46 +72,7 @@ function gnomeDeps(): SystemDndDeps {
   };
 }
 
-/** KDE/Plasma: the Inhibited property on org.freedesktop.Notifications. DND = Inhibited directly. */
-function kdeDeps(): SystemDndDeps {
-  let cached: boolean | null = null;
-  return {
-    current: () => cached,
-    watch(onChange) {
-      let stopped = false;
-      let cleanup = () => {};
-      void (async () => {
-        try {
-          const bus = dbus.sessionBus();
-          const obj = await bus.getProxyObject('org.freedesktop.Notifications', '/org/freedesktop/Notifications');
-          const props = obj.getInterface('org.freedesktop.DBus.Properties') as unknown as {
-            Get(iface: string, prop: string): Promise<{ value: unknown }>;
-            on(ev: 'PropertiesChanged', cb: (iface: string, changed: Record<string, { value: unknown }>, invalidated: string[]) => void): void;
-            off?(ev: 'PropertiesChanged', cb: (...a: unknown[]) => void): void;
-          };
-          const emit = (v: boolean) => { cached = v; if (!stopped) onChange(v); };
-          try {
-            const variant = await props.Get('org.freedesktop.Notifications', 'Inhibited');
-            emit(Boolean(variant.value));
-          } catch { /* property unavailable */ }
-          const handler = (iface: string, changed: Record<string, { value: unknown }>) => {
-            if (iface !== 'org.freedesktop.Notifications') return;
-            const c = changed['Inhibited'];
-            if (c) emit(Boolean(c.value));
-          };
-          props.on('PropertiesChanged', handler);
-          cleanup = () => { try { props.off?.('PropertiesChanged', handler as never); } catch { /* ignore */ } };
-          if (stopped) cleanup(); // stop() fired during async setup — remove the just-registered listener now
-        } catch (e) {
-          console.debug('KDE system-DND watch unavailable:', (e as Error)?.message ?? e);
-        }
-      })();
-      return { stop: () => { stopped = true; cleanup(); } };
-    },
-  };
-}
-
-/** One live view of the helper's system-DND state. `read` rejects if the helper can't answer. */
+/** One live view of a boolean DND property. `read` rejects if the owner can't answer. */
 export interface HelperDndSource {
   read(): Promise<boolean>;
   /** Subscribe to pushed changes; returns an unsubscriber. */
@@ -119,19 +84,17 @@ export interface HelperDndSource {
 export type HelperConnect = () => Promise<HelperDndSource>;
 
 /**
- * Read GNOME's system DND from the Loft Shell helper's `SystemDnd` property.
+ * Track a boolean DND property over D-Bus: read it, then follow its PropertiesChanged.
  *
- * This is the only mechanism that reaches the host's DND state from inside the Flatpak, and it
- * needs no new sandbox permission: the helper is an extension running INSIDE gnome-shell — so
- * unsandboxed, with plain Gio.Settings access to org.gnome.desktop.notifications — and Loft
- * already holds `--talk-name=chat.loft.ShellHelper` to drive FocusWindow/HideWindow and the
- * panel menu. Shaped exactly like kdeDeps: read a property, then follow PropertiesChanged.
+ * Shared by both property-backed backends — the Shell helper's `SystemDnd` and the notification
+ * server's `Inhibited` — because they differ only in which name/property they point at. Keeping
+ * one implementation means the teardown and stop()-races-setup handling is written and tested
+ * once; the two used to be separate copies and only one of them released its bus connection.
  *
- * Degrades to "unknown" (null), never to a confident "off": a user who declined the extension,
- * or whose EGO-installed helper predates the property, gets today's behaviour rather than a
- * wrong answer.
+ * Degrades to "unknown" (null), never to a confident "off". `label` only names the backend in
+ * the debug line, so a silent unknown is diagnosable.
  */
-export function shellHelperDeps(connect: HelperConnect = connectShellHelperDnd): SystemDndDeps {
+function propertyDeps(connect: HelperConnect, label: string): SystemDndDeps {
   let cached: boolean | null = null;
   return {
     current: () => cached,
@@ -142,23 +105,30 @@ export function shellHelperDeps(connect: HelperConnect = connectShellHelperDnd):
         let source: HelperDndSource | undefined;
         try {
           source = await connect();
+          const s = source;
           const emit = (v: boolean) => { cached = v; if (!stopped) onChange(v); };
           // Read before subscribing, so the first value the caller sees is the current state
-          // rather than whichever change happened to land first.
-          emit(await source.read());
-          const unsubscribe = source.subscribe(emit);
-          const s = source;
+          // rather than whichever change happened to land first. A failing read is tolerated
+          // and does NOT cost us the change stream: a server may be mid-startup, and this is
+          // long-standing behaviour of the Inhibited backend. Nothing is reported until the
+          // owner actually says something.
+          try {
+            emit(await s.read());
+          } catch (e) {
+            console.debug(`${label} DND property unreadable:`, (e as Error)?.message ?? e);
+          }
+          const unsubscribe = s.subscribe(emit);
           cleanup = () => {
             try { unsubscribe(); } catch { /* ignore */ }
             try { s.close(); } catch { /* ignore */ }
           };
           if (stopped) cleanup(); // stop() fired during async setup — tear down what we just built
         } catch (e) {
-          // Includes the missing/old-helper case. Close whatever connect() managed to open:
-          // a leaked session-bus connection under Flatpak keeps the instance alive, and this
-          // is the COMMON path for an out-of-date helper, not a rare one.
+          // Nothing to follow: no such name, or subscribing failed. Close whatever connect()
+          // opened — a leaked session-bus connection under Flatpak keeps the instance alive,
+          // and for a desktop with no such property this is the COMMON path, not a rare one.
           try { source?.close(); } catch { /* ignore */ }
-          console.debug('GNOME Shell helper system-DND unavailable:', (e as Error)?.message ?? e);
+          console.debug(`${label} system-DND watch unavailable:`, (e as Error)?.message ?? e);
         }
       })();
       return { stop: () => { stopped = true; cleanup(); } };
@@ -167,16 +137,46 @@ export function shellHelperDeps(connect: HelperConnect = connectShellHelperDnd):
 }
 
 /**
- * Live wiring for shellHelperDeps: the helper's SystemDnd property over the session bus.
+ * GNOME under Flatpak: the Loft Shell helper's `SystemDnd` property.
  *
- * `name`/`path` are parameters only so a probe can point this at a stand-in helper under
- * another bus name — the real extension owns chat.loft.ShellHelper, and gnome-shell cannot be
- * restarted to load a modified one without ending the session. Production always uses the
- * defaults.
+ * The only mechanism that reaches the host's DND state from inside the sandbox, and it needs no
+ * new permission: the helper is an extension running INSIDE gnome-shell — unsandboxed, with
+ * plain Gio.Settings access to org.gnome.desktop.notifications — and Loft already holds
+ * `--talk-name=chat.loft.ShellHelper` to drive FocusWindow/HideWindow and the panel menu.
+ *
+ * A user who declined the extension, or whose EGO-installed helper predates the property, gets
+ * "unknown" — the previous behaviour, never a wrong answer.
  */
-export async function connectShellHelperDnd(
-  name: string = HELPER_NAME,
-  path: string = HELPER_PATH,
+export function shellHelperDeps(connect: HelperConnect = connectShellHelperDnd): SystemDndDeps {
+  return propertyDeps(connect, 'GNOME Shell helper');
+}
+
+/**
+ * Every other desktop: the `Inhibited` property on org.freedesktop.Notifications. DND is
+ * Inhibited directly — no negation, unlike GNOME's show-banners.
+ *
+ * Not gated on KDE any more, though Plasma is the only server this has been verified against.
+ * Probing costs nothing: org.freedesktop.Notifications is already talk-granted (Loft sends its
+ * notifications there), and a server without the property answers a clean "No such property",
+ * which lands as unknown. So any daemon implementing the inhibition extension works for free
+ * rather than being excluded by a desktop allowlist. GNOME is deliberately NOT routed here:
+ * gnome-shell implements no properties at all on that interface (measured — GetAll returns {}).
+ */
+export function inhibitedDeps(connect: HelperConnect = connectInhibitedDnd): SystemDndDeps {
+  return propertyDeps(connect, 'org.freedesktop.Notifications Inhibited');
+}
+
+/**
+ * Live wiring for the property backends: one boolean property on the session bus.
+ *
+ * Both callers happen to use a bus name that doubles as the interface name, so there is no
+ * separate iface argument. The connection is owned here and released by `close()` — including on
+ * the failure path, since a name that does not exist is a normal outcome, not an exception.
+ */
+export async function connectPropertyDnd(
+  name: string,
+  path: string,
+  prop: string,
 ): Promise<HelperDndSource> {
   const bus = dbus.sessionBus();
   try {
@@ -187,11 +187,11 @@ export async function connectShellHelperDnd(
       off?(ev: 'PropertiesChanged', cb: (...a: unknown[]) => void): void;
     };
     return {
-      read: async () => Boolean((await props.Get(name, HELPER_DND_PROP)).value),
+      read: async () => Boolean((await props.Get(name, prop)).value),
       subscribe: (cb) => {
         const handler = (iface: string, changed: Record<string, { value: unknown }>) => {
           if (iface !== name) return;
-          const c = changed[HELPER_DND_PROP];
+          const c = changed[prop];
           if (c) cb(Boolean(c.value));
         };
         props.on('PropertiesChanged', handler);
@@ -205,33 +205,49 @@ export async function connectShellHelperDnd(
   }
 }
 
-const NOOP_DEPS: SystemDndDeps = { current: () => null, watch: () => ({ stop: () => {} }) };
+/**
+ * The helper's SystemDnd property. `name`/`path` are parameters only so a probe can point this
+ * at a stand-in helper under another bus name — the real extension owns chat.loft.ShellHelper,
+ * and gnome-shell cannot be restarted to load a modified one without ending the session.
+ * Production always uses the defaults.
+ */
+export const connectShellHelperDnd = (
+  name: string = HELPER_NAME,
+  path: string = HELPER_PATH,
+): Promise<HelperDndSource> => connectPropertyDnd(name, path, HELPER_DND_PROP);
 
-export type SystemDndBackend = 'kde' | 'gnome-gsettings' | 'gnome-shell-helper' | 'none';
+/** The notification server's own Inhibited property. */
+export const connectInhibitedDnd = (): Promise<HelperDndSource> =>
+  connectPropertyDnd(NOTIFY_NAME, NOTIFY_PATH, NOTIFY_DND_PROP);
+
+export type SystemDndBackend = 'freedesktop-inhibited' | 'gnome-gsettings' | 'gnome-shell-helper';
 
 /**
  * Which DND backend this desktop gets. Split out from defaultSystemDndDeps so the routing is
  * testable without a live bus — the backends themselves each need one.
  *
- * GNOME splits on the sandbox. Unsandboxed keeps gsettings: proven, and it needs no extension.
- * Under Flatpak gsettings cannot work and does not even fail loudly (it returns the schema
- * default, a confident wrong "DND off" — see gnomeDeps), so it routes to the Shell helper,
- * which is outside the sandbox and already reachable. It is also the only GNOME path that
- * spawns no `gsettings monitor` child, which under Flatpak was its own unstartable-app bug.
+ * Only GNOME is special-cased, and only because its notification server exposes no properties
+ * to read. It then splits on the sandbox: unsandboxed keeps gsettings (proven, needs no
+ * extension), while under Flatpak gsettings cannot work and does not even fail loudly — it
+ * returns the schema default, a confident wrong "DND off" (see gnomeDeps) — so it routes to the
+ * Shell helper, which sits outside the sandbox and is already reachable. That is also the only
+ * GNOME path spawning no `gsettings monitor` child, itself once an unstartable-app bug.
+ *
+ * Everything else, including KDE and an unset desktop, tries `Inhibited`. There is deliberately
+ * no "unsupported desktop" case: the probe is free and self-limiting (see inhibitedDeps), so a
+ * daemon that implements it is picked up without Loft having to know the desktop's name.
  */
 export function selectSystemDndBackend(env: NodeJS.ProcessEnv): SystemDndBackend {
-  if (isKde(env)) return 'kde'; // Inhibited rides org.freedesktop.Notifications: works sandboxed
-  if (isGnome(env)) return isFlatpak(env) ? 'gnome-shell-helper' : 'gnome-gsettings';
-  return 'none';
+  if (isGnome(env) && !isKde(env)) return isFlatpak(env) ? 'gnome-shell-helper' : 'gnome-gsettings';
+  return 'freedesktop-inhibited';
 }
 
 /** Build the DND backend for the current desktop. */
 export function defaultSystemDndDeps(env: NodeJS.ProcessEnv): SystemDndDeps {
   switch (selectSystemDndBackend(env)) {
-    case 'kde': return kdeDeps();
     case 'gnome-gsettings': return gnomeDeps();
     case 'gnome-shell-helper': return shellHelperDeps();
-    default: return NOOP_DEPS;
+    case 'freedesktop-inhibited': return inhibitedDeps();
   }
 }
 

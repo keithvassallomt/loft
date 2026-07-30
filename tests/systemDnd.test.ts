@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   parseShowBanners, watchSystemDnd, defaultSystemDndDeps, selectSystemDndBackend,
-  shellHelperDeps, type SystemDndDeps, type HelperDndSource,
+  shellHelperDeps, inhibitedDeps, type SystemDndDeps, type HelperDndSource,
 } from '../src/main/notifications/systemDnd';
 
 describe('parseShowBanners', () => {
@@ -58,11 +58,21 @@ describe('selectSystemDndBackend', () => {
     expect(selectSystemDndBackend({ XDG_CURRENT_DESKTOP: 'GNOME' })).toBe('gnome-gsettings');
   });
   it('keeps KDE on the Inhibited property, sandboxed or not', () => {
-    expect(selectSystemDndBackend({ XDG_CURRENT_DESKTOP: 'KDE' })).toBe('kde');
-    expect(selectSystemDndBackend({ XDG_CURRENT_DESKTOP: 'KDE', FLATPAK_ID: 'chat.loft.Loft' })).toBe('kde');
+    expect(selectSystemDndBackend({ XDG_CURRENT_DESKTOP: 'KDE' })).toBe('freedesktop-inhibited');
+    expect(selectSystemDndBackend({ XDG_CURRENT_DESKTOP: 'KDE', FLATPAK_ID: 'chat.loft.Loft' }))
+      .toBe('freedesktop-inhibited');
   });
-  it('has no backend for other desktops', () => {
-    expect(selectSystemDndBackend({})).toBe('none');
+  it('tries Inhibited on every other desktop instead of giving up', () => {
+    // Inhibited is not KDE-only by nature, just KDE-tested. Probing it costs no new sandbox
+    // permission (org.freedesktop.Notifications is already talk-granted) and a server that does
+    // not implement it answers a clean "No such property" — which reads as unknown. So any
+    // daemon that does implement it works for free, rather than being excluded by an allowlist.
+    for (const d of ['XFCE', 'X-Cinnamon', 'MATE', 'sway', 'Hyprland', 'LXQt', 'COSMIC', 'Budgie']) {
+      expect(selectSystemDndBackend({ XDG_CURRENT_DESKTOP: d })).toBe('freedesktop-inhibited');
+    }
+  });
+  it('tries Inhibited even when the desktop is unset', () => {
+    expect(selectSystemDndBackend({})).toBe('freedesktop-inhibited');
   });
 });
 
@@ -144,14 +154,20 @@ describe('shellHelperDeps', () => {
     expect(h.closed()).toBe(1);
   });
 
-  it('closes the connection even when the property read fails', async () => {
-    // The failure path leaks just as hard as the success path, and an old EGO-installed
-    // helper makes it the COMMON path, not the rare one.
+  it('still listens for changes when the initial read fails', async () => {
+    // Deliberately tolerant, and this is the KDE backend's long-standing behaviour: a server
+    // that cannot answer Get right now (starting up, property added later) should not cost us
+    // the change stream. Nothing is reported until it actually says something.
     const h = fakeHelper(async () => { throw new Error('UnknownProperty'); });
+    const onChange = vi.fn();
 
-    shellHelperDeps(h.connect).watch(() => {});
+    shellHelperDeps(h.connect).watch(onChange);
+    await vi.waitFor(() => expect(h.subscribed()).toBe(true));
+    expect(onChange).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(h.closed()).toBe(1));
+    h.emit(true);
+
+    expect(onChange).toHaveBeenCalledWith(true);
   });
 
   it('delivers nothing after stop(), even when stop races the async connect', async () => {
@@ -164,6 +180,47 @@ describe('shellHelperDeps', () => {
 
     h.emit(false);
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('inhibitedDeps', () => {
+  // Same implementation as the helper backend, pointed at a different property, so these cover
+  // the wiring rather than re-testing the shared teardown/race behaviour above.
+  function fakeServer(initial: boolean) {
+    let cb: ((v: boolean) => void) | null = null;
+    let closed = 0;
+    return {
+      connect: async (): Promise<HelperDndSource> => ({
+        read: async () => initial,
+        subscribe: (f) => { cb = f; return () => {}; },
+        close: () => { closed += 1; },
+      }),
+      emit: (v: boolean) => cb?.(v),
+      closed: () => closed,
+    };
+  }
+
+  it('takes DND straight from Inhibited, with no negation', async () => {
+    // Unlike GNOME's show-banners (which is inverted), Inhibited already means "suppressed".
+    const s = fakeServer(true);
+    const seen: boolean[] = [];
+
+    inhibitedDeps(s.connect).watch((v) => seen.push(v));
+
+    await vi.waitFor(() => expect(seen).toEqual([true]));
+  });
+
+  it('follows the server\'s later changes and releases the bus on stop', async () => {
+    const s = fakeServer(false);
+    const seen: boolean[] = [];
+    const w = inhibitedDeps(s.connect).watch((v) => seen.push(v));
+    await vi.waitFor(() => expect(seen).toEqual([false]));
+
+    s.emit(true);
+    w.stop();
+
+    expect(seen).toEqual([false, true]);
+    expect(s.closed()).toBe(1); // the KDE backend used to leak this connection
   });
 });
 
