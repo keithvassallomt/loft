@@ -179,6 +179,8 @@ Loft currently logs to stdout/stderr via plain `console.*` calls in the main pro
     ...                            # instance has no bundled fallback of its own, so this copy is
                                     # what keeps its icon from going blank.
   avatars/                         # cached notification avatar images (~1hr TTL)
+  bubbles/                         # cached bubble avatars, refreshed when the conversation is
+                                    # observed open and the cached file is missing or >6h old
 
 ~/.local/share/applications/
   loft-whatsapp.desktop            # per-service launcher (`loft --service=whatsapp`), one per installed service

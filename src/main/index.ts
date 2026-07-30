@@ -1,6 +1,6 @@
 import { app, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, session } from 'electron';
 import { readFile } from 'node:fs/promises';
-import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
@@ -35,7 +35,8 @@ import {
 } from './instances';
 import { scanVariants, iconCandidates, variantPngPath } from './icons';
 import {
-  bubbleAvatarPath, saveBubbleAvatar, deleteBubbleAvatar, type BubbleAvatarDeps,
+  bubbleAvatarPath, saveBubbleAvatar, deleteBubbleAvatar, avatarNeedsRefresh,
+  type BubbleAvatarDeps,
 } from './bubbleAvatars';
 import {
   addBubble, removeBubble, removeServiceBubbles, refreshBubbleTitle, findBubble, clearUnread,
@@ -294,6 +295,30 @@ function pinConversation(serviceId: string): void {
   // initials, and bumping the epoch is what makes it re-fetch once the file lands. Pinning
   // never blocks on the network.
   void saveBubbleAvatar(bubbleId(serviceId, conv.key), conv.avatarUrl, bubbleAvatarDeps(serviceId))
+    .then((saved) => { if (saved) { iconEpoch += 1; loft?.refreshRail(); } });
+}
+
+/**
+ * Re-fetch a pinned conversation's avatar when the cached one is stale or missing.
+ *
+ * Driven by OBSERVATION rather than by a timer: the avatar url only exists while the
+ * conversation is open in a live view, so there is no moment a blind interval could act on.
+ * In practice that means a picture change lands the next time you visit the chat, which is
+ * also the next time you could notice it was wrong.
+ *
+ * Cheap by construction — the TTL means at most one fetch per bubble per six hours, however
+ * often the watcher reports the conversation (roughly every two seconds while it is open).
+ */
+function refreshBubbleAvatar(serviceId: string, conv: { key: string; avatarUrl?: string }): void {
+  if (!conv.avatarUrl) return;
+  const id = bubbleId(serviceId, conv.key);
+  if (!findBubble(config.bubbles ?? [], id)) return; // not pinned — nothing to keep current
+  let mtime: number | null = null;
+  try { mtime = statSync(bubbleAvatarPath(id)).mtimeMs; } catch { mtime = null; }
+  if (!avatarNeedsRefresh(mtime, Date.now())) return;
+  // Same shape as pinning: never blocks, and the epoch bump is what makes the rail re-read
+  // the file under its otherwise stable loft://bubble/<id> url.
+  void saveBubbleAvatar(id, conv.avatarUrl, bubbleAvatarDeps(serviceId))
     .then((saved) => { if (saved) { iconEpoch += 1; loft?.refreshRail(); } });
 }
 
@@ -1557,6 +1582,7 @@ if (!app.requestSingleInstanceLock()) {
       saveConfig(configPath(), config);
       loft?.refreshRail();
     }
+    refreshBubbleAvatar(id, conv);
     loft?.refreshTitlebar();
     // A detached window owns its own titlebar, which refreshTitlebar above cannot reach.
     windows.get(id)?.setCanPin(true);

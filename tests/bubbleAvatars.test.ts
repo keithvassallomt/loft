@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  bubbleAvatarPath, saveBubbleAvatar, deleteBubbleAvatar, type BubbleAvatarDeps,
+  bubbleAvatarPath, saveBubbleAvatar, deleteBubbleAvatar, avatarNeedsRefresh, AVATAR_TTL_MS,
+  type BubbleAvatarDeps,
 } from '../src/main/bubbleAvatars';
 import { bubblesDir } from '../src/main/paths';
 
@@ -130,5 +131,36 @@ describe('saveBubbleAvatar failure reporting', () => {
 
   it('says nothing on success', async () => {
     expect(await reasons({}, 'https://x/a.jpg')).toEqual([]);
+  });
+});
+
+/**
+ * Avatars were fetched once, at pin time, and never again — so a contact changing their
+ * picture never propagated, and one that was missing at pin time (the row had not rendered
+ * yet) stayed missing for good.
+ */
+describe('avatarNeedsRefresh', () => {
+  const now = 1_000_000_000_000;
+
+  it('refreshes when there is no file at all, which is the never-retried case', () => {
+    expect(avatarNeedsRefresh(null, now)).toBe(true);
+  });
+
+  it('leaves a fresh avatar alone', () => {
+    expect(avatarNeedsRefresh(now - 60_000, now)).toBe(false);
+  });
+
+  it('refreshes one older than the TTL', () => {
+    expect(avatarNeedsRefresh(now - AVATAR_TTL_MS - 1, now)).toBe(true);
+  });
+
+  it('refreshes exactly at the TTL boundary', () => {
+    expect(avatarNeedsRefresh(now - AVATAR_TTL_MS, now)).toBe(true);
+  });
+
+  // A clock that has gone backwards (NTP correction, suspend/resume) must not pin an avatar
+  // as permanently fresh.
+  it('refreshes when the file claims to be from the future', () => {
+    expect(avatarNeedsRefresh(now + 86_400_000, now)).toBe(true);
   });
 });

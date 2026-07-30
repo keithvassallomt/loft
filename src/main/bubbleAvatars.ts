@@ -7,6 +7,32 @@ export function bubbleAvatarPath(id: string, env: Env = process.env): string {
   return join(bubblesDir(env), `${id}.png`);
 }
 
+/**
+ * How long a cached bubble avatar is trusted. Six hours: a profile picture changes rarely,
+ * and the refresh only runs when the conversation is actually observed open, so a short TTL
+ * would buy nothing but repeated fetches of an image that has not changed.
+ */
+export const AVATAR_TTL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Should we re-fetch this bubble's avatar?
+ *
+ * `null` mtime means no file exists — the avatar was missing when the conversation was
+ * pinned (its row had not rendered yet, or the fetch failed) and nothing has ever retried it.
+ * That case was the original gap; the TTL is what makes a CHANGED picture propagate.
+ *
+ * A file dated in the future is treated as stale rather than as permanently fresh: a clock
+ * moved backwards by an NTP correction or a suspend/resume would otherwise freeze an avatar
+ * for good.
+ */
+export function avatarNeedsRefresh(
+  mtimeMs: number | null, now: number, ttlMs: number = AVATAR_TTL_MS,
+): boolean {
+  if (mtimeMs === null) return true;
+  const age = now - mtimeMs;
+  return age >= ttlMs || age < 0;
+}
+
 export interface BubbleAvatarDeps {
   /** Fetched through the SERVICE's own partition session, so authenticated avatars work —
    *  the mechanism notifications already use for Element and Talk. */
