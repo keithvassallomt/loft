@@ -18,19 +18,22 @@ export interface SniExports {
 }
 
 export interface SniHandle {
-  busName: string;
   bus: dbus.MessageBus;
 }
 
 /**
- * Export the SNI + dbusmenu objects on a unique bus name and register with
- * StatusNotifierWatcher, retrying on the ksni-proven [0,2,4,8,16]s schedule (the
- * watcher may not exist yet at login) and re-registering when it reappears.
+ * Export the SNI + dbusmenu objects on this connection's unique bus name and
+ * register the SNI object path with StatusNotifierWatcher, retrying on the
+ * ksni-proven [0,2,4,8,16]s schedule (the watcher may not exist yet at login)
+ * and re-registering when it reappears.
+ *
+ * Passing the object path is the sandbox-safe form of
+ * RegisterStatusNotifierItem: the watcher associates it with the caller's
+ * unique bus name. Do not request an org.kde.StatusNotifierItem-<pid>-* name
+ * here — Flatpak cannot grant ownership of that dynamic name.
  */
 export async function connectSni(exp: SniExports): Promise<SniHandle> {
   const bus = dbus.sessionBus();
-  const busName = `org.kde.StatusNotifierItem-${process.pid}-1`;
-  await bus.requestName(busName, 0);
   bus.export(exp.sniPath, exp.sni);
   bus.export(exp.menuPath, exp.menu);
 
@@ -40,7 +43,7 @@ export async function connectSni(exp: SniExports): Promise<SniHandle> {
       const iface = obj.getInterface(WATCHER_NAME) as unknown as {
         RegisterStatusNotifierItem(service: string): Promise<void>;
       };
-      await iface.RegisterStatusNotifierItem(busName);
+      await iface.RegisterStatusNotifierItem(exp.sniPath);
       return true;
     } catch {
       return false;
@@ -75,5 +78,5 @@ export async function connectSni(exp: SniExports): Promise<SniHandle> {
     }
   });
 
-  return { busName, bus };
+  return { bus };
 }

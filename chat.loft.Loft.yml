@@ -84,22 +84,11 @@ finish-args:
   # Interface") — and that one is the app id, hence granted by default. The wildcard is
   # gone rather than narrowed.
   #
-  # KNOWN GAP — the SNI tray cannot own its bus name under Flatpak, and there is no
-  # finish-args fix. src/main/tray/watcher.ts calls requestName for
-  # `org.kde.StatusNotifierItem-<pid>-1` (per the StatusNotifierItem spec). That is outside
-  # chat.loft.*, so the old `--own-name=chat.loft.*` wildcard never covered it either — the
-  # request has always been denied in the sandbox. It cannot be granted: flatpak's own-name
-  # wildcards only match dot-separated subnames (`foo.bar.*`), and flatpak-builder rejects
-  # `org.kde.StatusNotifierItem-*` outright with "Invalid dbus name"; the PID in the middle
-  # makes a literal grant impossible anyway.
-  #
-  # Invisible on GNOME — trayBackend=auto picks the Shell-helper panel there, so the SNI
-  # path never runs — but it means no tray on KDE and other desktops under Flatpak.
-  #
-  # The fix is in code, not here: RegisterStatusNotifierItem accepts the caller's UNIQUE
-  # bus name (dbus-next exposes it as `bus.name`, e.g. ":1.42"), so dropping the
-  # requestName call removes the need for any grant. Not done yet — it needs testing on a
-  # real KDE/SNI desktop, which the GNOME dev box cannot provide.
+  # SNI registration deliberately uses the exported `/StatusNotifierItem` object path.
+  # The watcher associates that path with the caller's unique bus name, so Loft does not
+  # need to own the dynamic `org.kde.StatusNotifierItem-<pid>-1` name used by some native
+  # clients. Flatpak cannot grant that name: own-name wildcards only match dot-separated
+  # subnames and the PID makes a literal grant impossible. Keep this as talk-only.
   # Autostart .desktop files and per-service launcher .desktop files.
   # The Background portal writes OUR autostart entry (chat.loft.Loft.desktop) — this
   # grant is deliberately NOT used for that, and must not be. Flatpak bind-mounts the
