@@ -41,6 +41,13 @@ describe('messengerKeepsInApp', () => {
       'https://www.facebook.com/login.php?next=x',
       'https://www.facebook.com/checkpoint/1',
       'https://www.facebook.com/two_factor/',
+      // The re-login flow after Messenger logs you out: its "Continue" button goes here to
+      // approve the login on another device. The path is /two_step_verification/two_factor,
+      // so the /two_factor entry above never matched it and the whole flow was flung to the
+      // default browser -- where it cannot complete, the session being in Loft.
+      'https://www.facebook.com/two_step_verification/two_factor',
+      'https://www.facebook.com/two_step_verification/two_factor/?next=x',
+      'https://www.facebook.com/two_step_verification/authentication',
       'https://www.facebook.com/recover/initiate',
       'https://www.facebook.com/',            // logged-out redirect target
     ]) expect(messengerKeepsInApp(u)).toBe(true);

@@ -50,7 +50,15 @@ export function messengerKeepsInApp(targetUrl: string): boolean {
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return true; // non-web — don't hijack
   const path = u.pathname;
   if (path === '/') return true; // logged-out redirect target — never hijack
-  const KEEP = ['/messages', '/e2ee', '/login', '/checkpoint', '/recover', '/two_factor'];
+  // '/two_step_verification' is where the re-login flow's "Continue" button goes to approve
+  // the login on another device — /two_step_verification/two_factor. '/two_factor' below does
+  // NOT cover it: these are prefix matches on the FIRST path segment, so a nested path under
+  // a different parent never matches. Sending it out stranded the whole flow in the default
+  // browser, which cannot complete it — the session being in Loft.
+  const KEEP = [
+    '/messages', '/e2ee', '/login', '/checkpoint', '/recover',
+    '/two_factor', '/two_step_verification',
+  ];
   return KEEP.some((p) => path === p || path.startsWith(p + '/') || path.startsWith(p + '.'));
 }
 
