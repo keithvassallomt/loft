@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { moveInOrder } from './railOrder';
 
 /** One pinned conversation. */
 export interface Bubble {
@@ -125,6 +126,18 @@ export function clearUnread(set: Set<string>, conv: { key: string; title: string
   const byKey = set.delete(conv.key);
   const byTitle = set.delete(conv.title);
   return byKey || byTitle;
+}
+
+/**
+ * Move a bubble to an insertion index, returning the full new order.
+ *
+ * Reuses moveInOrder rather than repeating its off-by-one: `toIndex` is measured against the
+ * list WITH the dragged item still in it (that is what railSlotIndex reports), so dropping on
+ * either side of an item's own slot has to mean "stay put".
+ */
+export function moveBubble(bubbles: readonly Bubble[], id: string, toIndex: number): Bubble[] {
+  const byId = new Map(bubbles.map((b) => [b.id, b]));
+  return moveInOrder([...byId.keys()], id, toIndex).map((x) => byId.get(x)!);
 }
 
 export interface PinTargetInput {

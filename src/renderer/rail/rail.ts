@@ -14,9 +14,14 @@ let dragging = false;
 /** A rail:state that arrived mid-drag; applied once the gesture ends (see render). */
 let pendingState: RailState | null = null;
 
+/** Below this a gesture is a click, not a drag. Bubbles have no separate handle, so the
+ *  press that opens a conversation and the press that starts reordering it are the same
+ *  press — only the distance tells them apart. */
+const DRAG_THRESHOLD_PX = 4;
+
 /** Measure every icon so main can compute insertion indices from real geometry. */
-function measure(): Slot[] {
-  return [...root.querySelectorAll<HTMLElement>('.item')].map((el) => {
+function measure(sel = '.item'): Slot[] {
+  return [...root.querySelectorAll<HTMLElement>(sel)].map((el) => {
     const r = el.getBoundingClientRect();
     return { id: el.dataset.id ?? '', top: r.top, height: r.height };
   });
@@ -138,6 +143,11 @@ function serviceButton(item: RailItem, iconEpoch: number): HTMLButtonElement {
   return b;
 }
 
+/** The bubble currently being dragged, and whether it has passed the click threshold. */
+let bubbleDragId: string | null = null;
+let bubbleDragFromY = 0;
+let bubbleMoved = false;
+
 function bubbleButton(item: BubbleItem, iconEpoch: number): HTMLButtonElement {
   const b = document.createElement('button');
   b.className = 'bubble';
@@ -191,10 +201,53 @@ function bubbleButton(item: BubbleItem, iconEpoch: number): HTMLButtonElement {
     b.append(dot);
   }
 
-  // A plain click, with no pointerdown/drag handlers: bubbles are not draggable in v1, so
-  // they never enter the rail's drag machinery — which is what keeps this change clear of
-  // the grid/detach invariants that machinery carries.
-  b.addEventListener('click', () => window.loftRail.selectBubble(item.id));
+  // Bubbles reorder among THEMSELVES and nothing else — they never detach and never enter
+  // the grid, so this is deliberately its own small gesture rather than the service icons'
+  // machinery, which exists to resolve reorder-vs-detach-vs-grid from the release point.
+  //
+  // `dragging` is the shared mid-render guard: replaceChildren during a gesture would destroy
+  // the very button holding pointer capture, and its replacement never receives the pointerup.
+  b.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return; // primary only — right-click is the context menu
+    e.preventDefault();
+    b.setPointerCapture(e.pointerId);
+    bubbleDragId = item.id;
+    bubbleDragFromY = e.clientY;
+    bubbleMoved = false;
+    dragging = true;
+    slots = measure('.bubble');
+    window.loftRail.bubbleDragBegin(slots, item.id);
+  });
+  b.addEventListener('pointermove', (e) => {
+    if (bubbleDragId !== item.id) return;
+    // Until the threshold is passed this is still a click in progress: no indicator, no
+    // visual change, so a press that turns out to be a tap looks like nothing happened.
+    if (!bubbleMoved && Math.abs(e.clientY - bubbleDragFromY) < DRAG_THRESHOLD_PX) return;
+    bubbleMoved = true;
+    b.classList.add('dragging');
+    window.loftRail.bubbleDragMove(e.clientY);
+  });
+  b.addEventListener('pointerup', (e) => {
+    if (bubbleDragId !== item.id) return;
+    bubbleDragId = null;
+    b.classList.remove('dragging');
+    // null tells main to drop its geometry without reordering — the same thing a cancel
+    // does. A click IS a zero-distance drag, so this path always ends the gesture first.
+    window.loftRail.bubbleDragEnd(bubbleMoved ? e.clientY : null);
+    if (!bubbleMoved) window.loftRail.selectBubble(item.id);
+    endDrag();
+  });
+  // No pointerup fires after a cancel (a touch drag stolen for a pan is the ordinary cause),
+  // so without this main keeps stale geometry and the indicator stays up.
+  b.addEventListener('pointercancel', () => {
+    if (bubbleDragId !== item.id) return;
+    bubbleDragId = null;
+    b.classList.remove('dragging');
+    window.loftRail.bubbleDragEnd(null);
+    endDrag();
+  });
+  // Keyboard activation dispatches a synthetic click with detail 0 and no pointer events.
+  b.addEventListener('click', (e) => { if (e.detail === 0) window.loftRail.selectBubble(item.id); });
   b.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     window.loftRail.bubbleMenu(item.id);

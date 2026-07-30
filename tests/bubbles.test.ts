@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   bubbleId, addBubble, removeBubble, removeServiceBubbles, refreshBubbleTitle,
-  findBubble, sanitizeBubbles, bubbleGlyph, bubbleHue, clearUnread, type Bubble,
+  findBubble, sanitizeBubbles, bubbleGlyph, bubbleHue, clearUnread, moveBubble, type Bubble,
 } from '../src/main/bubbles';
 
 const b = (serviceId: string, key: string, title: string): Bubble =>
@@ -199,5 +199,39 @@ describe('clearUnread', () => {
     const set = new Set(['k', 't']);
     clearUnread(set, { key: 'k', title: 't' });
     expect([...set]).toEqual([]);
+  });
+});
+
+describe('moveBubble', () => {
+  const list = [b('slack', 'C1', 'A'), b('slack', 'C2', 'B'), b('slack', 'C3', 'C')];
+  const titles = (out: Bubble[]): string[] => out.map((x) => x.title);
+  const id = (n: number): string => list[n].id;
+
+  it('moves a bubble down', () => {
+    expect(titles(moveBubble(list, id(0), 2))).toEqual(['B', 'A', 'C']);
+  });
+
+  it('moves a bubble up', () => {
+    expect(titles(moveBubble(list, id(2), 0))).toEqual(['C', 'A', 'B']);
+  });
+
+  it('moves to the end', () => {
+    expect(titles(moveBubble(list, id(0), 3))).toEqual(['B', 'C', 'A']);
+  });
+
+  // The insertion index is measured against the list WITH the item still in it, so either
+  // side of its own slot means "stay put".
+  it('is a no-op when dropped on either side of its own slot', () => {
+    expect(titles(moveBubble(list, id(1), 1))).toEqual(['A', 'B', 'C']);
+    expect(titles(moveBubble(list, id(1), 2))).toEqual(['A', 'B', 'C']);
+  });
+
+  it('leaves the list alone for an unknown id', () => {
+    expect(titles(moveBubble(list, 'nope', 0))).toEqual(['A', 'B', 'C']);
+  });
+
+  it('does not mutate its input', () => {
+    moveBubble(list, id(0), 2);
+    expect(titles(list)).toEqual(['A', 'B', 'C']);
   });
 });

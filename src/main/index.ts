@@ -39,6 +39,7 @@ import {
 } from './bubbleAvatars';
 import {
   addBubble, removeBubble, removeServiceBubbles, refreshBubbleTitle, findBubble, clearUnread,
+  moveBubble,
   bubbleClickAction, bubbleId, pinTarget,
 } from './bubbles';
 import { iconsDir } from './paths';
@@ -1577,6 +1578,42 @@ if (!app.requestSingleInstanceLock()) {
     const open = currentConversation.get(id);
     if (open && notifications?.isWatching(id)) clearUnread(set, open);
     unreadKeys.set(id, set);
+    loft?.refreshRail();
+  });
+
+  // Bubble reordering. Separate from the service-icon drag on purpose: that gesture exists to
+  // resolve reorder-vs-detach-vs-grid from the release point, and a bubble can only ever
+  // reorder. Sharing it would mean teaching it a third subject that wants none of its rules.
+  let bubbleDrag: { slots: RailSlot[]; id: string; lastIndex: number } | null = null;
+
+  ipcMain.on('rail:bubbleDragBegin', (_e, m: { slots: RailSlot[]; id: string }) => {
+    // lastIndex starts where no real index can equal it, so the first move always pushes.
+    bubbleDrag = { slots: m.slots, id: m.id, lastIndex: -2 };
+  });
+
+  ipcMain.on('rail:bubbleDragMove', (_e, clientY: number) => {
+    if (!bubbleDrag) return;
+    const index = railSlotIndex(clientY, bubbleDrag.slots);
+    // pointermove fires far faster than the index changes, and every push is an IPC hop.
+    if (index === bubbleDrag.lastIndex) return;
+    bubbleDrag.lastIndex = index;
+    loft?.sendRail('rail:dropSlot', index);
+  });
+
+  // clientY null means the gesture was a click or was cancelled: drop the geometry without
+  // reordering. Clearing FIRST, unconditionally, is what stops a release we did not track
+  // (a second pointer, say) measuring against a stale slot list — whose index would be 0,
+  // silently moving the bubble to the front and persisting it.
+  ipcMain.on('rail:bubbleDragEnd', (_e, clientY: number | null) => {
+    const drag = bubbleDrag;
+    bubbleDrag = null;
+    loft?.sendRail('rail:dropSlot', -1);
+    if (!drag || clientY === null) return;
+    const before = config.bubbles ?? [];
+    const after = moveBubble(before, drag.id, railSlotIndex(clientY, drag.slots));
+    if (after.every((b, i) => b.id === before[i]?.id)) return; // dropped where it already was
+    config.bubbles = after;
+    saveConfig(configPath(), config);
     loft?.refreshRail();
   });
 

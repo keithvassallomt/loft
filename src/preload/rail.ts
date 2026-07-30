@@ -12,6 +12,13 @@ export interface RailBridge {
   selectBubble(id: string): void;
   /** Pop the per-bubble context menu (Remove). */
   bubbleMenu(id: string): void;
+  /** Hand main the bubbles' geometry at drag start, as dragBegin does for services. */
+  bubbleDragBegin(slots: RailSlot[], id: string): void;
+  /** Live pointer position during a bubble drag. */
+  bubbleDragMove(clientY: number): void;
+  /** Release at `clientY`, or null for an aborted gesture — main must drop its state either
+   *  way, or the next drag measures against stale geometry. */
+  bubbleDragEnd(clientY: number | null): void;
   /** Open the manager view (the rail's Loft "home" button). */
   showManager(): void;
   /** Open the grid view (the rail's pinned Grid button). */
@@ -45,6 +52,9 @@ export function buildRailBridge(ipc: IpcRenderer): RailBridge {
     menu: (id) => ipc.send('rail:menu', id),
     selectBubble: (id) => ipc.send('rail:selectBubble', id),
     bubbleMenu: (id) => ipc.send('rail:bubbleMenu', id),
+    bubbleDragBegin: (slots, id) => ipc.send('rail:bubbleDragBegin', { slots, id }),
+    bubbleDragMove: (clientY) => ipc.send('rail:bubbleDragMove', clientY),
+    bubbleDragEnd: (clientY) => ipc.send('rail:bubbleDragEnd', clientY),
     showManager: () => ipc.send('rail:showManager'),
     showGrid: () => ipc.send('rail:showGrid'),
     dragEnd: (id, releaseX, releaseY) => ipc.send('rail:dragEnd', { id, releaseX, releaseY }),
