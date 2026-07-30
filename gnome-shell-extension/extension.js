@@ -59,8 +59,13 @@ const DBUS_IFACE = `<node>
     <method name="UpdateGlobalDnd">
       <arg name="enabled" type="b" direction="in"/>
     </method>
+    <property name="SystemDnd" type="b" access="read"/>
   </interface>
 </node>`;
+
+// GNOME's own Do Not Disturb switch (calendar popover / Quick Settings) is exactly this key.
+const NOTIFICATIONS_SCHEMA = 'org.gnome.desktop.notifications';
+const SHOW_BANNERS_KEY = 'show-banners';
 
 const BADGE_SIZE = 6;
 const DND_DASH_WIDTH = 8;
@@ -109,6 +114,18 @@ export default class LoftShellHelper extends Extension {
         // it mutes every service at once.
         this._combinedGlobalDnd = false;
 
+        // System (GNOME) Do Not Disturb, published to Loft as the SystemDnd property.
+        //
+        // Loft cannot read this itself when it runs as a Flatpak: the sandbox has no route to
+        // the host's dconf, and the XDG Settings portal exposes no org.gnome.desktop.notifications
+        // namespace. This extension runs inside gnome-shell, so it just reads the key — and Loft
+        // already has talk access to this bus name. Without it Loft keeps emitting notifications
+        // and, worse, in-page notification SOUNDS while the user has DND on.
+        this._notifySettings = new Gio.Settings({schema_id: NOTIFICATIONS_SCHEMA});
+        this._systemDnd = !this._notifySettings.get_boolean(SHOW_BANNERS_KEY);
+        this._notifyChangedId = this._notifySettings.connect(
+            `changed::${SHOW_BANNERS_KEY}`, () => this._onSystemDndChanged());
+
         const nodeInfo = Gio.DBusNodeInfo.new_for_xml(DBUS_IFACE);
         this._dbusId = Gio.DBus.session.register_object(
             DBUS_PATH,
@@ -116,7 +133,13 @@ export default class LoftShellHelper extends Extension {
             (connection, sender, path, iface, method, params, invocation) => {
                 this._onMethodCall(method, params, invocation);
             },
-            null,
+            (connection, sender, path, iface, property) => {
+                // register_object takes explicit property closures; this used to be null,
+                // which is why the interface had no properties at all.
+                if (property === 'SystemDnd')
+                    return new GLib.Variant('b', this._systemDnd);
+                return null;
+            },
             null);
 
         this._nameId = Gio.bus_own_name(
@@ -147,6 +170,10 @@ export default class LoftShellHelper extends Extension {
         this._injectionManager.clear();
         this._injectionManager = null;
 
+        this._notifySettings.disconnect(this._notifyChangedId);
+        this._notifyChangedId = null;
+        this._notifySettings = null;
+
         this._unregisterCombined();
         this._combinedServices = null;
         this._combinedAvailable = null;
@@ -158,6 +185,26 @@ export default class LoftShellHelper extends Extension {
 
         this._loftTitleKeys.clear();
         this._loftTitleKeys = null;
+    }
+
+    // Push the new system-DND state to Loft. A plain property would be polled at best, so it
+    // is announced with the standard PropertiesChanged — register_object does not emit that for
+    // us the way Gio.DBusExportedObject would, hence the manual signal.
+    _onSystemDndChanged() {
+        const dnd = !this._notifySettings.get_boolean(SHOW_BANNERS_KEY);
+        if (dnd === this._systemDnd)
+            return;
+        this._systemDnd = dnd;
+        Gio.DBus.session.emit_signal(
+            null,
+            DBUS_PATH,
+            'org.freedesktop.DBus.Properties',
+            'PropertiesChanged',
+            new GLib.Variant('(sa{sv}as)', [
+                DBUS_NAME,
+                {SystemDnd: new GLib.Variant('b', dnd)},
+                [],
+            ]));
     }
 
     _callServiceMethod(segment, method, signature, args) {

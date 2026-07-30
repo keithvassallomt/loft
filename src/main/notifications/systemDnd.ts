@@ -6,6 +6,10 @@ import { isFlatpak } from '../desktop';
 const SCHEMA = 'org.gnome.desktop.notifications';
 const KEY = 'show-banners';
 
+const HELPER_NAME = 'chat.loft.ShellHelper';
+const HELPER_PATH = '/chat/loft/ShellHelper';
+const HELPER_DND_PROP = 'SystemDnd';
+
 /** Extract the show-banners boolean from `gsettings get`/`monitor` output; null if unparseable. */
 export function parseShowBanners(text: string): boolean | null {
   const t = text.trim();
@@ -26,18 +30,14 @@ export interface SystemDndWatcher { current(): boolean; stop(): void }
 /**
  * GNOME: gsettings show-banners → DND is the negation (banners off = DND on).
  *
- * KNOWN LIMITATION — inert under Flatpak. A modern Flatpak sandbox has no route to the host's
- * dconf: no dconf grant here, and current flatpak dropped the dconf bridge, so `gsettings`
- * inside the sandbox reads only the empty in-sandbox schema defaults (show-banners defaults to
- * true, which masks the failure as "DND never on"). The XDG Settings portal — which the
- * live-theme feature uses successfully for `org.freedesktop.appearance` (see ../appearance.ts)
- * — is the only mechanism that reaches the host, but it exposes a curated namespace set that
- * does NOT include `org.gnome.desktop.notifications`, so there is no portal read to switch to.
- * Left as-is on purpose: GNOME Shell suppresses the banner for anything Loft sends over
- * org.freedesktop.Notifications while DND is on regardless, so the gap is largely cosmetic
- * (the in-page sound gate, and message-tray entries), and Loft's own global DND is the
- * substitute. Do NOT "fix" this by reintroducing flatpak-spawn --host. See CLAUDE.md §9.
- * Unpackaged/dev runs are unsandboxed and work fine, which is why this only bites the Flatpak.
+ * Used for UNSANDBOXED GNOME only. `gsettings` cannot work inside the Flatpak — the sandbox
+ * has no route to the host's dconf, and (re-verified 2026-07-30, xdg-desktop-portal 1.22.1 /
+ * xdg-desktop-portal-gnome 50.0) the XDG Settings portal still exposes no
+ * `org.gnome.desktop.notifications` namespace. Worse than merely failing: the schema IS
+ * present in the org.freedesktop.Platform runtime, so the sandboxed read succeeds and returns
+ * the schema default `show-banners=true` — a confident, wrong "DND is off". That is why the
+ * Flatpak routes to shellHelperDeps() instead of here; see selectSystemDndBackend.
+ * Do NOT "fix" the sandbox case by reintroducing flatpak-spawn --host.
  */
 function gnomeDeps(): SystemDndDeps {
   const read = (): boolean | null => {
@@ -107,21 +107,132 @@ function kdeDeps(): SystemDndDeps {
   };
 }
 
+/** One live view of the helper's system-DND state. `read` rejects if the helper can't answer. */
+export interface HelperDndSource {
+  read(): Promise<boolean>;
+  /** Subscribe to pushed changes; returns an unsubscriber. */
+  subscribe(cb: (v: boolean) => void): () => void;
+  /** Release the underlying bus connection. Must be safe to call once, on every path. */
+  close(): void;
+}
+
+export type HelperConnect = () => Promise<HelperDndSource>;
+
+/**
+ * Read GNOME's system DND from the Loft Shell helper's `SystemDnd` property.
+ *
+ * This is the only mechanism that reaches the host's DND state from inside the Flatpak, and it
+ * needs no new sandbox permission: the helper is an extension running INSIDE gnome-shell — so
+ * unsandboxed, with plain Gio.Settings access to org.gnome.desktop.notifications — and Loft
+ * already holds `--talk-name=chat.loft.ShellHelper` to drive FocusWindow/HideWindow and the
+ * panel menu. Shaped exactly like kdeDeps: read a property, then follow PropertiesChanged.
+ *
+ * Degrades to "unknown" (null), never to a confident "off": a user who declined the extension,
+ * or whose EGO-installed helper predates the property, gets today's behaviour rather than a
+ * wrong answer.
+ */
+export function shellHelperDeps(connect: HelperConnect = connectShellHelperDnd): SystemDndDeps {
+  let cached: boolean | null = null;
+  return {
+    current: () => cached,
+    watch(onChange) {
+      let stopped = false;
+      let cleanup = () => {};
+      void (async () => {
+        let source: HelperDndSource | undefined;
+        try {
+          source = await connect();
+          const emit = (v: boolean) => { cached = v; if (!stopped) onChange(v); };
+          // Read before subscribing, so the first value the caller sees is the current state
+          // rather than whichever change happened to land first.
+          emit(await source.read());
+          const unsubscribe = source.subscribe(emit);
+          const s = source;
+          cleanup = () => {
+            try { unsubscribe(); } catch { /* ignore */ }
+            try { s.close(); } catch { /* ignore */ }
+          };
+          if (stopped) cleanup(); // stop() fired during async setup — tear down what we just built
+        } catch (e) {
+          // Includes the missing/old-helper case. Close whatever connect() managed to open:
+          // a leaked session-bus connection under Flatpak keeps the instance alive, and this
+          // is the COMMON path for an out-of-date helper, not a rare one.
+          try { source?.close(); } catch { /* ignore */ }
+          console.debug('GNOME Shell helper system-DND unavailable:', (e as Error)?.message ?? e);
+        }
+      })();
+      return { stop: () => { stopped = true; cleanup(); } };
+    },
+  };
+}
+
+/**
+ * Live wiring for shellHelperDeps: the helper's SystemDnd property over the session bus.
+ *
+ * `name`/`path` are parameters only so a probe can point this at a stand-in helper under
+ * another bus name — the real extension owns chat.loft.ShellHelper, and gnome-shell cannot be
+ * restarted to load a modified one without ending the session. Production always uses the
+ * defaults.
+ */
+export async function connectShellHelperDnd(
+  name: string = HELPER_NAME,
+  path: string = HELPER_PATH,
+): Promise<HelperDndSource> {
+  const bus = dbus.sessionBus();
+  try {
+    const obj = await bus.getProxyObject(name, path);
+    const props = obj.getInterface('org.freedesktop.DBus.Properties') as unknown as {
+      Get(iface: string, prop: string): Promise<{ value: unknown }>;
+      on(ev: 'PropertiesChanged', cb: (iface: string, changed: Record<string, { value: unknown }>) => void): void;
+      off?(ev: 'PropertiesChanged', cb: (...a: unknown[]) => void): void;
+    };
+    return {
+      read: async () => Boolean((await props.Get(name, HELPER_DND_PROP)).value),
+      subscribe: (cb) => {
+        const handler = (iface: string, changed: Record<string, { value: unknown }>) => {
+          if (iface !== name) return;
+          const c = changed[HELPER_DND_PROP];
+          if (c) cb(Boolean(c.value));
+        };
+        props.on('PropertiesChanged', handler);
+        return () => { try { props.off?.('PropertiesChanged', handler as never); } catch { /* ignore */ } };
+      },
+      close: () => { try { bus.disconnect(); } catch { /* ignore */ } },
+    };
+  } catch (e) {
+    try { bus.disconnect(); } catch { /* ignore */ }
+    throw e;
+  }
+}
+
 const NOOP_DEPS: SystemDndDeps = { current: () => null, watch: () => ({ stop: () => {} }) };
 
-/** Pick the DND backend for the current desktop (KDE → Plasma, GNOME → gsettings, else none). */
+export type SystemDndBackend = 'kde' | 'gnome-gsettings' | 'gnome-shell-helper' | 'none';
+
+/**
+ * Which DND backend this desktop gets. Split out from defaultSystemDndDeps so the routing is
+ * testable without a live bus — the backends themselves each need one.
+ *
+ * GNOME splits on the sandbox. Unsandboxed keeps gsettings: proven, and it needs no extension.
+ * Under Flatpak gsettings cannot work and does not even fail loudly (it returns the schema
+ * default, a confident wrong "DND off" — see gnomeDeps), so it routes to the Shell helper,
+ * which is outside the sandbox and already reachable. It is also the only GNOME path that
+ * spawns no `gsettings monitor` child, which under Flatpak was its own unstartable-app bug.
+ */
+export function selectSystemDndBackend(env: NodeJS.ProcessEnv): SystemDndBackend {
+  if (isKde(env)) return 'kde'; // Inhibited rides org.freedesktop.Notifications: works sandboxed
+  if (isGnome(env)) return isFlatpak(env) ? 'gnome-shell-helper' : 'gnome-gsettings';
+  return 'none';
+}
+
+/** Build the DND backend for the current desktop. */
 export function defaultSystemDndDeps(env: NodeJS.ProcessEnv): SystemDndDeps {
-  if (isKde(env)) return kdeDeps();
-  // GNOME-under-Flatpak gets the no-op, not gnomeDeps(): the sandboxed gsettings read can
-  // only ever return the empty in-sandbox schema default (see the KNOWN LIMITATION above),
-  // so the backend is inert there — but its `gsettings monitor` child is not free. Node
-  // does not reap it, and a survivor holds bwrap open, leaving the flatpak instance alive
-  // and the app unstartable (GNOME activates the corpse instead of launching). Killing it
-  // at exit is no longer an option: the session-end handler has ~21ms under Flatpak and
-  // does nothing but exit (shutdown.ts). So don't start it. NOOP_DEPS.current() returns
-  // null — "unknown" — which is honest, where the sandboxed read would claim "DND off".
-  if (isGnome(env)) return isFlatpak(env) ? NOOP_DEPS : gnomeDeps();
-  return NOOP_DEPS;
+  switch (selectSystemDndBackend(env)) {
+    case 'kde': return kdeDeps();
+    case 'gnome-gsettings': return gnomeDeps();
+    case 'gnome-shell-helper': return shellHelperDeps();
+    default: return NOOP_DEPS;
+  }
 }
 
 export function watchSystemDnd(
