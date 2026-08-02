@@ -87,6 +87,16 @@
         <p>
           Bubbles have landed. Any chat, channel or room you keep coming back to can now live below your services as its own round button, showing that person's or group's picture with a small badge for the service it came from. Clicking it takes you straight there — waking the service first if it was asleep, and finding the conversation even when it has scrolled out of a long list. Pin from the titlebar's pin button, or by right-clicking a service in the rail. Works across WhatsApp, Messenger, Slack, Telegram, Element and NextCloud Talk.
         </p>
+        <p>
+          Also fixed in this release:
+        </p>
+        <ul>
+          <li>Signing back in to Messenger no longer throws you out to your web browser. The button that approves the login now stays in Loft, where it can actually finish.</li>
+          <li>Loft now notices when your whole system is set to Do Not Disturb on GNOME, so notifications stop arriving with it switched on. This needs the Loft GNOME extension installed and up to date.</li>
+          <li>Do Not Disturb is picked up on far more desktops. Loft used to look for it only on KDE.</li>
+          <li>The tray icon now appears on KDE and other desktops. GNOME was never affected, as it uses the Loft GNOME extension's panel button instead.</li>
+          <li>Element notifications now show the sender's picture.</li>
+        </ul>
       </description>
     </release>
     <release version="1.0.1" date="2026-07-25">
