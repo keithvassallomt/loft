@@ -173,7 +173,7 @@ modules:
       # Keith is the only person who can move them.
       - type: git
         url: https://github.com/keithvassallomt/loft.git
-        tag: v1.0.1
+        tag: v1.0.2
       # <<< app source <<<
       # Companion files land flat next to the manifest in the FriendlyHub build repo, so
       # this reference must stay a bare filename — hence the file lives at the repo root

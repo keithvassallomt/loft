@@ -82,6 +82,13 @@
   </screenshots>
 
   <releases>
+    <release version="1.0.2" date="2026-08-02">
+      <description>
+        <p>
+          Bubbles have landed. Any chat, channel or room you keep coming back to can now live below your services as its own round button, showing that person's or group's picture with a small badge for the service it came from. Clicking it takes you straight there — waking the service first if it was asleep, and finding the conversation even when it has scrolled out of a long list. Pin from the titlebar's pin button, or by right-clicking a service in the rail. Works across WhatsApp, Messenger, Slack, Telegram, Element and NextCloud Talk.
+        </p>
+      </description>
+    </release>
     <release version="1.0.1" date="2026-07-25">
       <description>
         <p>

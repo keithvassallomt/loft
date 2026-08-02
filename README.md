@@ -24,7 +24,8 @@ Loft is a self-contained Electron app — no separate browser to install or mana
 - Autostart at login, per service (opens minimized to tray)
 - Its own isolated login/session per service (no shared browser profile)
 - GNOME Shell integration (focus/hide bypasses focus-stealing prevention, hides minimized windows from alt-tab/overview/dock) and KDE Plasma integration (KWin scripting for the same)
-- Zoom controls and a custom titlebar per service window
+- Pin chats (or group messages/channels) to bubbles
+- Zoom controls
 
 ## Supported Services
 

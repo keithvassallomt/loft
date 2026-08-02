@@ -5,15 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.2] - 2026-08-02
 
 ### Added
 
 - **Pin a conversation to the rail.** Any chat, channel or room you keep coming back to can now live below your services as its own round button, showing that person's or group's picture with a small badge for the service it came from. Clicking it takes you straight there — waking the service first if it was asleep, and finding the conversation even when it has scrolled out of a long list. Pin from the titlebar's pin button, or by right-clicking a service in the rail. Works across WhatsApp, Messenger, Slack, Telegram, Element and NextCloud Talk.
-- **Pinned conversations show an unread dot.** A dot rather than a count, gated exactly like a service's own badge: nothing while that service is asleep or has badges switched off. Reading the chat anywhere clears it — including in the service's own tab, and including when the app is on your phone. A pinned conversation whose service isn't running is greyed out, so an absent dot never gets mistaken for "nothing new".
-- **Reorder pinned conversations by dragging them**, the same way service icons already reorder.
-- **Pinned conversations keep their picture up to date.** Previously the picture was fetched once, when you pinned, so a contact changing theirs never showed — and one that hadn't loaded yet stayed blank forever.
-- Conversations with no picture at all — most Slack channels — now show distinguishable initials on a stable colour instead of an identical blank circle. Slack channels keep their `#`.
 
 ### Fixed
 
@@ -22,7 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Do Not Disturb is now detected on more desktops.** Loft previously only looked for the system setting on KDE. It now asks every desktop's notification service, so any that answers — including several that were silently unsupported — works without Loft needing to know its name.
 - **The tray icon now appears on KDE and other desktops when running as a Flatpak.** To put an icon in the tray, Loft was first claiming a name on the desktop's message bus that the sandbox can never grant it — so the request was always refused and no icon ever appeared. It now registers with the tray in a way that needs no such permission. GNOME was unaffected, since it uses the Loft GNOME extension's panel button instead.
 - Element notifications now show the sender's picture. Element serves its images behind a login token that only the page itself holds, so Loft was asking for them without it and getting nothing back.
-- The Loft GNOME extension no longer fails to load entirely when one optional setting is missing from the system.
 
 ## [1.0.1] - 2026-07-25
 

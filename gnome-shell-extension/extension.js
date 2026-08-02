@@ -121,20 +121,12 @@ export default class LoftShellHelper extends Extension {
         // namespace. This extension runs inside gnome-shell, so it just reads the key — and Loft
         // already has talk access to this bus name. Without it Loft keeps emitting notifications
         // and, worse, in-page notification SOUNDS while the user has DND on.
-        // Isolated: DND is a nicety, but the panel menu and window activation are not. An
-        // exception escaping enable() would take those down too, so a missing schema costs
-        // only the property (Loft then reads "unknown", the same as an older helper).
-        this._notifySettings = null;
-        this._notifyChangedId = null;
-        this._systemDnd = false;
-        try {
-            this._notifySettings = new Gio.Settings({schema_id: NOTIFICATIONS_SCHEMA});
-            this._systemDnd = !this._notifySettings.get_boolean(SHOW_BANNERS_KEY);
-            this._notifyChangedId = this._notifySettings.connect(
-                `changed::${SHOW_BANNERS_KEY}`, () => this._onSystemDndChanged());
-        } catch (e) {
-            logError(e, `Loft: cannot read ${NOTIFICATIONS_SCHEMA}; system DND unavailable`);
-        }
+        //
+        // gnome-shell's own date menu opens this schema at startup, so it is always installed.
+        this._notifySettings = Gio.Settings.new(NOTIFICATIONS_SCHEMA);
+        this._systemDnd = !this._notifySettings.get_boolean(SHOW_BANNERS_KEY);
+        this._notifySettings.connectObject(
+            `changed::${SHOW_BANNERS_KEY}`, () => this._onSystemDndChanged(), this);
 
         const nodeInfo = Gio.DBusNodeInfo.new_for_xml(DBUS_IFACE);
         this._dbusId = Gio.DBus.session.register_object(
@@ -144,11 +136,9 @@ export default class LoftShellHelper extends Extension {
                 this._onMethodCall(method, params, invocation);
             },
             (connection, sender, path, iface, property) => {
-                // register_object takes explicit property closures; this used to be null,
-                // which is why the interface had no properties at all. Returning null makes
-                // the Get fail, which Loft reads as "unknown" — the honest answer when the
-                // key could not be opened, and never a confident "DND off".
-                if (property === 'SystemDnd' && this._notifySettings)
+                // register_object needs an explicit property closure — unlike
+                // Gio.DBusExportedObject it synthesises no getters of its own.
+                if (property === 'SystemDnd')
                     return new GLib.Variant('b', this._systemDnd);
                 return null;
             },
@@ -166,25 +156,28 @@ export default class LoftShellHelper extends Extension {
         this._injectionManager = new InjectionManager();
         this._injectionManager.overrideMethod(
             AppSwitcherPopup.prototype, '_init',
-            originalMethod => /** @this {AppSwitcherPopup} */ function (...args) {
-                originalMethod.call(this, ...args);
-                for (const item of [...this._items]) {
-                    const before = item.cachedWindows.length;
-                    item.cachedWindows = item.cachedWindows.filter(
-                        w => !isMinimizedLoftWindow(w, titleKeys));
-                    if (before > 0 && item.cachedWindows.length === 0)
-                        this._switcherList._removeIcon(item.app);
-                }
-            });
+            originalMethod =>
+                /**
+                 * @param {...any} args
+                 * @this {AppSwitcherPopup}
+                 */
+                function (...args) {
+                    originalMethod.call(this, ...args);
+                    for (const item of [...this._items]) {
+                        const before = item.cachedWindows.length;
+                        item.cachedWindows = item.cachedWindows.filter(
+                            w => !isMinimizedLoftWindow(w, titleKeys));
+                        if (before > 0 && item.cachedWindows.length === 0)
+                            this._switcherList._removeIcon(item.app);
+                    }
+                });
     }
 
     disable() {
         this._injectionManager.clear();
         this._injectionManager = null;
 
-        if (this._notifyChangedId)
-            this._notifySettings.disconnect(this._notifyChangedId);
-        this._notifyChangedId = null;
+        this._notifySettings.disconnectObject(this);
         this._notifySettings = null;
 
         this._unregisterCombined();
@@ -204,8 +197,6 @@ export default class LoftShellHelper extends Extension {
     // is announced with the standard PropertiesChanged — register_object does not emit that for
     // us the way Gio.DBusExportedObject would, hence the manual signal.
     _onSystemDndChanged() {
-        if (!this._notifySettings)
-            return;
         const dnd = !this._notifySettings.get_boolean(SHOW_BANNERS_KEY);
         if (dnd === this._systemDnd)
             return;
