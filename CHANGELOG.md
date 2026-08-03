@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Development tooling only — no released build of Loft was affected. `npm run dev` cloned the installed app's profile to inherit real logins, including WhatsApp's and Element's. Those are linked-device identities rather than logins, so the clone was a second copy of one device; running it forked that device's encryption state and made messages go missing and sends fail silently in the real install. Those two are no longer cloned.
+
 ## [1.0.2] - 2026-08-02
 
 ### Added
