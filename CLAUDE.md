@@ -237,6 +237,15 @@ npm run whatsapp   # also: messenger, slack, telegram, element, talk
 # Run the working-tree build against the INSTALLED FLATPAK's profile, so a dev session
 # inherits real logins instead of asking for a QR scan every time. The whole mechanism is
 # XDG_CONFIG_HOME/XDG_DATA_HOME (see scripts/devProfile.mjs) — no dev branch in the app.
+#
+# WhatsApp's and Element's partitions are deliberately NOT inherited (UNCLONABLE_KINDS in
+# scripts/devProfile.mjs): a partition is a copy of a login only for cookie-authenticated
+# services. For those two it is a copy of a Signal/Olm DEVICE IDENTITY whose state advances
+# with every message, so a clone is a second copy of ONE device, not a second device. The two
+# halves fork on the first message either handles, and the damage lands on the REAL install —
+# messages silently missing, and sends dropped by every recipient including your own phone.
+# Sequential use is no safer than concurrent: the forked state is server- and peer-side, not
+# in the files. The dev instance links its own device (one QR scan, kept across --refresh).
 npm run dev                        # copy-on-write clone of the Flatpak profile (safe; can
                                    # run alongside the Flatpak). Args pass through:
 npm run dev -- --service=whatsapp  #   e.g. straight into a service for a DevTools spike
