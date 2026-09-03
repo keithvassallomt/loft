@@ -89,12 +89,25 @@
        choosing "On login" never claims something that isn't happening. Gated on this
        service's own mode so it only appears to someone it actually affects. -->
   {#if svc.autoOpen === 'login' && hubState.globals.autostartBlocked}
-    <!-- "Run in Background" is the real control: GNOME's Apps panel has no autostart
-         row (cc-applications-panel only exposes the portal's `background` permission),
-         and the Background portal bundles the autostart grant into it. -->
+    <!-- Where to send the user differs by packaging AND desktop; main decides which
+         (autostartFixFor), because only main knows both. Do not collapse these back into
+         one sentence: this warning used to tell every user to open "Settings > Apps > Loft",
+         which exists on GNOME and nowhere else. -->
     <p class="warn">
       Loft isn't allowed to start at login, so this won't take effect.
-      Turn on “Run in Background” in Settings → Apps → Loft.
+      {#if hubState.globals.autostartFix === 'gnome'}
+        <!-- "Run in Background" is the real control: GNOME's Apps panel has no autostart
+             row (cc-applications-panel only exposes the portal's `background` permission),
+             and the Background portal bundles the autostart grant into it. -->
+        Turn on “Run in Background” in Settings → Apps → Loft.
+      {:else if hubState.globals.autostartFix === 'flatpak'}
+        Your desktop has no settings panel for this. Allow it with Flatseal (Background
+        → Run in background), or run:
+        <code>flatpak permission-set background background chat.loft.Loft yes</code>
+      {:else}
+        Loft could not write its autostart entry. Check that
+        <code>~/.config/autostart</code> exists and is writable.
+      {/if}
     </p>
   {/if}
   <label class="toggle">
@@ -140,6 +153,11 @@
   .radio span { display: flex; flex-direction: column; gap: 1px; }
   .radio em { opacity: 0.6; font-style: normal; font-size: 0.85em; }
   .warn { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid #e5a50a; background: #e5a50a1a; font-size: 0.9em; }
+  /* A command the user has to retype is a command they get wrong: keep it selectable
+     on its own line rather than wrapped into the prose. */
+  .warn code { display: block; margin-top: 8px; padding: 6px 8px; border-radius: 6px;
+    background: #00000014; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; user-select: all; overflow-wrap: anywhere; }
   .danger { margin-top: 24px; border: 0; border-radius: 999px; padding: 8px 18px; background: #c01c28; color: #fff; cursor: pointer; }
   .remove-msg { margin: 0 0 12px; }
   .checkbox { display: flex; align-items: center; gap: 8px; }

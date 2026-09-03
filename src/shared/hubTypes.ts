@@ -41,7 +41,21 @@ export interface HubKind {
   instanceCount: number;
 }
 
-export interface HubGlobals { trayBackend: TrayBackend; autostartBlocked: boolean; debug: boolean; iconEpoch: number }
+/**
+ * Which remediation the autostartBlocked warning should offer. Decided in main
+ * (autostartFixFor), because only main knows whether this is a Flatpak and which desktop it
+ * is running on; the wording lives in the renderer with the rest of the UI copy.
+ */
+export type AutostartFix = 'gnome' | 'flatpak' | 'native';
+
+export interface HubGlobals {
+  trayBackend: TrayBackend;
+  autostartBlocked: boolean;
+  /** Only meaningful while autostartBlocked is true. */
+  autostartFix: AutostartFix;
+  debug: boolean;
+  iconEpoch: number;
+}
 export interface HubState { services: HubService[]; kinds: HubKind[]; globals: HubGlobals; }
 
 /** Result of an operation the user can get wrong. */

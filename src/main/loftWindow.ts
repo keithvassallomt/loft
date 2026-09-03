@@ -626,6 +626,8 @@ export function createLoftWindow(deps: LoftWindowDeps): LoftWindow {
         // would let a background service grey out the button for the one on screen.
         setCanPin: () => {},
         notifyClick: (n, e) => sv.notifyClick(n, e),
+        pingHealth: () => sv.pingHealth(),
+        isAudible: () => sv.isAudible(),
         loadUrl: (u) => sv.loadUrl(u),
         reload: () => sv.reload(),
         clearAndReload: () => sv.clearAndReload(),

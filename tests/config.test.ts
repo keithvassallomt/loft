@@ -1,8 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, existsSync,
+  chmodSync, statSync, utimesSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadConfig, saveConfig, defaultConfig, reopenDetachedEnabled, effectiveAutoOpen } from '../src/main/config';
+import {
+  loadConfig, saveConfig, defaultConfig, reopenDetachedEnabled, effectiveAutoOpen,
+  loadConfigResult, backupConfigPath, cleanupConfigTemps,
+} from '../src/main/config';
 import { bubbleId } from '../src/main/bubbles';
 
 let dir: string;
@@ -20,21 +26,39 @@ describe('config', () => {
     saveConfig(p, cfg);
     expect(loadConfig(p)).toEqual(cfg);
   });
-  it('returns the default config when the file is corrupt', () => {
+  // A corrupt file must NOT look like a first run. Returning defaults here is what let a
+  // single bad read be committed over every setting by the next window-bounds flush.
+  it('throws rather than returning defaults when the file is corrupt', () => {
     const p = join(dir, 'bad.json');
     saveConfig(p, defaultConfig());
-    require('node:fs').writeFileSync(p, '{ not json');
-    expect(loadConfig(p)).toEqual(defaultConfig());
+    writeFileSync(p, '{ not json', 'utf8');
+    expect(() => loadConfig(p)).toThrow();
   });
-  it('returns the default config when services is a string', () => {
+  it('throws when services is a string', () => {
     const p = join(dir, 'string-services.json');
     writeFileSync(p, '{"services":"not-an-object"}', 'utf8');
-    expect(loadConfig(p)).toEqual(defaultConfig());
+    expect(() => loadConfig(p)).toThrow(/services/);
   });
-  it('returns the default config when services is an array', () => {
+  it('throws when services is an array', () => {
     const p = join(dir, 'array-services.json');
     writeFileSync(p, '{"services":[1,2,3]}', 'utf8');
-    expect(loadConfig(p)).toEqual(defaultConfig());
+    expect(() => loadConfig(p)).toThrow(/services/);
+  });
+  it('throws when the root is not an object', () => {
+    const p = join(dir, 'root-array.json');
+    writeFileSync(p, '[1,2,3]', 'utf8');
+    expect(() => loadConfig(p)).toThrow(/root/);
+  });
+  it('treats an absent services key as empty rather than as a failure', () => {
+    const p = join(dir, 'no-services.json');
+    writeFileSync(p, '{"globalDnd":true}', 'utf8');
+    expect(loadConfig(p)).toEqual({ services: {}, globalDnd: true });
+  });
+  it('surfaces a read failure that is not ENOENT', () => {
+    // A directory where the file should be: EISDIR on read, i.e. "there is something here
+    // and I could not read it" — never a first run.
+    mkdirSync(join(dir, 'isdir.json'));
+    expect(() => loadConfig(join(dir, 'isdir.json'))).toThrow();
   });
   it('preserves trayBackend field when valid', () => {
     const p = join(dir, 'with-tray.json');
@@ -259,5 +283,181 @@ describe('bubbles in config', () => {
     expect(loadConfig(p).bubbles).toEqual([
       { id: bubbleId('slack', 'C1'), serviceId: 'slack', key: 'C1', title: 'good' },
     ]);
+  });
+});
+
+
+/**
+ * The fixture the regression is really about: a POPULATED config. Asserting only that the
+ * service ids survive would have passed all through the incident that motivated this — what
+ * was lost was every per-service and top-level setting alongside them.
+ */
+const POPULATED = {
+  services: {
+    whatsapp: { autoOpen: 'login', dnd: true, badgesEnabled: false },
+    slack: {
+      autoOpen: 'launch',
+      detached: true,
+      launcher: true,
+      window: { x: 100, y: 100, width: 1200, height: 800, zoom: 1.1 },
+    },
+    messenger: { name: 'Personal', icon: 'rose' },
+  },
+  globalDnd: true,
+  trayBackend: 'sni',
+  reopenDetached: false,
+  railOrder: ['slack', 'whatsapp', 'messenger'],
+  configVersion: 2,
+} as const;
+
+describe('loadConfigResult', () => {
+  it('reports a missing file with no backup as a first run', () => {
+    const r = loadConfigResult(join(dir, 'nope.json'));
+    expect(r.status).toBe('missing');
+    expect(r.status === 'missing' && r.config).toEqual(defaultConfig());
+  });
+
+  it('reports a readable file as loaded, with every field intact', () => {
+    const p = join(dir, 'config.json');
+    writeFileSync(p, JSON.stringify(POPULATED), 'utf8');
+    const r = loadConfigResult(p);
+    expect(r.status).toBe('loaded');
+    expect(r.status === 'loaded' && r.config).toEqual(POPULATED);
+  });
+
+  it('reports truncated JSON as an error, not as defaults', () => {
+    const p = join(dir, 'config.json');
+    writeFileSync(p, JSON.stringify(POPULATED).slice(0, 40), 'utf8');
+    expect(loadConfigResult(p).status).toBe('error');
+  });
+
+  it('reports a permissions failure as an error', () => {
+    // Skipped as root, which reads anything regardless of mode.
+    if (process.getuid?.() === 0) return;
+    const p = join(dir, 'config.json');
+    writeFileSync(p, JSON.stringify(POPULATED), 'utf8');
+    chmodSync(p, 0o000);
+    try {
+      expect(loadConfigResult(p).status).toBe('error');
+    } finally {
+      chmodSync(p, 0o600);
+    }
+  });
+
+  it('recovers a malformed primary from the backup', () => {
+    const p = join(dir, 'config.json');
+    writeFileSync(p, '{ truncated', 'utf8');
+    writeFileSync(backupConfigPath(p), JSON.stringify(POPULATED), 'utf8');
+    const r = loadConfigResult(p);
+    expect(r.status).toBe('recovered');
+    expect(r.status === 'recovered' && r.config).toEqual(POPULATED);
+    expect(r.status === 'recovered' && r.source).toBe('backup');
+    expect(r.status === 'recovered' && r.originalError).toBeInstanceOf(Error);
+  });
+
+  it('recovers rather than treating a vanished primary as a first run', () => {
+    const p = join(dir, 'config.json');
+    writeFileSync(backupConfigPath(p), JSON.stringify(POPULATED), 'utf8');
+    const r = loadConfigResult(p);
+    expect(r.status).toBe('recovered');
+    expect(r.status === 'recovered' && r.config).toEqual(POPULATED);
+  });
+
+  it('errors when neither the primary nor the backup is usable', () => {
+    const p = join(dir, 'config.json');
+    writeFileSync(p, '{ truncated', 'utf8');
+    writeFileSync(backupConfigPath(p), 'also { broken', 'utf8');
+    expect(loadConfigResult(p).status).toBe('error');
+  });
+});
+
+describe('saveConfig (atomic)', () => {
+  it('preserves every top-level and per-service field across a save', () => {
+    const p = join(dir, 'config.json');
+    writeFileSync(p, JSON.stringify(POPULATED), 'utf8');
+    const cfg = loadConfig(p);
+    saveConfig(p, cfg);
+    expect(loadConfig(p)).toEqual(POPULATED);
+  });
+
+  it('leaves the original untouched when the temp write fails', () => {
+    const p = join(dir, 'sub', 'config.json');
+    saveConfig(p, { services: { slack: { dnd: true } } });
+    const before = readFileSync(p, 'utf8');
+    // A cyclic value: JSON.stringify throws BEFORE anything is opened, which is the whole
+    // point of serializing first.
+    const cyclic: Record<string, unknown> = { services: {} };
+    cyclic.self = cyclic;
+    expect(() => saveConfig(p, cyclic as never)).toThrow();
+    expect(readFileSync(p, 'utf8')).toBe(before);
+  });
+
+  it('leaves the original untouched when the directory is read-only', () => {
+    if (process.getuid?.() === 0) return;
+    const sub = join(dir, 'ro');
+    const p = join(sub, 'config.json');
+    saveConfig(p, { services: { slack: { dnd: true } } });
+    const before = readFileSync(p, 'utf8');
+    chmodSync(sub, 0o500);
+    try {
+      expect(() => saveConfig(p, defaultConfig())).toThrow();
+      expect(readFileSync(p, 'utf8')).toBe(before);
+    } finally {
+      chmodSync(sub, 0o700);
+    }
+  });
+
+  it('leaves no temp file behind, on success or on failure', () => {
+    if (process.getuid?.() === 0) return;
+    const sub = join(dir, 'tmp-check');
+    const p = join(sub, 'config.json');
+    saveConfig(p, defaultConfig());
+    expect(readdirSync(sub).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+    chmodSync(sub, 0o500);
+    try { saveConfig(p, defaultConfig()); } catch { /* expected */ }
+    chmodSync(sub, 0o700);
+    expect(readdirSync(sub).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('never exposes a partially written config to a concurrent reader', () => {
+    // rename() is atomic within a directory, so every read lands on one whole file. Written
+    // as a real interleaving rather than asserting on the implementation: a reader that
+    // polls throughout a burst of saves must never see anything but valid, complete JSON.
+    const p = join(dir, 'config.json');
+    saveConfig(p, defaultConfig());
+    for (let i = 0; i < 50; i += 1) {
+      saveConfig(p, { services: { slack: { window: { x: i, y: i, width: 800, height: 600, zoom: 1 } } } });
+      expect(() => loadConfig(p)).not.toThrow();
+    }
+    expect(loadConfig(p).services.slack.window?.x).toBe(49);
+  });
+
+  it('preserves the existing file mode', () => {
+    if (process.getuid?.() === 0) return;
+    const p = join(dir, 'config.json');
+    saveConfig(p, defaultConfig());
+    chmodSync(p, 0o600);
+    saveConfig(p, { services: { slack: {} } });
+    expect(statSync(p).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe('cleanupConfigTemps', () => {
+  it('removes only our own stale temp files', () => {
+    const p = join(dir, 'config.json');
+    saveConfig(p, defaultConfig());
+    const mine = join(dir, '.config.json.999.1.tmp');
+    const theirs = join(dir, 'something-else.tmp');
+    const fresh = join(dir, '.config.json.999.2.tmp');
+    for (const f of [mine, theirs, fresh]) writeFileSync(f, 'x', 'utf8');
+    const old = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    utimesSync(mine, old, old);
+    utimesSync(theirs, old, old);
+
+    expect(cleanupConfigTemps(p)).toEqual([mine]);
+    expect(existsSync(mine)).toBe(false);
+    expect(existsSync(theirs)).toBe(true);
+    expect(existsSync(fresh)).toBe(true);
+    expect(existsSync(p)).toBe(true);
   });
 });

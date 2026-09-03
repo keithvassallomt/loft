@@ -48,6 +48,13 @@ export interface ServiceHost {
   setCanPin(canPin: boolean): void;
   /** Replay a notification click into the page's own handler (notification click). */
   notifyClick(notifyId: number, epoch: string): void;
+  /** Ask this service's page for a liveness snapshot (see liveness.ts). The answer comes
+   *  back over the `service:health` IPC channel, routed by webContents like every other
+   *  page->main message. Page-shaped, not window-shaped: a rail tab answers it too. */
+  pingHealth(): void;
+  /** Is this service's page making sound — i.e. in a call? The liveness monitor refuses to
+   *  reload one that is. */
+  isAudible(): boolean;
   /** Navigate, hiding any stale recovery overlay and re-arming stuck detection. */
   loadUrl(url: string): void;
   /** Reload and re-arm stuck detection. */

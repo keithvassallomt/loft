@@ -1,7 +1,7 @@
 import type { ServiceKind } from './registry';
 import type { ServiceInstance } from './instances';
 import { effectiveAutoOpen, type LoftConfig } from './config';
-import type { HubState, TrayBackend } from '../shared/hubTypes';
+import type { AutostartFix, HubState, TrayBackend } from '../shared/hubTypes';
 
 export interface HubStateDeps {
   instances: readonly ServiceInstance[];
@@ -15,6 +15,8 @@ export interface HubStateDeps {
   trayBackend: TrayBackend;
   /** True when services asked to open at login but no autostart entry exists (e.g. the portal denied). */
   autostartBlocked: boolean;
+  /** Which remediation to offer for that — it differs by packaging and desktop. */
+  autostartFix: AutostartFix;
   /** Icon cache-buster (see HubGlobals.iconEpoch): the hub's own service list renders
    *  loft://icon/<id> and would otherwise keep the cached image after an icon change. */
   iconEpoch: number;
@@ -56,6 +58,7 @@ export function buildHubState(deps: HubStateDeps): HubState {
     globals: {
       trayBackend: deps.trayBackend,
       autostartBlocked: deps.autostartBlocked,
+      autostartFix: deps.autostartFix,
       debug: deps.config.debug === true,
       iconEpoch: deps.iconEpoch,
     },

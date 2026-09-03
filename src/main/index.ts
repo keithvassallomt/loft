@@ -1,11 +1,12 @@
-import { app, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, session } from 'electron';
+import { app, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, powerMonitor, protocol, session } from 'electron';
 import { readFile } from 'node:fs/promises';
 import { existsSync, mkdirSync, writeFileSync, rmSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
 import { getKind, KINDS, ServiceKind, effectiveUrl } from './registry';
-import { loadConfig, saveConfig, configPath, LoftConfig, reopenDetachedEnabled, effectiveAutoOpen } from './config';
+import { configPath, backupConfigPath, corruptConfigPath, LoftConfig, reopenDetachedEnabled, effectiveAutoOpen } from './config';
+import { openConfigStore, notLoadedStore } from './configStore';
 import { createServiceWindow, ServiceWindow } from './serviceWindow';
 import { createLoftWindow, LOFT_WINDOW_KEY, type LoftWindow } from './loftWindow';
 import type { ServiceHost } from './serviceHost';
@@ -25,9 +26,10 @@ import { watchAppearance, type AppearanceWatcher } from './appearance';
 import { buildHubState } from './hubState';
 import { registerHubIpc } from './hubIpc';
 import { addInstance, removeInstance } from './install';
-import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart } from './autostart';
+import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart, autostartFixFor } from './autostart';
 import { createSignalShutdown } from './shutdown';
 import { createDebouncedFlush } from './configFlush';
+import { createLivenessMonitor, createWakeDetector, type LivenessMonitor, type WakeDetector } from './liveness';
 import { ensureHubDesktopEntry, writeServiceLauncher, removeServiceLauncher, reconcileServiceLaunchers, serviceLauncherPath, deployInstanceIcon } from './desktop';
 import {
   dbusSegmentFor, listInstances, resolveInstance, validateInstanceName, nameErrorMessage,
@@ -59,6 +61,7 @@ import { computeGridLayout, splittableSizes, hasSplittableCell } from './gridLay
 import { beginGutterDrag, type GutterDrag } from './gutterDrag';
 import { gridDropPlan, type GridDropPlan } from './gridDrop';
 import type { HubState, ServicePatch } from '../shared/hubTypes';
+import type { HealthSnapshot } from '../shared/health';
 
 // A "service" is an ACCOUNT now. Every call site below reads the same fields it always
 // did; what changed is that `id` names an account and `displayName` is the user's.
@@ -75,6 +78,21 @@ Menu.setApplicationMenu(null);
 const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
 app.setPath('userData', join(dataHome, 'loft'));
 
+/**
+ * Single-instance lock. Taken HERE — immediately after userData is set (Electron keys the
+ * lock off that path, so it cannot move above it) and, critically, BEFORE anything reads or
+ * writes config.json.
+ *
+ * The ordering is load-bearing, not tidiness. A second launch used to load, prune and
+ * sometimes SAVE the shared config on its way to app.quit(), so two processes could be in
+ * that file at once — and a second instance that read it while the primary was mid-write
+ * saw a truncated file, fell back to defaults, and had a chance to write them back. Now a
+ * secondary never opens the file at all: it gets notLoadedStore(), routes its argv to the
+ * primary through 'second-instance', and exits.
+ */
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) app.quit();
+
 // Custom scheme the hub renderer uses for service/app icons (keeps img-src 'self'
 // clean and avoids file:// path juggling). Registered as privileged so it can load
 // from the renderer under CSP.
@@ -86,6 +104,10 @@ let quitting = false;
 let tray: Tray | undefined;
 let notifications: Notifications | undefined;
 let bgStatus: { refresh(): void } | undefined;
+// Keeps loaded services actually connected across standby/offline (see liveness.ts). Both
+// are held so releaseOsResources can stop their timers on the in-app quit path.
+let liveness: LivenessMonitor | undefined;
+let wakeDetector: WakeDetector | undefined;
 // Follows the desktop light/dark preference and drives nativeTheme.themeSource (see the
 // whenReady startup). Held so releaseOsResources can stop its portal D-Bus connection.
 let appearanceWatcher: AppearanceWatcher | undefined;
@@ -161,7 +183,13 @@ function serviceIconPath(id: string): string {
   return candidates.find((p) => existsSync(p)) ?? candidates[candidates.length - 1];
 }
 
-const config: LoftConfig = loadConfig(configPath());
+/**
+ * The single gate on config.json (see configStore.ts). Every write in this file goes through
+ * `configStore.save()`, which is INERT when the config on disk could not be read — that is
+ * what stops an unreadable config from being replaced by defaults.
+ */
+const configStore = isPrimaryInstance ? openConfigStore(configPath()) : notLoadedStore();
+const config: LoftConfig = configStore.config;
 
 /**
  * Debounced disk flush for window bounds/zoom — the one config field that used to reach
@@ -178,7 +206,7 @@ const config: LoftConfig = loadConfig(configPath());
  * view hoist — keep it above every use.
  */
 const boundsFlush = createDebouncedFlush({
-  save: () => saveConfig(configPath(), config),
+  save: () => configStore.save(),
   delayMs: 400,
 });
 
@@ -217,16 +245,18 @@ const wantsOwnWindow = (id: string): boolean =>
  * config with a clean grid (or no `grid` key at all) is never rewritten.
  */
 const gridBefore = config.grid ?? null;
-const gridPruned = prune(
+// Skipped entirely for a secondary instance: its `config` is a placeholder default, so a
+// prune here would be reasoning about settings it deliberately never read.
+const gridPruned = isPrimaryInstance ? prune(
   gridBefore,
   validGridServices(listServices(), (id) => config.services[id] !== undefined, wantsOwnWindow),
-);
+) : gridBefore;
 if (gridPruned !== gridBefore) {
   config.grid = gridPruned;
   console.log('Pruned grid leaves for removed or detached services');
   // In-memory is what this launch renders; a failed write only costs the next launch the
   // same prune, so an unwritable config must not take startup down with it.
-  try { saveConfig(configPath(), config); }
+  try { configStore.save(); }
   catch (err) { console.error('Failed to persist pruned grid:', err); }
 }
 
@@ -237,7 +267,9 @@ if (gridPruned !== gridBefore) {
  * nothing anywhere to say why. Naming the ids is the whole fix; nothing is removed, because
  * the entry is harmless and a future/rolled-back registry may well claim it again.
  */
-const phantomServices = Object.keys(config.services).filter((id) => !getService(id));
+const phantomServices = isPrimaryInstance
+  ? Object.keys(config.services).filter((id) => !getService(id))
+  : [];
 if (phantomServices.length > 0) {
   console.warn(
     `Ignoring unknown service(s) in config.json: ${phantomServices.join(', ')} — no such service kind`,
@@ -289,7 +321,7 @@ function pinConversation(serviceId: string): void {
   const after = addBubble(before, serviceId, conv.key, conv.title);
   if (after.length === before.length) return; // already pinned; pinning is idempotent
   config.bubbles = after;
-  saveConfig(configPath(), config);
+  configStore.save();
   loft?.refreshRail();
   // The avatar is fetched AFTER the bubble is on the rail: it appears immediately showing
   // initials, and bumping the epoch is what makes it re-fetch once the file lands. Pinning
@@ -394,6 +426,7 @@ function hubState(): HubState {
     badge: (id) => currentBadge.get(id) ?? 0,
     trayBackend: config.trayBackend ?? 'auto',
     autostartBlocked: wantsAutostart(config.services) && !isAutostartEnabled(),
+    autostartFix: autostartFixFor(),
     iconEpoch,
   });
 }
@@ -494,7 +527,7 @@ function placeService(def: ServiceKind, minimized: boolean): ServiceHost {
   let inst = getService(def.id);
   if (!inst) {
     inst = addInstance(def, config, { iconSourceDir });
-    saveConfig(configPath(), config);
+    configStore.save();
   }
   // No Loft window yet ⇒ its own window is the only host that exists. Reachable for real:
   // `second-instance` is bound at module scope, while whenReady can sit for minutes on
@@ -598,7 +631,7 @@ function toggleService(id: string): void {
 // Persist a service's DND to config immediately (survives a kill before before-quit).
 function setServiceDnd(id: string, enabled: boolean): void {
   config.services[id] = { ...config.services[id], dnd: enabled };
-  saveConfig(configPath(), config);
+  configStore.save();
   loft?.refreshRail();
   notifyHub();
 }
@@ -617,7 +650,7 @@ function setServiceSetting(id: string, patch: ServicePatch): void {
     delete c.openOnStartup;
     if (autoOpen === 'disabled') delete c.autoOpen; else c.autoOpen = autoOpen;
   }
-  saveConfig(configPath(), config);
+  configStore.save();
   // No hostOf(id)?.pushDnd(patch.dnd) here: setServiceDnd already pushes the EFFECTIVE
   // value (system || global || this service) into the page, and re-pushing the raw flag
   // on top of it would tell a page that global DND is off whenever a service's own DND
@@ -720,7 +753,7 @@ function setDetached(id: string, v: boolean): void {
   }
 
   config.services[id] = { ...config.services[id], detached: v };
-  saveConfig(configPath(), config);
+  configStore.save();
 
   if (loaded) {
     // Place where the user just asked (reopenDetached governs STARTUP only), handing the
@@ -823,7 +856,7 @@ function addToGrid(id: string): void {
   // nothing.
   if (next === config.grid) return;
   config.grid = next;
-  saveConfig(configPath(), config);
+  configStore.save();
   // Selecting the grid wakes the new leaf (placeGridCells → ensureAttached) and repaints
   // every chrome view on the way out, including the rail's cell count — nothing else to
   // refresh here. Unconditional: the grid is normally already the selection (the ＋ lives
@@ -888,7 +921,7 @@ function syncActiveTab(_activeId: string | undefined): void {
 // Global DND: persist + reflect in the tray (notification gating is Stage 3b).
 function setGlobalDnd(enabled: boolean): void {
   config.globalDnd = enabled;
-  saveConfig(configPath(), config);
+  configStore.save();
   tray?.setGlobalDnd(enabled);
   notifyHub();
 }
@@ -896,6 +929,11 @@ function setGlobalDnd(enabled: boolean): void {
 // Autostart is derived, not a setting: the entry exists iff some service asked to
 // open at login. Called after anything that can change that answer.
 function reconcileAutostart(): void {
+  // Never derive autostart from a config we could not read. `config` is placeholder defaults
+  // in that state, so wantsAutostart() answers false for everyone and this would DELETE the
+  // user's real login entry — a read failure quietly changing behaviour outside config.json,
+  // where no amount of not-saving can undo it.
+  if (!configStore.writable) return;
   // Gated on out-of-sync (wants vs. isAutostartEnabled()) so every call site gets
   // this for free — this debounces the *success* case only: ticking a second
   // service's "open on startup" when a first one already granted autostart is a
@@ -955,11 +993,10 @@ function titlebarTarget(senderId: number): ServiceHost | undefined {
   return id ? loft!.hostOf(id) : undefined;
 }
 
-// Single-instance: a second launch routes its --service to us; the second process
-// hits app.quit() below and never registers the owner handlers.
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
-} else {
+// Single-instance: a second launch routes its --service to us; the second process already
+// hit app.quit() where the lock was taken (above app's config access) and never registers
+// the owner handlers.
+if (isPrimaryInstance) {
   app.on('second-instance', (_e, argv) => {
     // A manual second launch loads the "On launching Loft" set (unless it is itself
     // --minimized). Most reveals below funnel through loft.open()'s onOpen, but a launch that
@@ -1048,7 +1085,7 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on('grid:removeCell', (_e, service?: unknown) => {
     if (typeof service !== 'string') return;
     loft?.dropFromGrid(service);
-    saveConfig(configPath(), config);
+    configStore.save();
     // The service keeps running and stays in the rail — only its cell goes. refreshRail is
     // the whole-chrome refresh (refreshAll), which is what this needs and refreshGrid alone
     // would not give: the rail's Grid entry renders the cell COUNT, and it just changed.
@@ -1163,7 +1200,7 @@ if (!app.requestSingleInstanceLock()) {
     const x = typeof p?.x === 'number' ? p.x : undefined;
     const y = typeof p?.y === 'number' ? p.y : undefined;
     if (gutterDrag && x !== undefined && y !== undefined) applyGutterDrag(gutterDrag.end, x, y);
-    if (gutterDrag?.moved()) saveConfig(configPath(), config);
+    if (gutterDrag?.moved()) configStore.save();
     // The cell move, committed in one step here. Releasing over a gutter or outside the grid
     // CANCELS, and so does a drop on the dragged cell itself: planCellMove returns null for
     // all of them, and null means the tree is left exactly as it was. It does not remove and
@@ -1173,7 +1210,7 @@ if (!app.requestSingleInstanceLock()) {
       const plan = planCellMove(x, y, cellDrag.id);
       if (plan) {
         config.grid = plan.next;
-        saveConfig(configPath(), config);
+        configStore.save();
         // refreshGrid, not showGrid: the grid is already the selection — this gesture began
         // in its own chrome view — and every leaf already has a live view, so there is
         // nothing to wake. It re-places the pages into their new cells (placeGridCells) as
@@ -1189,10 +1226,10 @@ if (!app.requestSingleInstanceLock()) {
   // gutter — a plain hover. The moves already applied are persisted rather than reverted:
   // the user watched the pages move, so the arrangement on screen is the one that should
   // survive a restart, and leaving it unsaved only defers the write to the next unrelated
-  // saveConfig — committing it later, with no gesture to explain it. A gesture that never
+  // configStore.save() — committing it later, with no gesture to explain it. A gesture that never
   // moved wrote nothing, so there is nothing to persist.
   ipcMain.on('grid:dragCancel', () => {
-    if (gutterDrag?.moved()) saveConfig(configPath(), config);
+    if (gutterDrag?.moved()) configStore.save();
     // A cancelled cell move has nothing to persist or revert: the tree is only touched on
     // release, so an aborted one leaves it untouched by construction. What it does need is
     // clearGridDrag's showDropPreview(null) — the preview overlay covers the whole content
@@ -1217,7 +1254,7 @@ if (!app.requestSingleInstanceLock()) {
 
   const setRailOrder = (ids: string[]): void => {
     config.railOrder = ids;
-    saveConfig(configPath(), config);
+    configStore.save();
     loft?.refreshRail();
   };
 
@@ -1325,7 +1362,7 @@ if (!app.requestSingleInstanceLock()) {
         // never edits the tree (only detach/unload prune it), so plan.next is still current.
         if (isDetached(m.id)) setDetached(m.id, false);
         config.grid = plan.next;
-        saveConfig(configPath(), config);
+        configStore.save();
         // showGrid, not refreshGrid: re-attaching a detached service above can hand the
         // selection to that service's own tab (setDetached → showService when its window
         // was on screen), and the drop must still land the user on the grid. Re-selecting
@@ -1435,7 +1472,7 @@ if (!app.requestSingleInstanceLock()) {
       // account can land on an id whose old icon is still in Chromium's cache — bump so the
       // rail/hub re-fetch under the fresh ?e=<n>.
       iconEpoch += 1;
-      saveConfig(configPath(), config);
+      configStore.save();
       // A new account must reach the tray and D-Bus now — not at next launch. Before
       // instances, adding a service was rare enough that waiting was invisible; adding
       // a second WhatsApp and finding it missing from the tray menu is not.
@@ -1464,7 +1501,7 @@ if (!app.requestSingleInstanceLock()) {
       config.bubbles = removeServiceBubbles(config.bubbles ?? [], id);
       if (config.bubbles.length === 0) delete config.bubbles;
       removeInstance(inst, config, deleteData);
-      saveConfig(configPath(), config);
+      configStore.save();
       dbusApi?.unexportInstance(inst);
       tray?.removeService(id);
       reconcileAutostart();
@@ -1478,7 +1515,7 @@ if (!app.requestSingleInstanceLock()) {
       const err = validateInstanceName(name, id, config);
       if (err) return { ok: false, error: nameErrorMessage(err) };
       config.services[id] = { ...config.services[id], name: name.trim() };
-      saveConfig(configPath(), config);
+      configStore.save();
       applyIdentityChange(id);
       return { ok: true };
     },
@@ -1493,7 +1530,7 @@ if (!app.requestSingleInstanceLock()) {
         return { ok: false, error: 'Unknown icon.' };
       }
       config.services[id] = { ...config.services[id], icon: choice };
-      saveConfig(configPath(), config);
+      configStore.save();
       const next = getService(id);
       if (next) deployInstanceIcon(next, { iconSourceDir });
       iconEpoch += 1; // new bytes under the same loft://icon/<id> URL — force a re-fetch everywhere
@@ -1501,10 +1538,10 @@ if (!app.requestSingleInstanceLock()) {
       return { ok: true };
     },
     setGlobal: (patch) => {
-      if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; saveConfig(configPath(), config); }
+      if (patch.trayBackend !== undefined) { config.trayBackend = patch.trayBackend; configStore.save(); }
       if (patch.debug !== undefined) {
         config.debug = patch.debug;
-        saveConfig(configPath(), config);
+        configStore.save();
         // Reach already-loaded pages, which will not reload; a service started later reads
         // config.debug at construction (serviceView.ts), so sleeping ones need no push.
         for (const id of Object.keys(config.services)) hostOf(id)?.setDebug(patch.debug);
@@ -1537,6 +1574,14 @@ if (!app.requestSingleInstanceLock()) {
     if (config.services[sw.def.id]?.badgesEnabled === false) return;
     sw.setBadge(payload.count);
     tray?.setBadge(sw.def.id, payload.count);
+  });
+
+  // A service's answer to a health ping (liveness.ts). Routed by webContents like every
+  // other page->main message, so a service cannot report on another's behalf.
+  ipcMain.on('service:health', (e, snapshot?: HealthSnapshot) => {
+    if (!snapshot || typeof snapshot !== 'object') return;
+    const sw = findBySenderId(e.sender.id);
+    if (sw) liveness?.report(sw.def.id, snapshot);
   });
 
   ipcMain.on('service:notify', (e, p?: { title?: string; body?: string; icon?: string; href?: string; notifyId?: number; epoch?: string }) => {
@@ -1579,7 +1624,7 @@ if (!app.requestSingleInstanceLock()) {
     const after = refreshBubbleTitle(before, id, conv.key, conv.title);
     if (after !== before) {
       config.bubbles = after;
-      saveConfig(configPath(), config);
+      configStore.save();
       loft?.refreshRail();
     }
     refreshBubbleAvatar(id, conv);
@@ -1639,7 +1684,7 @@ if (!app.requestSingleInstanceLock()) {
     const after = moveBubble(before, drag.id, railSlotIndex(clientY, drag.slots));
     if (after.every((b, i) => b.id === before[i]?.id)) return; // dropped where it already was
     config.bubbles = after;
-    saveConfig(configPath(), config);
+    configStore.save();
     loft?.refreshRail();
   });
 
@@ -1684,7 +1729,7 @@ if (!app.requestSingleInstanceLock()) {
           // Absent, not `[]`, when the last one goes — the convention loadConfig enforces on
           // read, kept true on write so the file never grows a no-op key.
           if (rest.length) config.bubbles = rest; else delete config.bubbles;
-          saveConfig(configPath(), config);
+          configStore.save();
           deleteBubbleAvatar(id, { remove: (p) => rmSync(p, { force: true }) });
           loft?.refreshRail();
         },
@@ -1728,6 +1773,36 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    // Say out loud what happened to the settings file. A silent fallback is exactly how the
+    // original data loss went unnoticed until the services were already gone, and the
+    // read-only state below is invisible otherwise — the user would think their settings
+    // simply were not sticking.
+    if (configStore.status === 'error') {
+      dialog.showMessageBoxSync({
+        type: 'error',
+        title: 'Loft',
+        message: 'Loft could not read its settings.',
+        detail:
+          `${configPath()}\n\n${configStore.error?.message ?? 'unknown error'}\n\n` +
+          'Loft has started with default settings and will not save any changes, so the ' +
+          'file on disk is untouched. Fix or move it and restart Loft to get your ' +
+          'services back.',
+        buttons: ['Continue'],
+      });
+    } else if (configStore.status === 'recovered') {
+      dialog.showMessageBoxSync({
+        type: 'warning',
+        title: 'Loft',
+        message: 'Loft restored your settings from its backup.',
+        detail:
+          `${configPath()} could not be read:\n${configStore.error?.message ?? 'unknown error'}\n\n` +
+          `Your settings were restored from ${backupConfigPath(configPath())}. The ` +
+          `unreadable file was kept as ${corruptConfigPath(configPath())}. Anything you ` +
+          'changed since the backup was made may need setting again.',
+        buttons: ['OK'],
+      });
+    }
+
     // Follow the desktop light/dark preference. Loft's renderers theme purely off the CSS
     // prefers-color-scheme media feature; on Linux (notably Fedora/GNOME, and worse inside
     // the Flatpak sandbox) Chromium reads the color scheme once at renderer creation and
@@ -1905,13 +1980,21 @@ if (!app.requestSingleInstanceLock()) {
     // Config migration (spec 09 §8). Must run before the launcher self-heal below:
     // that loop is what would otherwise act on an unmigrated config. Save only when
     // something actually changed, so a migrated install doesn't rewrite on every start.
-    try {
-      const { changed } = migrateConfig(config, (id) => existsSync(serviceLauncherPath(id)));
-      if (changed) {
-        saveConfig(configPath(), config);
-        console.log('Migrated config to v2 (per-service launchers are now opt-in)');
-      }
-    } catch (err) { console.error('Config migration failed:', err); }
+    //
+    // Gated on `writable`, and not merely relying on save() being inert: a migration must
+    // only ever run against a config that was READ successfully. Migrating the placeholder
+    // defaults we start with after a read failure would stamp `configVersion: 2` onto state
+    // that describes nobody's install — and would be the thing written back the moment the
+    // config became writable again.
+    if (configStore.writable) {
+      try {
+        const { changed } = migrateConfig(config, (id) => existsSync(serviceLauncherPath(id)));
+        if (changed) {
+          configStore.save();
+          console.log('Migrated config to v2 (per-service launchers are now opt-in)');
+        }
+      } catch (err) { console.error('Config migration failed:', err); }
+    }
 
     // Drop v1's per-service autostart entries. They're not merely stale: today's CLI
     // still parses their `--service <id>` form, so they launch the service at login
@@ -2081,7 +2164,7 @@ if (!app.requestSingleInstanceLock()) {
         setDnd: (id, enabled) => { setServiceDnd(id, enabled); tray?.setDnd(id, enabled); notifications?.setServiceDnd(id, enabled); },
         setBadgesEnabled: (id, enabled) => {
           config.services[id] = { ...config.services[id], badgesEnabled: enabled };
-          saveConfig(configPath(), config);
+          configStore.save();
         },
         quitApp: () => { quitting = true; app.quit(); },
         showHub: () => { loft?.showManager(); loft?.open(); focusExternal(LOFT_WINDOW_KEY); },
@@ -2097,6 +2180,54 @@ if (!app.requestSingleInstanceLock()) {
       dbusApi = await startLoftDbusService(loftDeps);
     } catch (err) {
       console.error('Failed to start chat.loft.Loft D-Bus service:', err);
+    }
+
+    // Keep loaded services connected across standby and network outages (liveness.ts).
+    // Last in the startup sequence because it acts on hosts, and every host that can exist
+    // at launch exists by now — a round that found nothing loaded would simply do nothing,
+    // but starting it after the windows keeps the first sweep meaningful.
+    liveness = createLivenessMonitor({
+      services: () => allHosts().map((h) => h.def.id),
+      ping: (id) => hostOf(id)?.pingHealth(),
+      // A host that has gone away between the ping and the verdict answers false, which
+      // reads as "reloadable" — reload() then no-ops on the same missing host.
+      isAudible: (id) => hostOf(id)?.isAudible() ?? false,
+      reload: (id) => hostOf(id)?.reload(),
+      isOnline: () => {
+        // Never let a probe of the network decide there is no network: an unexpected throw
+        // here would park the monitor in its offline-retry loop and stop it doing anything.
+        try { return net.isOnline(); } catch { return true; }
+      },
+      now: () => Date.now(),
+      setTimer: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; },
+      clearTimer: (h) => clearTimeout(h as NodeJS.Timeout),
+      log: (m) => console.log(m),
+    });
+    liveness.start();
+
+    wakeDetector = createWakeDetector({
+      intervalMs: 15_000,
+      // A tick that lands more than a minute late means the wall clock moved without us —
+      // a suspend, or an NTP step. Both are worth a look; neither is worth a hair trigger.
+      gapToleranceMs: 60_000,
+      now: () => Date.now(),
+      isOnline: () => { try { return net.isOnline(); } catch { return true; } },
+      onWake: (reason) => liveness?.wake(reason),
+      setTimer: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t; },
+      clearTimer: (h) => clearTimeout(h as NodeJS.Timeout),
+    });
+    wakeDetector.start();
+
+    // A bonus signal, never the one relied on. powerMonitor's Linux backend listens for
+    // login1's PrepareForSleep, and Loft's Flatpak has no --talk-name for
+    // org.freedesktop.login1 — so on the shipped build this may never fire at all, with no
+    // error to say so. It costs nothing and is correct on deb/rpm/AppImage; the clock-gap
+    // detector above is what actually has to work. Do not "fix" this by adding the
+    // permission: the detector needs none and catches cases login1 never reports.
+    try {
+      powerMonitor.on('resume', () => liveness?.wake('resume'));
+    } catch (err) {
+      console.error('powerMonitor resume subscription failed:', err);
     }
   });
 
@@ -2139,7 +2270,7 @@ if (!app.requestSingleInstanceLock()) {
 function persistAll(): void {
   for (const sw of windows.values()) sw.persist();
   loft?.persist();
-  saveConfig(configPath(), config);
+  configStore.save();
 }
 
 /**
@@ -2165,6 +2296,10 @@ function persistAll(): void {
  */
 function releaseOsResources(): void {
   try {
+    liveness?.stop();
+    liveness = undefined;
+    wakeDetector?.stop();
+    wakeDetector = undefined;
     notifications?.close();
     // The appearance watcher holds a dbus-next portal connection; leaking it under Flatpak
     // keeps bwrap alive the same way a stray `gsettings monitor` child would (see above).

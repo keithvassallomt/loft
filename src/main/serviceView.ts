@@ -62,6 +62,10 @@ export interface ServiceView {
   openConversation(key: string): void;
   /** Replay a notification click into the page's own handler. */
   notifyClick(notifyId: number, epoch: string): void;
+  /** Ask the page for a liveness snapshot; the answer arrives on `service:health`. */
+  pingHealth(): void;
+  /** Is the page making sound? A service in a call must never be reloaded under the user. */
+  isAudible(): boolean;
   /** Navigate, hiding any stale recovery overlay and re-arming stuck detection. */
   loadUrl(url: string): void;
   /** Reload and re-arm stuck detection. */
@@ -377,6 +381,14 @@ export function createServiceView(def: ServiceInstance, cfg: LoftConfig): Servic
     navigate: (url) => safeSend(serviceView, 'service:navigate', url),
     openConversation: (key) => safeSend(serviceView, 'bubble:open', { key }),
     notifyClick: (notifyId, epoch) => safeSend(serviceView, 'service:notify-click', { notifyId, epoch }),
+    pingHealth: () => safeSend(serviceView, 'service:health-ping'),
+    // A destroyed webContents throws rather than answering; the monitor treats false as
+    // "reloadable", which is right for a page that no longer exists.
+    isAudible: () => {
+      const wc = serviceView.webContents;
+      if (wc.isDestroyed()) return false;
+      try { return wc.isCurrentlyAudible(); } catch { return false; }
+    },
     loadUrl,
     reload: () => {
       hideRecovery();

@@ -1,8 +1,10 @@
-import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { effectiveAutoOpen, type ServiceConfig } from './config';
 import { autostartDir, iconsDir } from './paths';
 import { desktopExec, isDevExec, isFlatpak } from './desktop';
+import { isGnome } from './trayBackend';
+import type { AutostartFix } from '../shared/hubTypes';
 import { requestAutostart, defaultPortalDeps, type PortalDeps } from './portal/background';
 
 type Env = NodeJS.ProcessEnv;
@@ -28,7 +30,7 @@ export function removeLegacyAutostart(serviceIds: readonly string[], env: Env = 
   for (const id of serviceIds) {
     const p = join(autostartDir(env), `loft-${id}.desktop`);
     try {
-      if (!existsSync(p)) continue;
+      if (!entryExists(p)) continue;
       rmSync(p, { force: true });
       removed.push(p);
     } catch (e) {
@@ -36,6 +38,27 @@ export function removeLegacyAutostart(serviceIds: readonly string[], env: Env = 
     }
   }
   return removed;
+}
+
+/**
+ * Where the user has to go to unblock autostart — which is a different place, and a
+ * different KIND of place, per install:
+ *
+ *   - **Flatpak on GNOME**: the Background portal permission, surfaced as "Run in
+ *     Background" in Settings → Apps. GNOME's Apps panel has no autostart row of its own
+ *     (cc-applications-panel exposes only the portal permission) and the portal bundles the
+ *     autostart grant into it, so that switch really is the control.
+ *   - **Flatpak anywhere else** — KDE, Hyprland, sway, XFCE: there may be no settings panel
+ *     for it at all, so the only instruction Loft can give that is true everywhere is
+ *     Flatseal or `flatpak permission-set`. Naming a menu path we have not verified on the
+ *     user's desktop is how this warning came to tell a Hyprland user to open "Settings →
+ *     Apps → Loft", which does not exist there.
+ *   - **Not Flatpak**: no portal is involved. "Blocked" here means the .desktop write
+ *     itself failed, so the fix is on the filesystem, not in any permission store.
+ */
+export function autostartFixFor(env: Env = process.env): AutostartFix {
+  if (!isFlatpak(env)) return 'native';
+  return isGnome(env) ? 'gnome' : 'flatpak';
 }
 
 export function autostartContent(exec: string, iconPath: string): string {
@@ -55,8 +78,31 @@ function entryPath(env?: Env): string {
   return join(autostartDir(env), FILE);
 }
 
+/**
+ * Is an autostart entry present?
+ *
+ * lstat, deliberately NOT existsSync — existsSync FOLLOWS symlinks, and the entry is very
+ * often one. Under Flatpak that difference is the whole bug: an entry symlinked to a path
+ * outside the sandbox's granted filesystem (a dotfiles repo, say) is a live directory entry
+ * that the session manager — running OUTSIDE the sandbox — follows and launches perfectly
+ * well, while inside the sandbox it resolves to nothing. existsSync therefore reported "no
+ * autostart entry" for an install where autostart was working, and the hub told the user on
+ * every launch that Loft was not allowed to start at login while it was doing exactly that.
+ *
+ * The question this function has to answer is whether the ENTRY is there, not whether THIS
+ * process can read through it.
+ */
+export function entryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function isAutostartEnabled(env: Env = process.env): boolean {
-  return existsSync(entryPath(env));
+  return entryExists(entryPath(env));
 }
 
 export function setAutostart(
@@ -82,7 +128,10 @@ export function setAutostart(
     const iconDst = join(iconsDir(env), 'loft.png');
     if (existsSync(iconSrc)) copyFileSync(iconSrc, iconDst);
     writeFileSync(path, autostartContent(desktopExec({ env, execPath: opts.execPath }), iconDst), 'utf8');
-  } else if (existsSync(path)) {
+  } else if (entryExists(path)) {
+    // entryExists, not existsSync, for the same reason isAutostartEnabled uses it: an
+    // unfollowable symlink is still an entry, and still needs unlinking. rmSync unlinks
+    // the link itself rather than chasing it, so this works on a dangling one.
     rmSync(path, { force: true });
   }
 }

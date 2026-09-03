@@ -190,6 +190,8 @@ export function createServiceWindow(
     openConversation: (key: string) => sv.openConversation(key),
     setCanPin: (v: boolean) => { canPin = v; safeSend(titlebar, 'titlebar:set-can-pin', v); },
     notifyClick: (notifyId: number, epoch: string) => sv.notifyClick(notifyId, epoch),
+    pingHealth: () => sv.pingHealth(),
+    isAudible: () => sv.isAudible(),
     loadUrl: (url: string) => sv.loadUrl(url),
     reload: () => sv.reload(),
     clearAndReload: () => sv.clearAndReload(),

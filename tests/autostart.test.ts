@@ -1,8 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { autostartContent, setAutostart, isAutostartEnabled, wantsAutostart, syncAutostart, removeLegacyAutostart } from '../src/main/autostart';
+import {
+  autostartContent, setAutostart, isAutostartEnabled, wantsAutostart, syncAutostart,
+  removeLegacyAutostart, autostartFixFor,
+} from '../src/main/autostart';
 
 const tmps: string[] = [];
 function tmp(): string { const d = mkdtempSync(join(tmpdir(), 'loft-as-')); tmps.push(d); return d; }
@@ -223,5 +226,81 @@ describe('removeLegacyAutostart', () => {
     const env = { XDG_CONFIG_HOME: join(tmp(), 'nope') } as NodeJS.ProcessEnv;
     expect(() => removeLegacyAutostart(['whatsapp'], env)).not.toThrow();
     expect(removeLegacyAutostart(['whatsapp'], env)).toEqual([]);
+  });
+});
+
+describe('isAutostartEnabled and symlinked entries', () => {
+  // The bug this exists for: on a Flatpak install whose autostart entry is a symlink into a
+  // dotfiles repo, existsSync() follows the link, finds nothing readable inside the sandbox,
+  // and reports "not allowed to start at login" — while the session manager, outside the
+  // sandbox, follows the same link and launches Loft perfectly well. What matters is the
+  // ENTRY, not whether this process can read through it.
+  it('sees an entry whose symlink target is unreachable', () => {
+    const cfg = tmp();
+    mkdirSync(join(cfg, 'autostart'), { recursive: true });
+    const entry = join(cfg, 'autostart', 'chat.loft.Loft.desktop');
+    symlinkSync(join(tmpdir(), 'loft-no-such-target-' + Date.now(), 'x.desktop'), entry);
+
+    expect(existsSync(entry)).toBe(false); // the old check, and why it was wrong
+    expect(isAutostartEnabled({ XDG_CONFIG_HOME: cfg } as NodeJS.ProcessEnv)).toBe(true);
+  });
+
+  it('sees an entry whose symlink target does resolve', () => {
+    const cfg = tmp();
+    const store = tmp();
+    mkdirSync(join(cfg, 'autostart'), { recursive: true });
+    const target = join(store, 'real.desktop');
+    writeFileSync(target, autostartContent('/usr/bin/loft', '/i.png'), 'utf8');
+    symlinkSync(target, join(cfg, 'autostart', 'chat.loft.Loft.desktop'));
+    expect(isAutostartEnabled({ XDG_CONFIG_HOME: cfg } as NodeJS.ProcessEnv)).toBe(true);
+  });
+
+  it('still reports false when there is no entry at all', () => {
+    const cfg = tmp();
+    mkdirSync(join(cfg, 'autostart'), { recursive: true });
+    expect(isAutostartEnabled({ XDG_CONFIG_HOME: cfg } as NodeJS.ProcessEnv)).toBe(false);
+  });
+
+  it('removes an entry it cannot read through', () => {
+    const cfg = tmp();
+    const src = tmp();
+    const env = { XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: tmp() } as NodeJS.ProcessEnv;
+    mkdirSync(join(cfg, 'autostart'), { recursive: true });
+    const entry = join(cfg, 'autostart', 'chat.loft.Loft.desktop');
+    symlinkSync(join(tmpdir(), 'loft-no-such-target-' + Date.now(), 'x.desktop'), entry);
+    setAutostart(false, { env, execPath: '/usr/bin/loft', iconSourceDir: src });
+    expect(isAutostartEnabled(env)).toBe(false);
+  });
+
+  it('removes a legacy per-service entry it cannot read through', () => {
+    const cfg = tmp();
+    mkdirSync(join(cfg, 'autostart'), { recursive: true });
+    const entry = join(cfg, 'autostart', 'loft-whatsapp.desktop');
+    symlinkSync(join(tmpdir(), 'loft-no-such-target-' + Date.now(), 'x.desktop'), entry);
+    expect(removeLegacyAutostart(['whatsapp'], { XDG_CONFIG_HOME: cfg } as NodeJS.ProcessEnv))
+      .toEqual([entry]);
+  });
+});
+
+describe('autostartFixFor', () => {
+  // The warning used to tell every blocked user to open "Settings > Apps > Loft", which
+  // exists on GNOME and nowhere else.
+  it('points at GNOME Settings only on Flatpak + GNOME', () => {
+    expect(autostartFixFor({ FLATPAK_ID: 'chat.loft.Loft', XDG_CURRENT_DESKTOP: 'GNOME' } as NodeJS.ProcessEnv))
+      .toBe('gnome');
+    expect(autostartFixFor({ FLATPAK_ID: 'chat.loft.Loft', XDG_CURRENT_DESKTOP: 'ubuntu:GNOME' } as NodeJS.ProcessEnv))
+      .toBe('gnome');
+  });
+
+  it('falls back to the portable route on every other Flatpak desktop', () => {
+    for (const d of ['Hyprland', 'KDE', 'sway', 'XFCE', '']) {
+      expect(autostartFixFor({ FLATPAK_ID: 'chat.loft.Loft', XDG_CURRENT_DESKTOP: d } as NodeJS.ProcessEnv))
+        .toBe('flatpak');
+    }
+  });
+
+  it('is a filesystem problem, not a permission one, outside Flatpak', () => {
+    expect(autostartFixFor({ XDG_CURRENT_DESKTOP: 'GNOME' } as NodeJS.ProcessEnv)).toBe('native');
+    expect(autostartFixFor({ XDG_CURRENT_DESKTOP: 'Hyprland' } as NodeJS.ProcessEnv)).toBe('native');
   });
 });

@@ -3,6 +3,7 @@ import { startBadgeScanner } from './badge/scanner';
 import { startDechrome } from './dechrome';
 import { startNotifyBridge } from './notify/bridge';
 import { startContextMenuBridge } from './contextMenu';
+import { startHealthTracker } from './health/tracker';
 import { startConversationWatch } from './conversation/watch';
 import { CONVERSATION_ADAPTERS } from './conversation/adapters';
 import { executePlan } from './conversation/open';
@@ -17,6 +18,12 @@ if (serviceId) {
   startNotifyBridge(serviceId, { ipc: ipcRenderer, win: window, doc: document });
   startBadgeScanner(serviceId, (count) => ipcRenderer.send('service:badge', { count }));
   startDechrome(serviceId);
+
+  // Liveness. Started as early as possible — the WebSocket wrapper has to be in place
+  // before the page opens its first socket, and this preload runs before any page script.
+  // Not keyed on the kind: the signal it watches (data arriving) is the same for all six.
+  const health = startHealthTracker(window, document);
+  ipcRenderer.on('service:health-ping', () => ipcRenderer.send('service:health', health.snapshot()));
 
   // `serviceId` here is the KIND — --loft-service carries the kind, never the instance id —
   // which is exactly what selects the adapter, the same way it selects the badge parser.

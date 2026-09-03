@@ -15,7 +15,7 @@ Loft is a self-contained Electron app that gets the full functionality of a real
 
 Loft is **one Electron application** that hosts every installed service, not a manager plus a fleet of daemons:
 
-- **Single-instance lock** (`app.requestSingleInstanceLock()`) — only one Loft process ever runs; a second launch (e.g. `loft --service slack`) is routed to the running instance via the `second-instance` event and argv, then exits.
+- **Single-instance lock** (`app.requestSingleInstanceLock()`) — only one Loft process ever runs; a second launch (e.g. `loft --service slack`) is routed to the running instance via the `second-instance` event and argv, then exits. Taken immediately after `app.setPath('userData')` (Electron keys the lock off that path) and, load-bearingly, **before anything reads or writes `config.json`** — a secondary gets `notLoadedStore()` and never opens the file, so two processes are never in it at once.
 - **One app identity**: `app.setAppUserModelId('chat.loft.Loft')`, and the app exports one D-Bus bus name (`chat.loft.Loft`, see below) instead of the old per-service bus names.
 - **One main process** owns everything non-web: the service registry, window/view lifecycle, tray, notifications, D-Bus, config, autostart, and `.desktop` generation. This replaces what used to be a separate daemon per service.
 - **A hub window** (Svelte 5 + Vite renderer) is the manager UI — install/remove services, per-service and global settings, live running/badge status pushed over IPC (no polling).
@@ -36,7 +36,7 @@ There is no separate daemon process, no launching of a real Chrome binary, and n
    - Installed services: icon, name, live running/badge status, Open button, per-service settings (gear)
    - Available services: not-yet-added services, shown as tiles to Add
    - Per-service settings: custom URL (Element/Talk), **Auto Open** (a three-way choice — Disabled / On login / On launching Loft), badges on/off, DND, remove (with an explicit "also delete login data" option)
-   - Global settings: tray backend, appearance (follows the system theme), developer mode. There is deliberately no "start at login" toggle — autostart is derived from the per-service Auto Open flags (a service set to **On login**; see the File Layout note). When autostart is blocked, the warning is rendered next to that service's own Auto Open control in the per-service settings, **not** here: a warning on a page reached via a menu the user has no reason to open is the same silent failure the derived model exists to remove
+   - Global settings: tray backend, appearance (follows the system theme), developer mode. There is deliberately no "start at login" toggle — autostart is derived from the per-service Auto Open flags (a service set to **On login**; see the File Layout note). When autostart is blocked, the warning is rendered next to that service's own Auto Open control in the per-service settings, **not** here: a warning on a page reached via a menu the user has no reason to open is the same silent failure the derived model exists to remove. Its remediation is chosen by `autostartFixFor` (`src/main/autostart.ts`) and carried to the renderer as `HubGlobals.autostartFix`, because it differs by packaging **and** desktop: Flatpak+GNOME → "Run in Background" in Settings → Apps (GNOME's Apps panel has no autostart row of its own; the Background portal folds the autostart grant into that switch); Flatpak anywhere else (KDE, Hyprland, sway, XFCE) → Flatseal or `flatpak permission-set background background chat.loft.Loft yes`, since there may be no settings panel at all and naming an unverified menu path is how this warning once told a Hyprland user to open a GNOME-only page; not Flatpak → no portal is involved and "blocked" means the `.desktop` write itself failed, so the fix is on the filesystem
    - Add/remove writes/removes that service's `.desktop` launcher and (on remove, if requested) deletes its partition data
 
 2. **Per-service window** (`src/main/serviceWindow.ts`) — one frameless window per running service
@@ -80,6 +80,14 @@ Both property-backed backends share one implementation (`propertyDeps`): read th
 > The helper closes it because it is an *extension running inside gnome-shell* — outside the sandbox, with plain `Gio.Settings` access — and Loft already holds `--talk-name=chat.loft.ShellHelper`, so this costs **no new sandbox permission**. Do not reintroduce `flatpak-spawn --host` or spend a `--filesystem` grant on `~/.config/dconf` for it.
 >
 > **Degradation:** a user who declined the extension, or whose EGO-installed helper predates it (`< 2.1`), gets `null`/unknown — the previous behaviour, never a confident "off". The user-visible harm that state causes is the in-page notification **sound** and message-tray entries; the *banner* is suppressed by GNOME Shell regardless of the sender, so it was never visible. Loft's own global/per-service DND remains the in-app substitute.
+
+10. **Config store** (`src/main/configStore.ts`) — the single gate on `config.json`. Its reason to exist is one invariant that cannot be enforced call-site by call-site: **a failure to READ an existing config must never become writable default state.** `loadConfig` used to swallow every error and return `{services:{}}`, indistinguishable from a first run, so one unreadable read had its defaults committed by the next debounced window-move flush — every service, every per-service setting and the whole top level replaced with `{"services":{}}`, permanent loss out of a possibly transient failure. `loadConfigResult` now distinguishes **loaded / missing / recovered / error** (`missing` means no primary *and* no backup, i.e. a real first run); the store turns `error` into `writable: false`, which makes `save()` inert for all ~30 callers at once. Migration and autostart reconciliation are additionally gated on `writable` explicitly — not because `save()` would leak, but because both act on state *outside* `config.json` (a `configVersion` stamp on nobody's install; deleting the login `.desktop` entry), which no amount of not-saving would undo. `saveConfig` is atomic: serialize first, write a temp file beside the target, `fsync`, then `rename()` over it — the old direct `writeFileSync` truncated the live file before writing a byte, so a crash, a logout (~21ms of budget under Flatpak; see `shutdown.ts`), a full disk or a concurrent reader could all see an empty or half-written config.
+
+11. **Liveness monitor** (`src/main/liveness.ts`, `src/preload/health/tracker.ts`) — keeps loaded services actually *connected* across standby and network outages. Distinct from `recovery.ts`, which watches for a page that never **loaded** (still on `about:blank`); this watches for a page that loaded fine and whose connection has since died — the app shows stale messages and a stale badge until someone presses F5.
+    - **The liveness signal is "when did this page last RECEIVE data", and nothing else.** The preload wraps `window.WebSocket` (WhatsApp/Slack/Telegram/Messenger keepalives, invisible to resource timing) and observes `resource` performance entries (Element's `/sync` long-poll, Talk's polling), stamping a timestamp on each. Every service Loft hosts exchanges *something* every few tens of seconds, so silence is the signal. **Do not "improve" this by scraping each app's own "Reconnecting…" banner** — a class name changes, the parser stops matching, and the monitor silently decides everything is healthy for ever.
+    - **Wake detection is by WALL CLOCK, and it has to be.** Node's timers run off `CLOCK_MONOTONIC`, which Linux *freezes* during suspend — a 15s timer armed before a four-hour sleep fires 15s of awake-time after resume, on time as far as the timer is concerned. Only `Date.now()` shows the gap. `powerMonitor`'s `resume` is subscribed as a bonus, never relied on: its Linux backend needs `org.freedesktop.login1`, which the Flatpak has no `--talk-name` for, so on the shipped build it may never fire with no error to say so. Do not add that permission — the clock-gap check needs none and catches sleeps login1 never reports. Coming back online is detected from `net.isOnline()` on the same heartbeat (offline→online edge only).
+    - A wake starts one round: wait out a **grace period** (these apps reconnect on their own most of the time; probing before they can would turn every lid-open into six page loads), then ping every loaded service and reload the ones that answer with silence — or do not answer at all. A burst of signals (one lid-open normally produces resume + clock-gap + network-back) collapses into a single round. A routine sweep runs the same round on a much longer silence threshold.
+    - **Refusals are as load-bearing as the reloads.** Never a service that is `isCurrentlyAudible()` (a call is worth more than a fresh connection), never one whose focused element holds a non-empty draft (the one thing a reload really destroys), never one inside the per-service cooldown — that last one checked *first*, so a service wedged for a reason a reload cannot fix is given up on rather than reloaded every round for ever. While `net.isOnline()` is false the round is deferred, not run: there is nothing to reload *to*.
 
 ### Window Behavior
 
@@ -147,6 +155,13 @@ Loft currently logs to stdout/stderr via plain `console.*` calls in the main pro
 ```
 ~/.config/loft/
   config.json                      # single JSON file: global settings + services map keyed by service id
+  config.json.bak                   # known-good copy, refreshed from the exact bytes that last
+                                    # parsed successfully at load. NEVER written from in-memory
+                                    # state and never from a default/fallback config, so an
+                                    # emptied config cannot propagate into the copy meant to
+                                    # survive it. Used to recover an unreadable primary.
+  config.json.corrupt               # an unreadable primary, set aside (not overwritten) when the
+                                    # backup took over from it
                                     # (customUrl, dnd, badgesEnabled, autoOpen ('login'|'launch'; absent=disabled,
                                     #  superseding the legacy openOnStartup bool), window bounds/zoom per service;
                                     #  trayBackend, globalDnd, railOrder and grid at the top level)
@@ -162,7 +177,13 @@ Loft currently logs to stdout/stderr via plain `console.*` calls in the main pro
                                     # when the user opens Loft (the --minimized login launch skips it), so it does
                                     # NOT create this entry. Written by the XDG Background portal under Flatpak (so
                                     # the manifest needs only :ro here) and directly otherwise; read back with
-                                    # existsSync in both cases.
+                                    # lstat in both cases — NOT existsSync, which follows
+                                    # symlinks: an entry symlinked to a path outside the
+                                    # Flatpak's granted filesystem (a dotfiles repo) reads as
+                                    # absent inside the sandbox while the session manager,
+                                    # outside it, follows the link and launches Loft fine.
+                                    # The question is whether the ENTRY is there, not whether
+                                    # this process can read through it.
 
 ~/.local/share/loft/
   Partitions/
