@@ -82,6 +82,19 @@
   </screenshots>
 
   <releases>
+    <release version="1.0.3" date="2026-09-03">
+      <description>
+        <p>
+          A maintenance release: your services look after themselves better, and your settings are much harder to lose.
+        </p>
+        <ul>
+          <li>Services now come back on their own after your computer wakes from sleep, or after a spell without a network. One that had quietly lost its connection used to sit there showing old messages and an old unread count until you thought to reload it by hand. Loft now checks on them and reloads only the ones that really are stuck — never one you are on a call in, and never one you are part-way through typing a message in.</li>
+          <li>Your settings can no longer be wiped by a settings file Loft cannot read. If reading it failed for any reason, Loft started as though it were freshly installed and could then save that empty state back over the real thing, taking every service and every setting with it. A file Loft cannot read is now left strictly alone and reported to you, Loft keeps a spare copy to restore from, and settings are saved in a way that cannot leave a half-written file behind.</li>
+          <li>Loft no longer warns that it is not allowed to start at login when it is. Anyone whose autostart entry is a link to a file kept elsewhere — as it is if you keep your configuration in a dotfiles repository — saw that warning on every launch while Loft was starting at login perfectly well.</li>
+          <li>When starting at login really is blocked, the advice now suits the desktop you are on. It used to send everyone to a GNOME settings page that does not exist on KDE, Hyprland or sway.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.2" date="2026-08-02">
       <description>
         <p>
