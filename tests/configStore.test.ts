@@ -244,3 +244,101 @@ describe('config store — migration stays non-destructive', () => {
     expect(JSON.parse(readFileSync(backupConfigPath(path), 'utf8'))).toEqual(v1);
   });
 });
+
+describe('config store — an empty config file', () => {
+  // The signature of a write killed after truncating and before writing: exactly what the
+  // pre-1.0.3 non-atomic save did at a Flatpak logout.
+  it('is named as empty, not as a JSON parse failure', () => {
+    writePrimary('');
+    const store = openConfigStore(path, silent);
+    expect(store.status).toBe('error');
+    expect(store.error?.message).toMatch(/empty \(0 bytes\)/);
+    expect(store.error?.message).not.toMatch(/JSON/);
+  });
+
+  it('treats whitespace-only the same way', () => {
+    writePrimary('\n  \n');
+    expect(openConfigStore(path, silent).error?.message).toMatch(/whitespace/);
+  });
+
+  it('still recovers from the backup when there is one', () => {
+    writePrimary(POPULATED);
+    openConfigStore(path, silent);          // promotes the backup
+    writePrimary('');                        // then the file is emptied
+    const store = openConfigStore(path, silent);
+    expect(store.status).toBe('recovered');
+    expect(Object.keys(store.config.services)).toEqual(['whatsapp', 'slack', 'messenger']);
+  });
+
+  it('says whether a backup existed at all', () => {
+    const said: string[] = [];
+    const log: StoreLog = { log() {}, warn() {}, error: (m) => said.push(m) };
+    writePrimary('');
+    openConfigStore(path, log);
+    expect(said.join('\n')).toContain('no backup');
+  });
+});
+
+describe('config store — starting fresh after an unreadable config', () => {
+  it('sets the file aside, becomes writable, and saves', () => {
+    writePrimary('');
+    const store = openConfigStore(path, silent);
+    expect(store.writable).toBe(false);
+
+    const { ok, keptAs } = store.startFresh();
+    expect(ok).toBe(true);
+    expect(keptAs).toBe(corruptConfigPath(path));
+    expect(existsSync(corruptConfigPath(path))).toBe(true);
+    expect(store.writable).toBe(true);
+    expect(store.status).toBe('missing');
+
+    store.config.services.slack = { kind: 'slack' };
+    store.save();
+    expect(loadConfig(path).services.slack).toEqual({ kind: 'slack' });
+  });
+
+  it('keeps the original bytes, not a rewrite of them', () => {
+    writePrimary('{ "services": broken');
+    const store = openConfigStore(path, silent);
+    store.startFresh();
+    expect(readFileSync(corruptConfigPath(path), 'utf8')).toBe('{ "services": broken');
+  });
+
+  it('does not overwrite evidence from an earlier failure', () => {
+    writeFileSync(corruptConfigPath(path), 'the first one', 'utf8');
+    writePrimary('');
+    const store = openConfigStore(path, silent);
+    const { keptAs } = store.startFresh();
+    expect(keptAs).not.toBe(corruptConfigPath(path));
+    expect(readFileSync(corruptConfigPath(path), 'utf8')).toBe('the first one');
+    expect(readFileSync(keptAs!, 'utf8')).toBe('');
+  });
+
+  it('stays read-only when the file cannot be moved', () => {
+    writePrimary('');
+    const store = openConfigStore(path, silent);
+    chmodSync(dir, 0o555);                  // no rename out of this directory
+    try {
+      const { ok } = store.startFresh();
+      expect(ok).toBe(false);
+      expect(store.writable).toBe(false);
+      store.config.services.slack = { kind: 'slack' };
+      store.save();
+      expect(readFileSync(path, 'utf8')).toBe('');   // untouched
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
+
+  it('is a no-op on a store that was already writable', () => {
+    writePrimary(POPULATED);
+    const store = openConfigStore(path, silent);
+    expect(store.startFresh()).toEqual({ ok: true });
+    expect(existsSync(corruptConfigPath(path))).toBe(false);
+    expect(store.config.services.whatsapp).toBeDefined();
+  });
+
+  it('a secondary instance can never start fresh', () => {
+    expect(notLoadedStore().startFresh()).toEqual({ ok: false });
+  });
+});

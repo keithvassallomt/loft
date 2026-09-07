@@ -25,7 +25,8 @@ import { startBackgroundStatus } from './gnome/backgroundStatus';
 import { watchAppearance, type AppearanceWatcher } from './appearance';
 import { buildHubState } from './hubState';
 import { registerHubIpc } from './hubIpc';
-import { addInstance, removeInstance } from './install';
+import { addInstance, adoptInstance, removeInstance } from './install';
+import { findAdoptable, serverUrlFromCookieHosts, type AdoptCandidate } from './adopt';
 import { syncAutostart, isAutostartEnabled, wantsAutostart, removeLegacyAutostart, autostartFixFor } from './autostart';
 import { createSignalShutdown } from './shutdown';
 import { createDebouncedFlush } from './configFlush';
@@ -1472,6 +1473,10 @@ if (isPrimaryInstance) {
       // account can land on an id whose old icon is still in Chromium's cache — bump so the
       // rail/hub re-fetch under the fresh ?e=<n>.
       iconEpoch += 1;
+      // The decline this suppresses answered "you have no services, want them back?" — a
+      // question a config with services in it no longer asks. Left set, it would silence
+      // the offer after a future loss.
+      delete config.adoptDeclined;
       configStore.save();
       // A new account must reach the tray and D-Bus now — not at next launch. Before
       // instances, adding a service was rare enough that waiting was invisible; adding
@@ -1772,23 +1777,114 @@ if (isPrimaryInstance) {
     ]).popup();
   });
 
+  /** "WhatsApp, Slack and NextCloud Talk" — a list a person can read in a dialog. */
+  function adoptList(found: AdoptCandidate[]): string {
+    const names = found.map((c) => c.displayName);
+    if (names.length <= 1) return names[0] ?? '';
+    return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  }
+
+  /**
+   * The server address an adopted self-hosted account was using, guessed from the cookies
+   * its own partition still holds.
+   *
+   * Only asked for `serverRequired` kinds, where the alternative is adopting a NextCloud
+   * Talk that loads the registry's `example.invalid` placeholder. Best-effort by design:
+   * a wrong guess is a field the user corrects, an absent one is the same tile they would
+   * have had anyway.
+   */
+  async function guessServerUrl(id: string): Promise<string | undefined> {
+    try {
+      const cookies = await session.fromPartition(`persist:${id}`).cookies.get({});
+      return serverUrlFromCookieHosts(cookies.map((c) => c.domain ?? ''));
+    } catch (err) {
+      console.warn(`Could not read cookies for ${id}:`, (err as Error)?.message ?? err);
+      return undefined;
+    }
+  }
+
+  /** Re-add each candidate under the id its partition already has, then persist. */
+  async function restoreServices(found: AdoptCandidate[]): Promise<void> {
+    for (const c of found) {
+      const kind = getKind(c.kind);
+      if (!kind) continue; // findAdoptable already vetted this; belt and braces
+      try {
+        const customUrl = c.serverRequired ? await guessServerUrl(c.id) : undefined;
+        adoptInstance(c.id, kind, config, {
+          customUrl, variants: variantIndex[kind.id] ?? [], iconSourceDir,
+        });
+        console.log(`Restored ${c.displayName} from its saved login (${c.id})`);
+      } catch (err) {
+        console.error(`Could not restore ${c.id}:`, (err as Error)?.message ?? err);
+      }
+    }
+    // A restore is the opposite of a decline, so it must not leave one recorded: the
+    // flag would otherwise sit there suppressing the offer after a LATER loss.
+    delete config.adoptDeclined;
+    configStore.save();
+  }
+
+  /**
+   * Set the unreadable config aside, then bring back whatever the partitions still prove.
+   *
+   * Ordered, not merely sequential: startFresh is what makes the store writable, so an
+   * adoption before it would build the whole service list in memory and silently drop it.
+   */
+  async function startFreshAndRestore(found: AdoptCandidate[]): Promise<void> {
+    const { ok } = configStore.startFresh();
+    if (!ok) {
+      dialog.showMessageBoxSync({
+        type: 'error',
+        title: 'Loft',
+        message: 'Loft could not move the unreadable settings file.',
+        detail:
+          `${configPath()} could not be renamed, so Loft has left it exactly as it is and ` +
+          'is still not saving changes. Check the permissions on that file and its folder, ' +
+          'then restart Loft.',
+        buttons: ['Continue'],
+      });
+      return;
+    }
+    if (found.length) await restoreServices(found);
+    else configStore.save(); // create the fresh file now, rather than at the first change
+    // No confirmation dialog: the user asked for this and the rail filling up with their
+    // services IS the confirmation. Where the old file went is on stdout (startFresh logs
+    // it) — a second modal to say a thing worked earns nothing but a second click.
+  }
+
   app.whenReady().then(async () => {
     // Say out loud what happened to the settings file. A silent fallback is exactly how the
     // original data loss went unnoticed until the services were already gone, and the
     // read-only state below is invisible otherwise — the user would think their settings
     // simply were not sticking.
     if (configStore.status === 'error') {
-      dialog.showMessageBoxSync({
+      // Offered, not done: setting the file aside is the one action here the user cannot
+      // undo, and the file may be the only copy of settings worth more than a fresh start.
+      const found = findAdoptable(config);
+      const escape = found.length
+        ? `Start fresh and restore ${found.length} ${found.length === 1 ? 'service' : 'services'}`
+        : 'Start fresh';
+      const choice = dialog.showMessageBoxSync({
         type: 'error',
         title: 'Loft',
         message: 'Loft could not read its settings.',
         detail:
           `${configPath()}\n\n${configStore.error?.message ?? 'unknown error'}\n\n` +
           'Loft has started with default settings and will not save any changes, so the ' +
-          'file on disk is untouched. Fix or move it and restart Loft to get your ' +
-          'services back.',
-        buttons: ['Continue'],
+          'file on disk is untouched.\n\n' +
+          (found.length
+            ? 'You are still logged in to ' + adoptList(found) + '. Starting fresh keeps ' +
+              `the unreadable file as ${corruptConfigPath(configPath())} and brings those ` +
+              'back — their logins are intact, but window layout, Auto Open and other ' +
+              'per-service settings are not stored with them and will need setting again.'
+            : `Starting fresh keeps the unreadable file as ${corruptConfigPath(configPath())} ` +
+              'and lets Loft save again. Continue instead if you would rather repair or ' +
+              'restore it by hand first.'),
+        buttons: ['Continue without saving', escape],
+        defaultId: 0,
+        cancelId: 0,
       });
+      if (choice === 1) await startFreshAndRestore(found);
     } else if (configStore.status === 'recovered') {
       dialog.showMessageBoxSync({
         type: 'warning',
@@ -1801,6 +1897,37 @@ if (isPrimaryInstance) {
           'changed since the backup was made may need setting again.',
         buttons: ['OK'],
       });
+    }
+
+    // A readable config that lists nothing, while logins for several accounts sit on disk.
+    // That is not what a first run looks like — it is what a config that lost its services
+    // looks like, which is exactly the shape the September 3rd wipe left behind: every
+    // partition intact, `{"services":{}}` on top of them. Asked once; a decline is
+    // remembered, because a user who really did remove their last service must not be
+    // asked to undo it at every launch.
+    if (configStore.writable && Object.keys(config.services).length === 0 && !config.adoptDeclined) {
+      const found = findAdoptable(config);
+      if (found.length) {
+        const choice = dialog.showMessageBoxSync({
+          type: 'question',
+          title: 'Loft',
+          message: `Restore ${found.length === 1 ? 'a service' : `${found.length} services`} from their saved logins?`,
+          detail:
+            'Loft has no services configured, but you are still logged in to ' +
+            adoptList(found) + '.\n\n' +
+            'This usually means the settings file was lost while the logins were not. ' +
+            'Restoring re-adds them; their logins are intact, but window layout, Auto ' +
+            'Open and other per-service settings will need setting again.',
+          buttons: ['Not now', 'Restore'],
+          defaultId: 1,
+          cancelId: 0,
+        });
+        if (choice === 1) await restoreServices(found);
+        else {
+          config.adoptDeclined = true;
+          configStore.save();
+        }
+      }
     }
 
     // Follow the desktop light/dark preference. Loft's renderers theme purely off the CSS

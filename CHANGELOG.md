@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+> [!IMPORTANT]
+> **After updating Loft, quit it from the tray and start it again.** An update replaces
+> Loft on disk, but the copy already running keeps running the *old* version until it is
+> restarted — on Flatpak it can carry on for days that way, and a Loft left running
+> overnight is doing exactly that. This matters more than usual if you are coming from
+> **1.0.2 or earlier**: that version wrote its settings file in a way that could leave it
+> empty if the session ended mid-write, which is the bug 1.0.3 fixed — but the fix only
+> applies once the new version is the one actually running. If it catches you first, Loft
+> now offers to bring your services back from the logins it still has (below).
+
+### Added
+
+- **Loft can bring your services back from the logins it still has.** Your settings file is the only record of which services you use, while the logins themselves live somewhere else entirely and survive anything that happens to it. So when Loft starts with no services configured and finds accounts it is still signed in to, it now offers to restore them — and when the settings file cannot be read at all, the same offer comes with the option to set the unreadable file aside and carry on. The logins come back with the services; window layout, Auto Open, Do Not Disturb and any custom names or icons were only ever stored in the settings file, so those need setting again. Declining is remembered, so removing your last service does not get you asked about it at every launch.
+
+### Fixed
+
+- **An unreadable settings file no longer leaves Loft unable to save, with no way out but a terminal.** Loft correctly refuses to overwrite a settings file it could not read, but the only remedy on offer was to find and move that file yourself — so every session after it silently saved nothing. The message now offers to move the file aside for you (keeping it, under a name that never overwrites an earlier one) and start saving again.
+- **A settings file that is empty is now reported as empty.** A file of zero bytes was reported as "Unexpected end of JSON input", which describes a syntax error in something that has no contents at all. Loft now says the file is empty, and says whether a backup existed to restore from.
+
 ## [1.0.3] - 2026-09-03
 
 ### Fixed

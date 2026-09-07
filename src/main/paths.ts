@@ -28,8 +28,13 @@ export function bubblesDir(env: Env = process.env): string {
   return join(loftDataDir(env), 'bubbles');
 }
 
+/** Where every `persist:<id>` session lives. One directory per INSTANCE, named by its id. */
+export function partitionsRoot(env: Env = process.env): string {
+  return join(loftDataDir(env), 'Partitions');
+}
+
 export function partitionDir(id: string, env: Env = process.env): string {
-  return join(loftDataDir(env), 'Partitions', id);
+  return join(partitionsRoot(env), id);
 }
 
 export function autostartDir(env: Env = process.env): string {

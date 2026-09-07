@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { addInstance, removeInstance, removePartitionData } from '../src/main/install';
+import { addInstance, adoptInstance, removeInstance, removePartitionData } from '../src/main/install';
 import { getKind } from '../src/main/registry';
 import { resolveInstance } from '../src/main/instances';
 import type { LoftConfig } from '../src/main/config';
@@ -88,5 +88,39 @@ describe('install', () => {
     mkdirSync(part, { recursive: true });
     removeInstance(resolveInstance('whatsapp', cfg)!, cfg, false, env);
     expect(existsSync(part)).toBe(true);
+  });
+});
+
+describe('adopting an existing partition', () => {
+  it('keeps the id the partition is bound to', () => {
+    // The whole point: addInstance would allocate `whatsapp` here — the lowest free id —
+    // and hand the account a different, empty session.
+    const cfg: LoftConfig = { services: {} };
+    const inst = adoptInstance('whatsapp-2', wa, cfg, { iconSourceDir: tmp() });
+    expect(inst.id).toBe('whatsapp-2');
+    expect(cfg.services['whatsapp-2']).toEqual({ kind: 'whatsapp' });
+    expect(cfg.services.whatsapp).toBeUndefined();
+    expect(inst.displayName).toBe('WhatsApp 2');
+  });
+
+  it('looks exactly like a service added by hand', () => {
+    const cfg: LoftConfig = { services: {} };
+    adoptInstance('whatsapp', wa, cfg, { iconSourceDir: tmp() });
+    const added: LoftConfig = { services: {} };
+    addInstance(wa, added, { iconSourceDir: tmp() });
+    expect(cfg.services).toEqual(added.services);
+  });
+
+  it('gives a second account of a kind its own colour', () => {
+    const cfg: LoftConfig = { services: { whatsapp: { kind: 'whatsapp' } } };
+    adoptInstance('whatsapp-2', wa, cfg, { variants: ['rose', 'sky'], iconSourceDir: tmp() });
+    expect(cfg.services['whatsapp-2'].icon).toBe('rose');
+  });
+
+  it('records a recovered server address', () => {
+    const cfg: LoftConfig = { services: {} };
+    const talk = getKind('talk')!;
+    adoptInstance('talk', talk, cfg, { customUrl: 'https://nc.example.com', iconSourceDir: tmp() });
+    expect(cfg.services.talk.customUrl).toBe('https://nc.example.com');
   });
 });

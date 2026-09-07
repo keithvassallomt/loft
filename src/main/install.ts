@@ -56,6 +56,44 @@ export function addInstance(
   return inst;
 }
 
+/**
+ * Take an EXISTING partition back into the config under the id it already has.
+ *
+ * The difference from addInstance is the id, and it is the whole point: a partition is
+ * bound to its directory name, so re-adding `whatsapp-2` through addInstance would
+ * allocate `whatsapp` (the lowest free id) and hand the account a different, empty
+ * session. Everything else — entry shape, the colour a second account of a kind gets,
+ * the icon deployment — is deliberately identical, so an adopted service is
+ * indistinguishable from one added by hand.
+ *
+ * The caller has already checked that nothing claims this id (see findAdoptable).
+ */
+export function adoptInstance(
+  id: string,
+  kind: ServiceKind,
+  cfg: LoftConfig,
+  opts: { customUrl?: string; variants?: string[]; iconSourceDir: string; env?: Env },
+): ServiceInstance {
+  const n = instanceNumber(id, kind.id);
+
+  const entry: ServiceConfig = { kind: kind.id };
+  if (opts.customUrl !== undefined) entry.customUrl = opts.customUrl;
+
+  if (n > 1) {
+    const used = listInstances(cfg).filter((i) => i.kind === kind.id).map((i) => i.icon);
+    const colour = pickVariantFor(used, opts.variants ?? []);
+    if (colour) entry.icon = colour;
+  }
+
+  const name = allocateInstanceName(kind.displayName, n, cfg);
+  if (name !== defaultInstanceName(kind.displayName, n)) entry.name = name;
+
+  cfg.services[id] = entry;
+  const inst = resolveInstance(id, cfg)!;
+  deployInstanceIcon(inst, { env: opts.env, iconSourceDir: opts.iconSourceDir });
+  return inst;
+}
+
 export function removeInstance(
   inst: ServiceInstance,
   cfg: LoftConfig,

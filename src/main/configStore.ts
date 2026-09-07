@@ -37,6 +37,24 @@ export interface ConfigStore {
   readonly error?: Error;
   /** Persist the live config atomically. A no-op — never a throw — when not writable. */
   save(): void;
+  /**
+   * Give up on an unreadable config and carry on with a writable empty one, setting the
+   * unusable file aside first.
+   *
+   * The read-only state this leaves is deliberately permanent for the session — but
+   * without this, it is permanent for every session after it too: the only way out was to
+   * find the file in a terminal, which is not a remedy an app can offer a user. Never
+   * called on its own initiative; it exists so the user can be *asked* (index.ts).
+   *
+   * Setting the file aside is the precondition, not a courtesy: it is the only copy of
+   * whatever went wrong, and being writable again means the very next save would rename
+   * a fresh config over it. So a failure to move it leaves the store read-only and
+   * returns false — never "we could not preserve it, so we destroyed it".
+   *
+   * @returns ok — whether the store is now writable — and where the old file was kept,
+   *          which the caller shows the user so the evidence is findable, not just safe.
+   */
+  startFresh(): { ok: boolean; keptAs?: string };
 }
 
 export interface StoreLog {
@@ -57,7 +75,15 @@ const consoleLog: StoreLog = {
  * graph still evaluates, and a save() that can never reach disk.
  */
 export function notLoadedStore(): ConfigStore {
-  return { config: defaultConfig(), status: 'not-loaded', writable: false, save() { /* never */ } };
+  return {
+    config: defaultConfig(),
+    status: 'not-loaded',
+    writable: false,
+    save() { /* never */ },
+    // A secondary instance has no business writing config even after a user says so —
+    // it never read one, so it has nothing to set aside and nothing to start fresh from.
+    startFresh: () => ({ ok: false }),
+  };
 }
 
 /**
@@ -79,6 +105,20 @@ function promoteBackup(backupPath: string, text: string, log: StoreLog): void {
   } catch (err) {
     log.warn(`Could not refresh the config backup at ${backupPath}: ${(err as Error)?.message ?? err}`);
   }
+}
+
+/**
+ * Where to put an unusable config so it is out of the way but not gone.
+ *
+ * `.corrupt` first, and a timestamped sibling if that name is taken: a second failure must
+ * not overwrite the evidence from the first, which is the one file that can still be
+ * mined for the settings the user is about to lose.
+ */
+function setAsideTarget(path: string, now: Date): string {
+  const first = corruptConfigPath(path);
+  if (!existsSync(first)) return first;
+  const stamp = now.toISOString().replace(/[-:]/g, '').replace(/\..*$/, '');
+  return `${first}.${stamp}`;
 }
 
 /**
@@ -143,6 +183,9 @@ export function openConfigStore(path: string, log: StoreLog = consoleLog): Confi
       error = result.error;
       log.error(
         `Could not read ${path}: ${result.error.message}. ` +
+        (result.backupMissing
+          ? `There is no backup at ${backupPath} either. `
+          : `The backup at ${backupPath} could not be used either. `) +
         `Loft has started with default settings and will NOT save any changes, ` +
         `so nothing on disk is overwritten. Fix or move that file and restart Loft.`,
       );
@@ -155,16 +198,49 @@ export function openConfigStore(path: string, log: StoreLog = consoleLog): Confi
     for (const f of cleanupConfigTemps(path)) log.log(`Removed abandoned config temp file ${f}`);
   }
 
+  // `status` and `writable` are getters over the locals above, not fixed properties:
+  // startFresh() moves both, and ~30 call sites hold this one object.
+  let status: ConfigStatus = result.status;
+
   // Repair the primary from the backup right away, so the next launch is an ordinary
   // 'loaded' rather than another recovery.
   const store: ConfigStore = {
     config,
-    status: result.status,
-    writable,
+    get status() { return status; },
+    get writable() { return writable; },
     error,
     save(): void {
       if (!writable) return;
       saveConfig(path, config);
+    },
+    startFresh(): { ok: boolean; keptAs?: string } {
+      if (writable) return { ok: true };
+
+      let keptAs: string | undefined;
+      try {
+        // Gone already (a race, or the read failed on something other than the file
+        // itself): there is nothing to preserve, so nothing blocks starting fresh.
+        if (existsSync(path)) {
+          keptAs = setAsideTarget(path, new Date());
+          renameSync(path, keptAs);
+          log.warn(`The unreadable config was kept as ${keptAs}.`);
+        }
+      } catch (err) {
+        // Read-only stays read-only. Becoming writable now would let the next save
+        // rename a fresh config over the only copy of what went wrong.
+        log.error(
+          `Could not set aside ${path}: ${(err as Error)?.message ?? err}. ` +
+          `Loft is still not saving changes.`,
+        );
+        return { ok: false };
+      }
+
+      writable = true;
+      status = 'missing';
+      log.warn(`Starting fresh: ${path} will be written from defaults.`);
+      // Sweep now rather than at open: this is the first moment writing here is allowed.
+      for (const f of cleanupConfigTemps(path)) log.log(`Removed abandoned config temp file ${f}`);
+      return { ok: true, keptAs };
     },
   };
   if (result.status === 'recovered') {

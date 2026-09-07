@@ -71,6 +71,14 @@ export interface LoftConfig {
   grid?: GridNode | null;
   /** Pinned conversations, in pin order. Absent means none — an empty list is never written. */
   bubbles?: Bubble[];
+  /**
+   * The user was offered their unclaimed logins back (see adopt.ts) and said no.
+   *
+   * Written only on a decline and deleted the moment any service exists, so it cannot
+   * outlive the question it answers. Without it, someone who removed their last service
+   * but kept its data would be asked to undo that at every single launch.
+   */
+  adoptDeclined?: boolean;
 }
 
 export function defaultConfig(): LoftConfig {
@@ -263,6 +271,7 @@ export function parseConfigValue(parsed: Partial<LoftConfig>): LoftConfig {
   const base: LoftConfig = { services };
   if (parsed.globalDnd === true) base.globalDnd = true;
   if (parsed.debug === true) base.debug = true;
+  if (parsed.adoptDeclined === true) base.adoptDeclined = true;
   if (trayBackend) base.trayBackend = trayBackend;
   if (isFiniteNumber(parsed.configVersion)) base.configVersion = parsed.configVersion;
   const w = sanitizeBounds(parsed.window);
@@ -326,8 +335,13 @@ export type ConfigLoadResult =
   | { status: 'missing'; config: LoftConfig }
   /** The primary was unusable and the backup was not. `text` is the backup's bytes. */
   | { status: 'recovered'; config: LoftConfig; text: string; source: 'backup'; originalError: Error }
-  /** Neither the primary nor the backup could be used. There is NO config to write. */
-  | { status: 'error'; error: Error };
+  /**
+   * Neither the primary nor the backup could be used. There is NO config to write.
+   * `backupMissing` distinguishes the two shapes of that: a backup that was there and
+   * was itself unusable, versus no backup at all — which is what the user is told, since
+   * only one of them means the last known-good copy is still out there somewhere.
+   */
+  | { status: 'error'; error: Error; backupMissing: boolean };
 
 type Candidate =
   | { ok: true; config: LoftConfig; text: string }
@@ -337,6 +351,16 @@ function asError(err: unknown): Error {
   return err instanceof Error ? err : new Error(String(err));
 }
 
+/**
+ * An empty file is reported as empty rather than as JSON.parse's "Unexpected end of JSON
+ * input", which describes a truncation the user cannot act on and hides the one fact that
+ * tells them what happened: there are no bytes here at all.
+ *
+ * Zero bytes is the signature of a write that was killed after truncating the destination
+ * and before writing it — which is exactly what the pre-1.0.3 non-atomic save did at a
+ * Flatpak logout (see saveConfig, and the 21ms budget in shutdown.ts). Whitespace-only
+ * counts too: same story, one flush of a partial write.
+ */
 function readCandidate(path: string): Candidate {
   let text: string;
   try {
@@ -344,6 +368,10 @@ function readCandidate(path: string): Candidate {
   } catch (err) {
     const missing = (err as NodeJS.ErrnoException).code === 'ENOENT';
     return { ok: false, missing, error: asError(err) };
+  }
+  if (text.trim() === '') {
+    const what = text.length === 0 ? 'is empty (0 bytes)' : `holds nothing but whitespace (${text.length} bytes)`;
+    return { ok: false, missing: false, error: new Error(`the file ${what}`) };
   }
   try {
     return { ok: true, config: parseConfig(text), text };
@@ -379,7 +407,7 @@ export function loadConfigResult(
     };
   }
   if (primary.missing) return { status: 'missing', config: defaultConfig() };
-  return { status: 'error', error: primary.error };
+  return { status: 'error', error: primary.error, backupMissing: backup.missing };
 }
 
 /** Distinguishes our own abandoned temp files from anything else beside the config. */
