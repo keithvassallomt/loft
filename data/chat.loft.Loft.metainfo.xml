@@ -82,6 +82,19 @@
   </screenshots>
 
   <releases>
+    <release version="1.0.4" date="2026-09-07">
+      <description>
+        <p>
+          Losing your settings is now something you can recover from, rather than something you start over after.
+        </p>
+        <ul>
+          <li>Please quit Loft from the tray and start it again after updating. An update replaces Loft on disk, but the copy already running carries on as the old version until it is restarted — and on Flatpak it can do that for days. This matters most if you are coming from 1.0.2 or earlier, whose settings file could be left empty when the session ended mid-write.</li>
+          <li>Loft can bring your services back from the logins it still has. Your settings file is the only record of which services you use, while the logins themselves live somewhere else entirely and survive anything that happens to it. When Loft starts with no services but finds accounts you are still signed in to, it now offers to restore them. Their logins come back with them; window layout, auto-open, Do Not Disturb and any names or icons you chose were only ever stored in the settings file, so those need setting again.</li>
+          <li>A settings file Loft cannot read no longer leaves it unable to save with no way out. Loft rightly refuses to overwrite such a file, but the only remedy was to find and move it yourself, so every session after it silently saved nothing. Loft now offers to move it aside for you — keeping it, under a name that never overwrites an earlier one — and start saving again.</li>
+          <li>A settings file that is empty is now described as empty, rather than as a syntax error in a file that has no contents at all. Loft also says whether it had a spare copy to restore from.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.3" date="2026-09-03">
       <description>
         <p>
