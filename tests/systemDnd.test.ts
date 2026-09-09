@@ -183,6 +183,120 @@ describe('shellHelperDeps', () => {
   });
 });
 
+describe('propertyDeps connect retry', () => {
+  // A manual clock: the retry must be driven, not waited out, or the suite pays 30s.
+  const clock = () => {
+    let due: Array<{ id: number; fn: () => void }> = [];
+    let next = 1;
+    return {
+      timers: {
+        set: (fn: () => void) => { const id = next++; due.push({ id, fn }); return id; },
+        clear: (t: unknown) => { due = due.filter((d) => d.id !== t); },
+      },
+      pending: () => due.length,
+      tick: () => { const run = due; due = []; for (const d of run) d.fn(); },
+    };
+  };
+
+  const settle = async (): Promise<void> => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
+
+  // The point of the whole change: a property owner that is not on the bus yet at login must
+  // not disable system-DND detection for the session. Loft lost exactly this race against
+  // org.freedesktop.Notifications on a measured 2026-09-09 login.
+  it('picks the property up when its owner appears after the first attempt fails', async () => {
+    const c = clock();
+    let live = false;
+    const connect = vi.fn(async () => {
+      if (!live) throw new Error('ServiceUnknown');
+      return {
+        read: async () => true,
+        subscribe: () => () => {},
+        close: () => {},
+      };
+    });
+    const deps = inhibitedDeps(connect, c.timers);
+    const onChange = vi.fn();
+
+    deps.watch(onChange);
+    await settle();
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(deps.current()).toBeNull();       // unknown, never a confident "off"
+
+    live = true;                              // the shell finishes starting
+    c.tick();
+    await settle();
+
+    expect(deps.current()).toBe(true);
+    expect(onChange).toHaveBeenCalledWith(true);
+  });
+
+  // Bounded on purpose: a desktop whose server has no such property is the common case, and
+  // each attempt opens its own session-bus connection. It must not retry for ever.
+  it('gives up after the backoff schedule is exhausted', async () => {
+    const c = clock();
+    const connect = vi.fn(async () => { throw new Error('ServiceUnknown'); });
+    const deps = inhibitedDeps(connect, c.timers);
+
+    deps.watch(vi.fn());
+    await settle();
+    for (let i = 0; i < 10; i++) { c.tick(); await settle(); }
+
+    expect(connect).toHaveBeenCalledTimes(6);  // initial + [0,2,4,8,16]s
+    expect(c.pending()).toBe(0);
+    expect(deps.current()).toBeNull();
+  });
+
+  it('stops retrying once attached', async () => {
+    const c = clock();
+    const connect = vi.fn(async () => ({
+      read: async () => false,
+      subscribe: () => () => {},
+      close: () => {},
+    }));
+    const deps = inhibitedDeps(connect, c.timers);
+
+    deps.watch(vi.fn());
+    await settle();
+
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(c.pending()).toBe(0);
+  });
+
+  // An attached server answering "no such property" HAS answered; retrying the connect would
+  // reopen a bus connection every few seconds to be told the same thing.
+  it('does not retry the connect when only the initial read fails', async () => {
+    const c = clock();
+    const connect = vi.fn(async () => ({
+      read: async () => { throw new Error('UnknownProperty'); },
+      subscribe: () => () => {},
+      close: () => {},
+    }));
+    const deps = inhibitedDeps(connect, c.timers);
+
+    deps.watch(vi.fn());
+    await settle();
+
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(c.pending()).toBe(0);
+    expect(deps.current()).toBeNull();
+  });
+
+  it('cancels a pending retry on stop()', async () => {
+    const c = clock();
+    const connect = vi.fn(async () => { throw new Error('ServiceUnknown'); });
+    const w = inhibitedDeps(connect, c.timers).watch(vi.fn());
+    await settle();
+    expect(c.pending()).toBe(1);
+
+    w.stop();
+
+    expect(c.pending()).toBe(0);
+    c.tick();
+    await settle();
+    expect(connect).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('inhibitedDeps', () => {
   // Same implementation as the helper backend, pointed at a different property, so these cover
   // the wiring rather than re-testing the shared teardown/race behaviour above.

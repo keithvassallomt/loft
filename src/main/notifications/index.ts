@@ -69,7 +69,11 @@ export async function startNotifications(deps: NotificationsDeps): Promise<Notif
   try {
     server = await connectNotificationServer();
   } catch (err) {
-    console.error('Failed to connect to org.freedesktop.Notifications; notifications disabled:', err);
+    // Only a session bus that cannot be opened at all lands here: connectNotificationServer
+    // no longer rejects when org.freedesktop.Notifications is merely absent, because at login
+    // it routinely is for a second or two and treating that as final silently killed
+    // notifications for the whole session (see createNotificationServer).
+    console.error('Failed to open the session bus; notifications disabled:', err);
   }
 
   // Clicking a banner older than this does nothing rather than routing — the same trade the

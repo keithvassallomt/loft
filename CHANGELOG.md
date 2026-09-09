@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+> [!IMPORTANT]
+> **After updating, quit Loft from the tray and start it again.** An update replaces Loft
+> on disk, but the copy already running carries on as the old version until it is restarted
+> — on Flatpak it can do that for days. The fix below is about notifications going missing,
+> and until you restart, they will keep going missing.
+
+### Fixed
+
+- **Notifications no longer stay silent for a whole session when Loft starts before the desktop's notification service.** Loft asked for the notification service exactly once, at startup, and treated "not there yet" as final — so if it lost the race at login (autostart fires Loft alongside the shell, not after it, and a shell that restarts itself a moment later reopens the gap) every notification was dropped silently until Loft was restarted, while badges and the web apps' own message sounds carried on as normal. Loft now waits for the notification service and connects the moment it appears, which is what the tray icon already did.
+- **Loft can now pick up your desktop's own Do Not Disturb if it arrives late.** Loft asked the desktop for its Do Not Disturb state once at startup and, if nothing answered, stopped asking for the rest of the session — the same one-shot mistake as above, on the same bus name. It now retries for about half a minute, which is what a shell still starting up at login needs. On desktops that do not publish that state at all (Caelestia/quickshell and GNOME Shell among them) nothing changes: Loft keeps treating it as unknown rather than guessing, and its own global and per-service Do Not Disturb remain the way to silence things.
+
 ## [1.0.4] - 2026-09-07
 
 > [!IMPORTANT]

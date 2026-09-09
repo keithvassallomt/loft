@@ -2,6 +2,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import * as dbus from 'dbus-next';
 import { isGnome, isKde } from '../trayBackend';
 import { isFlatpak } from '../desktop';
+import { DBUS_BACKOFF_SECONDS, nextBackoff } from '../dbusRetry';
 
 const SCHEMA = 'org.gnome.desktop.notifications';
 const KEY = 'show-banners';
@@ -93,15 +94,47 @@ export type HelperConnect = () => Promise<HelperDndSource>;
  *
  * Degrades to "unknown" (null), never to a confident "off". `label` only names the backend in
  * the debug line, so a silent unknown is diagnosable.
+ *
+ * The connect is RETRIED, on the shared login-race backoff, because the property's owner may
+ * not hold its bus name yet: `Inhibited` lives on org.freedesktop.Notifications, the very name
+ * Loft raced and lost at a measured 2026-09-09 login, and the Shell helper's is published by a
+ * gnome-shell extension that finishes loading on its own schedule. One attempt treated as final
+ * meant a server that implements the property could never be picked up without restarting Loft.
+ *
+ * The retry is deliberately BOUNDED to the backoff schedule (~30s, six attempts) rather than
+ * held at the maximum for ever like the tray's. A desktop whose server has no such property is
+ * the COMMON case, not a rare one, and each attempt opens and closes its own session-bus
+ * connection; retrying one of those every 16s for the process lifetime would be a permanent
+ * cost imposed on the majority to serve a minority. Thirty seconds covers the login race, which
+ * is the failure actually observed.
  */
-function propertyDeps(connect: HelperConnect, label: string): SystemDndDeps {
+interface RetryTimers {
+  set(fn: () => void, ms: number): unknown;
+  clear(t: unknown): void;
+}
+
+const REAL_TIMERS: RetryTimers = {
+  set: (fn, ms) => setTimeout(fn, ms),
+  clear: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+};
+
+function propertyDeps(connect: HelperConnect, label: string, timers: RetryTimers = REAL_TIMERS): SystemDndDeps {
   let cached: boolean | null = null;
   return {
     current: () => cached,
     watch(onChange) {
       let stopped = false;
       let cleanup = () => {};
-      void (async () => {
+      let timer: unknown;
+      let attempt = 0;
+
+      const cancelRetry = (): void => {
+        if (timer === undefined) return;
+        timers.clear(timer);
+        timer = undefined;
+      };
+
+      const attach = async (): Promise<boolean> => {
         let source: HelperDndSource | undefined;
         try {
           source = await connect();
@@ -111,7 +144,8 @@ function propertyDeps(connect: HelperConnect, label: string): SystemDndDeps {
           // rather than whichever change happened to land first. A failing read is tolerated
           // and does NOT cost us the change stream: a server may be mid-startup, and this is
           // long-standing behaviour of the Inhibited backend. Nothing is reported until the
-          // owner actually says something.
+          // owner actually says something. It is NOT a reason to retry the connect either —
+          // we are attached, and a server that answers "no such property" has answered.
           try {
             emit(await s.read());
           } catch (e) {
@@ -123,15 +157,30 @@ function propertyDeps(connect: HelperConnect, label: string): SystemDndDeps {
             try { s.close(); } catch { /* ignore */ }
           };
           if (stopped) cleanup(); // stop() fired during async setup — tear down what we just built
+          return true;
         } catch (e) {
-          // Nothing to follow: no such name, or subscribing failed. Close whatever connect()
-          // opened — a leaked session-bus connection under Flatpak keeps the instance alive,
-          // and for a desktop with no such property this is the COMMON path, not a rare one.
+          // Nothing to follow YET: no such name, or subscribing failed. Close whatever
+          // connect() opened — a leaked session-bus connection under Flatpak keeps the
+          // instance alive, and for a desktop with no such property this is the COMMON path.
           try { source?.close(); } catch { /* ignore */ }
           console.debug(`${label} system-DND watch unavailable:`, (e as Error)?.message ?? e);
+          return false;
         }
-      })();
-      return { stop: () => { stopped = true; cleanup(); } };
+      };
+
+      const tryAttach = async (): Promise<void> => {
+        if (stopped) return;
+        if (await attach()) return;
+        if (stopped) return; // stop() landed while that attempt was in flight
+        if (attempt >= DBUS_BACKOFF_SECONDS.length) {
+          console.debug(`${label} system-DND unavailable after ${attempt + 1} attempts; staying unknown`);
+          return;
+        }
+        timer = timers.set(() => { timer = undefined; void tryAttach(); }, nextBackoff(attempt++) * 1000);
+      };
+
+      void tryAttach();
+      return { stop: () => { stopped = true; cancelRetry(); cleanup(); } };
     },
   };
 }
@@ -147,8 +196,8 @@ function propertyDeps(connect: HelperConnect, label: string): SystemDndDeps {
  * A user who declined the extension, or whose EGO-installed helper predates the property, gets
  * "unknown" — the previous behaviour, never a wrong answer.
  */
-export function shellHelperDeps(connect: HelperConnect = connectShellHelperDnd): SystemDndDeps {
-  return propertyDeps(connect, 'GNOME Shell helper');
+export function shellHelperDeps(connect: HelperConnect = connectShellHelperDnd, timers?: RetryTimers): SystemDndDeps {
+  return propertyDeps(connect, 'GNOME Shell helper', timers);
 }
 
 /**
@@ -162,8 +211,8 @@ export function shellHelperDeps(connect: HelperConnect = connectShellHelperDnd):
  * rather than being excluded by a desktop allowlist. GNOME is deliberately NOT routed here:
  * gnome-shell implements no properties at all on that interface (measured — GetAll returns {}).
  */
-export function inhibitedDeps(connect: HelperConnect = connectInhibitedDnd): SystemDndDeps {
-  return propertyDeps(connect, 'org.freedesktop.Notifications Inhibited');
+export function inhibitedDeps(connect: HelperConnect = connectInhibitedDnd, timers?: RetryTimers): SystemDndDeps {
+  return propertyDeps(connect, 'org.freedesktop.Notifications Inhibited', timers);
 }
 
 /**

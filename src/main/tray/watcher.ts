@@ -1,11 +1,11 @@
 import * as dbus from 'dbus-next';
 
-export const WATCHER_BACKOFF_SECONDS = [0, 2, 4, 8, 16] as const;
+import { DBUS_BACKOFF_SECONDS, nextBackoff } from '../dbusRetry';
 
-/** Retry delay (seconds) for the Nth StatusNotifierWatcher registration attempt; holds at the max. */
-export function nextBackoff(attempt: number): number {
-  return WATCHER_BACKOFF_SECONDS[Math.min(attempt, WATCHER_BACKOFF_SECONDS.length - 1)];
-}
+// Re-exported under the tray's own names: the schedule now lives in dbusRetry, because the
+// notification client lost the same login race for the same reason and needs the same cure.
+export const WATCHER_BACKOFF_SECONDS = DBUS_BACKOFF_SECONDS;
+export { nextBackoff };
 
 const WATCHER_NAME = 'org.kde.StatusNotifierWatcher';
 const WATCHER_PATH = '/StatusNotifierWatcher';
