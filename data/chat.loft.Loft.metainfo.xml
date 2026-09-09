@@ -82,6 +82,18 @@
   </screenshots>
 
   <releases>
+    <release version="1.0.5" date="2026-09-09">
+      <description>
+        <p>
+          Notifications could go missing for a whole session, without anything appearing to be wrong. They no longer can.
+        </p>
+        <ul>
+          <li>Please quit Loft from the tray and start it again after updating. An update replaces Loft on disk, but the copy already running carries on as the old version until it is restarted — and on Flatpak it can do that for days. This release is about notifications going missing, so until you restart, they will keep going missing.</li>
+          <li>Notifications no longer stay silent for a whole session when Loft starts a moment before the rest of your desktop. Loft asks your desktop for its notification service when it starts, and at login it can get there first — Loft is started alongside the rest of your desktop, not after it, and a desktop shell that restarts itself a moment later reopens the gap. Loft only ever asked once, so arriving early meant it gave up, and every notification, for every service, was quietly dropped until Loft was restarted next. Unread badges and the sounds the web apps play themselves kept working the whole time, so there was nothing to see. Loft now waits, and connects the moment the notification service appears.</li>
+          <li>Loft can also pick up your desktop's own Do Not Disturb setting if that arrives late, which it had been giving up on in the same way. On desktops that do not publish that setting at all, nothing changes: Loft treats it as unknown rather than guessing, and its own Do Not Disturb — for everything at once or for one service — remains the way to silence things.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.4" date="2026-09-07">
       <description>
         <p>
