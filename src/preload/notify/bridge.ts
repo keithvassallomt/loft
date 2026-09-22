@@ -40,9 +40,10 @@ export function startNotifyBridge(serviceId: string, deps: BridgeDeps): void {
 
   const overrideHandle = installNotificationOverride(win, doc, (n) => { void handleNotice(n); });
 
-  // Gate the web app's OWN notification ding (played in-page, e.g. Messenger's
-  // <audio>) by the same DND + focus rule as the banner. Calls, ringtones, and
-  // user-initiated media are left alone (see notificationSound.ts).
+  // Gate the web app's OWN notification ding (played in-page, whether through an
+  // <audio> element like Messenger's or through Web Audio like Element's) by the
+  // same DND + focus rule as the banner. Calls, ringtones, and user-initiated
+  // media are left alone (see notificationSound.ts).
   const soundGate = installNotificationSoundGate(win);
 
   async function handleNotice(n: OverrideNotice): Promise<void> {

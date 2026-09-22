@@ -1,13 +1,21 @@
 // Gates a web app's OWN notification/UI sound (e.g. Messenger's incoming-message
-// "ding", played by the page itself via an <audio> element) so it follows Loft's
-// notification policy instead of firing on every message. Runs in the service
-// view's main-world preload (contextIsolation: false), wrapping the page's
-// HTMLMediaElement.play.
+// "ding", played by the page itself) so it follows Loft's notification policy
+// instead of firing on every message. Runs in the service view's main-world
+// preload (contextIsolation: false), wrapping the two ways a page can make a
+// sound: HTMLMediaElement.play and the Web Audio API.
+//
+// BOTH paths are needed, and which one an app uses is not something you can
+// guess from the app: Messenger, Telegram and NextCloud Talk all reach for an
+// <audio> element (`new Audio(url).play()`), while ELEMENT decodes the sound
+// into an AudioBuffer and fires it through an AudioBufferSourceNode
+// (`src/audio/BackgroundAudio.ts` upstream). Element's ding therefore never
+// touches HTMLMediaElement at all, and for as long as this file only wrapped
+// play() its DND setting silenced the banner but not the sound.
 //
 // Discovered via instrumentation: Messenger plays `…/lvSDckxyoU5.ogg` from its
 // own JS on every incoming message, regardless of focus/visibility — untouched
-// by our Notification interception or the visibility override. This is the only
-// lever that reaches it.
+// by our Notification interception or the visibility override. These wrappers
+// are the only lever that reaches either path.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -49,13 +57,48 @@ export function shouldAllowSound(el: MediaLike, s: SoundState): boolean {
   return !s.dnd && s.hidden;
 }
 
+/** An AudioBufferSourceNode as far as the gate cares — kept minimal so it's unit-testable. */
+export interface BufferSourceLike {
+  loop: boolean;
+  buffer: { duration: number } | null;
+  disconnect(): void;
+}
+
+/**
+ * Longest buffer we will treat as a notification ding. Anything longer is content — a voice
+ * message, a video's audio track, a call recording — and is never gated, however it was
+ * started. This is the Web Audio path's substitute for the `srcObject` check on the media
+ * path: a decoded AudioBuffer carries no hint of what it IS, so length is the only signal
+ * left, and the gesture window alone is too tight to lean on (decoding a long voice message
+ * can push `start()` well past a second after the click that asked for it).
+ */
+export const MAX_DING_SECONDS = 10;
+
+/**
+ * Should this `AudioBufferSourceNode.start()` be allowed to reach the speakers?
+ *
+ * Same shape of judgement as `shouldAllowSound`, against what a Web Audio node can tell us:
+ * looping nodes are ringtones, long buffers are content, and anything fired right after a
+ * user gesture was asked for. What remains — a short one-shot buffer fired with no gesture —
+ * is a notification/UI sound, gated by the SAME rule as the desktop banner.
+ */
+export function shouldAllowBufferSound(node: BufferSourceLike, s: SoundState): boolean {
+  if (node.loop) return true;
+  // No buffer = nothing to hear; leave the page's own error path alone.
+  const duration = node.buffer?.duration;
+  if (duration === undefined || duration > MAX_DING_SECONDS) return true;
+  if (s.msSinceGesture < GESTURE_WINDOW_MS) return true;
+  return !s.dnd && s.hidden;
+}
+
 export interface SoundGate {
   setDnd(v: boolean): void;
   setHidden(v: boolean): void;
 }
 
 /**
- * Install the notification-sound gate on `win.HTMLMediaElement.prototype.play`.
+ * Install the notification-sound gate on `win.HTMLMediaElement.prototype.play` and on
+ * `win.AudioBufferSourceNode.prototype.start`.
  * Returns handles to push the current DND / hidden state (fed from the bridge's
  * `service:dnd` / `service:visibility` IPC).
  */
@@ -93,6 +136,26 @@ export function installNotificationSoundGate(
       // that awaits play() doesn't error.
       if (!allow) return Promise.resolve();
       return origPlay.apply(this, args);
+    };
+  }
+
+  // The Web Audio path. Unlike play(), a gated start() must still HAPPEN: the page's own
+  // bookkeeping hangs off the node running to completion — Element's BackgroundAudio
+  // decrements a counter in `onended` and only suspends its shared AudioContext when that
+  // counter reaches zero, so a start() we simply skipped would leave the context running for
+  // the rest of the session and every later sound counted as still playing. Detaching the
+  // node from the graph instead costs nothing: the buffer plays out and `ended` fires on
+  // schedule, it just reaches no output. Pages connect before they start (they must, or the
+  // first frames are lost), so disconnecting here is not a race.
+  const BufferSource = win.AudioBufferSourceNode;
+  if (BufferSource && BufferSource.prototype && typeof BufferSource.prototype.start === 'function') {
+    const origStart = BufferSource.prototype.start;
+    BufferSource.prototype.start = function (this: BufferSourceLike, ...args: any[]) {
+      const allow = shouldAllowBufferSound(this, { dnd, hidden, msSinceGesture: now() - lastGesture });
+      if (!allow) {
+        try { this.disconnect(); } catch { /* never connected — nothing to detach */ }
+      }
+      return origStart.apply(this, args);
     };
   }
 

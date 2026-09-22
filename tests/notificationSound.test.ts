@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  shouldAllowSound, installNotificationSoundGate, GESTURE_WINDOW_MS, type MediaLike,
+  shouldAllowSound, shouldAllowBufferSound, installNotificationSoundGate,
+  GESTURE_WINDOW_MS, MAX_DING_SECONDS, type MediaLike, type BufferSourceLike,
 } from '../src/preload/notify/notificationSound';
 
 const audio = (over: Partial<MediaLike> = {}): MediaLike => ({ muted: false, loop: false, srcObject: null, ...over });
@@ -98,5 +99,83 @@ describe('installNotificationSoundGate', () => {
     t = 10_100;
     await el.play();
     expect(HTMLMediaElement._origCalls).toBe(beforeType + 1); // played
+  });
+});
+
+const bufferSource = (over: Partial<BufferSourceLike> = {}): BufferSourceLike => ({
+  loop: false, buffer: { duration: 1 }, disconnect: () => {}, ...over,
+});
+
+describe('shouldAllowBufferSound', () => {
+  const away = { dnd: false, hidden: true, msSinceGesture: Infinity }; // Loft would notify
+
+  // Element plays its ding through Web Audio, not an <audio> element, so this path is the
+  // only thing between its DND setting and a sound on every message.
+  it('gates a one-shot buffer by DND + focus, like the media path', () => {
+    expect(shouldAllowBufferSound(bufferSource(), away)).toBe(true);
+    expect(shouldAllowBufferSound(bufferSource(), { ...away, dnd: true })).toBe(false);
+    expect(shouldAllowBufferSound(bufferSource(), { ...away, hidden: false })).toBe(false);
+  });
+
+  it('always allows what is not a ding', () => {
+    const gated = { dnd: true, hidden: false, msSinceGesture: Infinity };
+    expect(shouldAllowBufferSound(bufferSource({ loop: true }), gated)).toBe(true); // ringtone
+    expect(shouldAllowBufferSound(bufferSource({ buffer: null }), gated)).toBe(true); // nothing to hear
+    // Longer than any ding = content (a voice message), whose decode can outlast the gesture window.
+    const long = { duration: MAX_DING_SECONDS + 1 };
+    expect(shouldAllowBufferSound(bufferSource({ buffer: long }), gated)).toBe(true);
+    expect(shouldAllowBufferSound(bufferSource(), { ...gated, msSinceGesture: GESTURE_WINDOW_MS - 1 })).toBe(true);
+  });
+});
+
+describe('installNotificationSoundGate — Web Audio path', () => {
+  function fakeWin() {
+    const listeners: Record<string, Array<(e?: unknown) => void>> = {};
+    class AudioBufferSourceNode {
+      loop = false;
+      buffer: { duration: number } | null = { duration: 1 };
+      disconnected = 0;
+      started = 0;
+      disconnect(): void { this.disconnected++; }
+      start(): void { this.started++; }
+    }
+    const win: any = {
+      AudioBufferSourceNode,
+      addEventListener: (t: string, cb: (e?: unknown) => void) => { (listeners[t] ||= []).push(cb); },
+      _fire: (t: string, e?: unknown) => { for (const cb of listeners[t] || []) cb(e); },
+    };
+    return { win, AudioBufferSourceNode };
+  }
+
+  it('detaches a gated ding from the graph but still starts it', () => {
+    let t = 10_000;
+    const { win, AudioBufferSourceNode } = fakeWin();
+    const gate = installNotificationSoundGate(win, () => t);
+
+    gate.setDnd(false); gate.setHidden(true); // away, not DND → the ding IS the notification
+    const heard = new AudioBufferSourceNode();
+    heard.start();
+    expect(heard.started).toBe(1);
+    expect(heard.disconnected).toBe(0);
+
+    gate.setDnd(true); // DND → silent
+    const silenced = new AudioBufferSourceNode();
+    silenced.start();
+    // start() must still happen: the page's own bookkeeping hangs off `ended` firing
+    // (Element only suspends its shared AudioContext once its play counter drains).
+    expect(silenced.started).toBe(1);
+    expect(silenced.disconnected).toBe(1);
+  });
+
+  it('leaves a ringtone connected under DND', () => {
+    const { win, AudioBufferSourceNode } = fakeWin();
+    const gate = installNotificationSoundGate(win, () => 10_000);
+    gate.setDnd(true); gate.setHidden(false);
+
+    const ring = new AudioBufferSourceNode();
+    ring.loop = true;
+    ring.start();
+    expect(ring.started).toBe(1);
+    expect(ring.disconnected).toBe(0);
   });
 });
