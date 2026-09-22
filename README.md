@@ -87,9 +87,11 @@ See `flatpak/README.md` for the manifest layout and how to regenerate the offlin
 
 ### Cutting a release (maintainers)
 
+Work is written up under `## [Unreleased]` at the top of [`CHANGELOG.md`](CHANGELOG.md) as it lands, never under a version heading. Cutting a release is what turns that section into a version.
+
 Releases are built by [`.github/workflows/release.yml`](.github/workflows/release.yml):
 
-1. Bump the version in `package.json`, and add matching entries to `CHANGELOG.md` and `data/chat.loft.Loft.metainfo.xml` (with a real release date — the CI AppStream validation step rejects a placeholder date on tag builds).
+1. Bump the version in `package.json`. Rename the changelog's `## [Unreleased]` heading to `## [X.Y.Z] - <date>` and open a fresh empty `## [Unreleased]` above it, then add a matching `<release>` to `data/chat.loft.Loft.metainfo.xml` (with a real release date, since the CI AppStream validation step rejects a placeholder date on tag builds).
 2. Commit, then tag the commit `vX.Y.Z` and push the tag.
 3. GitHub Actions checks out the tag, runs the test/typecheck suite, builds the DEB/RPM/AppImage packages (`electron-builder`) and the Flatpak bundle (`flatpak-builder`, from the committed offline sources), and publishes all four artifacts to a GitHub Release for that tag.
 

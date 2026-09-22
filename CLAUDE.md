@@ -224,6 +224,14 @@ Loft currently logs to stdout/stderr via plain `console.*` calls in the main pro
 
 Build-time icon assets (repo, not runtime): `assets/icons/variants/<kind>-<colour>.png` (e.g. `whatsapp-rose.png`) are the pastel swatches the hub's icon picker offers, regenerated from the checked-in SVGs by `npm run icons` (needs ImageMagick) — only needed when adding or changing an icon, never for an ordinary build.
 
+## Changelog
+
+`CHANGELOG.md` keeps a standing `## [Unreleased]` section at the top, and **that is where work goes as it lands**, never a new `## [X.Y.Z]` heading for a version that has not shipped. Cutting a release renames that heading to the version and opens a fresh empty one above it (see README's "Cutting a release"). `tests/changelogSection.test.ts` holds the convention in place: it asserts `## [Unreleased]` is the first version heading in the file.
+
+Entries are user-facing release notes, not commit messages. `scripts/changelogSection.mjs` lifts a version's section verbatim into the GitHub release body, so each entry is a bold sentence naming the symptom a user would recognise, then plain language on what changed and why. The script refuses to publish the `[Unreleased]` section under a version's name, and when a tagged version has no section of its own it says so **and** names the likely cause, because the release workflow only reaches that point after every package is built, on a tag that is already pushed.
+
+Bumping the version is a **separate** commit (`chore: update versions to X.Y.Z`) covering `package.json`, the Flatpak manifest's release tag and the newest metainfo `<release>` together, since `tests/flatpakManifest.test.ts` enforces that those three agree. Adding a changelog entry is not an invitation to bump anything.
+
 ## Packaging
 
 Loft is distributed as native Linux packages: **DEB**, **RPM**, and **AppImage**, built with `electron-builder` (`electron-builder.yml`, app id `chat.loft.Loft`).

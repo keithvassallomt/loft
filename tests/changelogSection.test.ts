@@ -48,9 +48,55 @@ describe('changelogSection', () => {
     expect(() => changelogSection('## [1.0.0] - 2026-01-01\n\n## [0.9.0] - 2025-01-01\n\n- x\n', '1.0.0')).toThrow(/empty/);
   });
 
-  // Guards the release itself: the version being shipped must have notes to ship.
+  // Guards the release itself: the version being shipped must have notes to ship. It is also
+  // what catches a version bump whose notes were left behind under [Unreleased], and it
+  // catches that in `npm test`, before the tag exists, which the workflow's own call cannot.
   it('finds a section for the current package version', () => {
     expect(changelogSection(changelog, pkgVersion).length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * CHANGELOG.md carries a standing `## [Unreleased]` section at the top; cutting a release
+ * renames it to the version and opens a fresh empty one. These cover what that permanent
+ * heading does to the release-notes extraction that reads the same file.
+ */
+describe('changelogSection with a standing [Unreleased] section', () => {
+  const md = [
+    '# Changelog', '',
+    '## [Unreleased]', '', '### Fixed', '- not out yet', '',
+    '## [1.0.0] - 2026-01-01', '', '### Added', '- the shipped thing', '',
+  ].join('\n');
+
+  // The section ABOVE a version is the one that could bleed into it.
+  it('does not leak unreleased notes into the released version below it', () => {
+    expect(changelogSection(md, '1.0.0')).toBe('### Added\n- the shipped thing');
+  });
+
+  it('never publishes the [Unreleased] section as a release', () => {
+    expect(() => changelogSection(md, 'Unreleased')).toThrow(/Refusing/);
+    expect(() => changelogSection(md, 'unreleased')).toThrow(/Refusing/); // tags vary in case
+  });
+
+  // The workflow reaches this only after every package is built, on a tag already pushed, so
+  // "no section" on its own would leave you guessing at the one thing that is almost always
+  // wrong: the notes are still under [Unreleased].
+  it('names the stranded section when the version being released has none', () => {
+    expect(() => changelogSection(md, '1.1.0')).toThrow(/still under "## \[Unreleased\]"/);
+    expect(() => changelogSection(md, '1.1.0')).toThrow(/## \[1\.1\.0\] - <date>/);
+  });
+
+  it('gives the plain error when there is no [Unreleased] section to blame', () => {
+    const noUnreleased = '## [1.0.0] - 2026-01-01\n\n- x\n';
+    expect(() => changelogSection(noUnreleased, '1.1.0')).toThrow(/no section for version 1\.1\.0$/);
+  });
+
+  // The convention itself: the real file keeps that heading, and keeps it FIRST, so there is
+  // always somewhere to put work that has no version yet. Presence only, since it is
+  // legitimately empty in the moments right after a release.
+  it('is the first version heading in the real CHANGELOG.md', () => {
+    const headings = changelog.split('\n').filter((l) => /^## \[/.test(l));
+    expect(headings[0]).toBe('## [Unreleased]');
   });
 });
 
