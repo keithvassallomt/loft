@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-09-22
+
 ### Fixed
 
 - **Element no longer plays its message sound while Do Not Disturb is on.** Loft silences a web app's own message ding the same way it withholds the notification, but it only covered the usual way a page makes a sound, an audio element. Element takes a different route, decoding the sound and feeding it to the browser's audio engine directly, so it slipped past: the notification was correctly withheld while the ding still fired on every message. Loft now covers both routes, for every service. Ringtones, and anything you started yourself such as a voice message, are left alone as before.
