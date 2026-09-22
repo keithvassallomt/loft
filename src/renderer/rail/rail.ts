@@ -59,6 +59,49 @@ function endDrag(): void {
 const initials = (name: string): string =>
   name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * The Do Not Disturb mark: a bell with a line through it, in a chip at the icon's TOP-left.
+ *
+ * Drawn rather than set as a glyph because the two obvious characters are emoji — 🌙 (what
+ * this used to be) and 🔕 — and an emoji font renders them in full colour at whatever size it
+ * likes, which at rail scale is an unreadable coloured blob that matches nothing else here.
+ * An inline SVG is monochrome, sized exactly, and follows the theme. It is built in the DOM,
+ * not loaded, so the rail's `img-src loft:` CSP is not involved.
+ *
+ * The slash is stroked TWICE: once wide in the chip's own fill, then narrow in the
+ * foreground. Without that first pass the line merges into the bell it crosses and the mark
+ * reads as a smudge instead of a struck-through bell.
+ */
+function dndMark(): HTMLSpanElement {
+  const m = document.createElement('span');
+  m.className = 'mark dnd';
+  m.setAttribute('aria-hidden', 'true');
+
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+
+  // Filled, not stroked: at 11px a stroked outline closes up into a solid lump, while a
+  // filled silhouette keeps the bell's shoulders and clapper distinguishable.
+  const bell = document.createElementNS(SVG_NS, 'path');
+  bell.setAttribute('d', 'M8 1.5c2.3 0 3.9 1.8 3.9 4.1V9l1.4 2.2H2.7L4.1 9V5.6C4.1 3.3 5.7 1.5 8 1.5z');
+  const clapper = document.createElementNS(SVG_NS, 'path');
+  clapper.setAttribute('d', 'M6.3 12.3h3.4a1.7 1.7 0 0 1-3.4 0z');
+  svg.append(bell, clapper);
+
+  for (const cls of ['cut', 'slash']) {
+    const line = document.createElementNS(SVG_NS, 'line');
+    line.setAttribute('x1', '2.4'); line.setAttribute('y1', '2.4');
+    line.setAttribute('x2', '13.6'); line.setAttribute('y2', '13.6');
+    line.setAttribute('class', cls);
+    svg.append(line);
+  }
+
+  m.append(svg);
+  return m;
+}
+
 function serviceButton(item: RailItem, iconEpoch: number): HTMLButtonElement {
   const b = document.createElement('button');
   b.className = 'item';
@@ -71,7 +114,7 @@ function serviceButton(item: RailItem, iconEpoch: number): HTMLButtonElement {
   // The real service logo, served by the loft://icon/<id> protocol registered in main; the
   // rail's CSP already allows `img-src loft:`. If the icon is missing the image errors, and
   // we restore the initials placeholder rather than leaving an empty chip. prepend, not
-  // append: the badge and the ⧉/🌙 marks are appended after this and must stay on top.
+  // append: the badge and the ⧉/bell marks are appended after this and must stay on top.
   const img = document.createElement('img');
   img.className = 'icon';
   // ?e=<epoch> busts Chromium's cache under the stable loft://icon/<id> URL: without it a
@@ -94,14 +137,14 @@ function serviceButton(item: RailItem, iconEpoch: number): HTMLButtonElement {
     n.textContent = item.badge > 99 ? '99+' : String(item.badge);
     b.append(n);
   }
-  for (const [on, cls, glyph] of [[item.detached, 'detached', '⧉'], [item.dnd, 'dnd', '🌙']] as const) {
-    if (!on) continue;
+  if (item.detached) {
     const m = document.createElement('span');
-    m.className = `mark ${cls}`;
+    m.className = 'mark detached';
     m.setAttribute('aria-hidden', 'true');
-    m.textContent = glyph;
+    m.textContent = '⧉';
     b.append(m);
   }
+  if (item.dnd) b.append(dndMark());
 
   b.dataset.id = item.id;
 

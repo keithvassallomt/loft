@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Element no longer plays its message sound while Do Not Disturb is on.** Loft silences a web app's own message ding the same way it withholds the notification, but it only covered the usual way a page makes a sound, an audio element. Element takes a different route, decoding the sound and feeding it to the browser's audio engine directly, so it slipped past: the notification was correctly withheld while the ding still fired on every message. Loft now covers both routes, for every service. Ringtones, and anything you started yourself such as a voice message, are left alone as before.
+- **The Do Not Disturb mark on a service icon is now a struck-through bell, and is no longer half-covered.** It was a moon, which the system's emoji font drew as a small yellow blob tucked under the bottom corner of the icon, where the next icon down the rail painted over part of it. It is now a bell with a line through it, sitting clear in the top corner. The mark on a service opened in its own window was being clipped the same way, and is fixed too.
 
 ## [1.0.5] - 2026-09-09
 

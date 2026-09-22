@@ -43,7 +43,31 @@ body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
   border-radius: 8px; padding: 0 3px;
   font: 700 8px/1.5 system-ui, sans-serif;
 }
-.mark { position: absolute; bottom: -2px; right: -2px; font-size: 8px; }
+/* z-index because these hang OUTSIDE the tile: rail items are siblings with opaque
+   backgrounds, so without it the next icon down paints over the overhang and the mark comes
+   out half-eaten. */
+.mark { position: absolute; bottom: -2px; right: -2px; font-size: 8px; z-index: 1; }
+
+/* Do Not Disturb. TOP-LEFT, mirroring the unread badge opposite it: bottom-right is
+   .mark.detached's, and the bottom edge is where a mark gets clipped by the next item.
+   Ringed in the rail's own background colour so it reads as a chip sitting ON the icon,
+   the same trick .bubble .service and .bubble .unread use.
+
+   GREY, not an accent colour: grey is what "silenced" already looks like elsewhere in Loft
+   (the tray composites a grey dash for exactly this state), and red here would be read as
+   unread, which is the badge four pixels away. --chip is shared with the slash's backing
+   stroke, which has to match this fill exactly to cut the line out of the bell. */
+.mark.dnd {
+  --chip: #6e6e73;
+  top: -4px; left: -4px; right: auto; bottom: auto;
+  width: 16px; height: 16px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--chip); border: 2px solid #e5e5e7;
+  color: #fff;
+}
+.mark.dnd svg { width: 12px; height: 12px; display: block; fill: currentColor; }
+.mark.dnd .cut { stroke: var(--chip); stroke-width: 4.2; stroke-linecap: round; }
+.mark.dnd .slash { stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 
 @media (prefers-color-scheme: dark) {
   #rail { background: #3d3d3f; border-right-color: #424245; }
@@ -56,6 +80,9 @@ body { margin: 0; overflow: hidden; font-family: system-ui, sans-serif; }
   .grid:hover { background: #4a4a4c; }
   .grid.active { box-shadow: inset 3px 0 0 #0a84ff; background: #48484a; }
   .grid .count { background: #0a84ff; }
+  /* Both follow the theme here, unlike .bubble .unread: the DND chip is grey rather than a
+     fixed accent, so it needs lifting off the darker rail to stay visible. */
+  .mark.dnd { --chip: #8e8e93; border-color: #3d3d3f; }
 }
 
 /* Insertion indicator: where a dragged icon would land. Fixed-position so it is not a
