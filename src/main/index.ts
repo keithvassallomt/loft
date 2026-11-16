@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, writeFileSync, rmSync, statSync } from 'node:fs'
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { parseArgs } from './cli';
+import { enableChromiumFeatures } from './chromiumFeatures';
 import { getKind, KINDS, ServiceKind, effectiveUrl } from './registry';
 import { configPath, backupConfigPath, corruptConfigPath, LoftConfig, reopenDetachedEnabled, effectiveAutoOpen } from './config';
 import { openConfigStore, notLoadedStore } from './configStore';
@@ -75,6 +76,9 @@ app.setAppUserModelId('chat.loft.Loft');
 // window, not its own decorated window), so the default Electron menu bar is just empty
 // chrome with nowhere to render.
 Menu.setApplicationMenu(null);
+// Before 'ready', or Chromium never sees it. Without this a file dragged in from the desktop
+// arrives in the Flatpak as an unreadable host path (see chromiumFeatures.ts).
+enableChromiumFeatures(app.commandLine);
 
 const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
 app.setPath('userData', join(dataHome, 'loft'));

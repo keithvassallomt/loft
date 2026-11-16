@@ -49,8 +49,8 @@ finish-args:
   # Not a linter failure either: flatpak-builder-lint has no rule for device=all, and
   # Flathub's own com.google.Chrome manifest still ships it.
   #
-  # To revisit later: set `enable-features=WebRtcPipeWireCamera` via app.commandLine
-  # (Loft currently sets no Chromium switches) while KEEPING --device=all, confirm cameras
+  # To revisit later: add `WebRtcPipeWireCamera` to LOFT_ENABLED_FEATURES
+  # (src/main/chromiumFeatures.ts) while KEEPING --device=all, confirm cameras
   # still enumerate, and only then narrow to --device=dri. Needs no new finish-args — the
   # Camera portal lives on the portal bus name, which is granted by default.
   - --device=all
