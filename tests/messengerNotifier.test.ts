@@ -35,6 +35,17 @@ describe('MessengerNotifier', () => {
     expect(n.scan(doc(row('/messages/t/3', 'Cy', 'first'))).length).toBe(0); // unchanged
     expect(n.scan(doc(row('/messages/t/3', 'Cy', 'second'))).length).toBe(1); // changed
   });
+  it('never notifies a preview in your own words (a draft synced from another device)', () => {
+    const n = new MessengerNotifier({ graceMs: 0, now: () => 5000 });
+    expect(n.scan(doc(row('/messages/t/6', 'Fay', 'You: half-typed reply')))).toEqual([]);
+  });
+  it('a draft over a notified message stays quiet, and so does clearing it', () => {
+    const n = new MessengerNotifier({ graceMs: 0, now: () => 5000 });
+    expect(n.scan(doc(row('/messages/t/7', 'Gus', 'hello'))).length).toBe(1);
+    expect(n.scan(doc(row('/messages/t/7', 'Gus', 'You: draft')))).toEqual([]); // your draft
+    expect(n.scan(doc(row('/messages/t/7', 'Gus', 'hello')))).toEqual([]);     // draft cleared
+    expect(n.scan(doc(row('/messages/t/7', 'Gus', 'new one'))).length).toBe(1); // real news
+  });
   it('skips muted conversations and honours DND silent-add', () => {
     let t = 5000;
     const n = new MessengerNotifier({ graceMs: 0, now: () => t });

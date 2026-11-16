@@ -2,6 +2,9 @@ export interface NotifyPayload { sender: string; body: string; icon: string; hre
 
 const TIMESTAMP_RE = /^\d+[hms]$/;
 const ACTIVE_RE = /^Active\b/;
+// A preview in the user's own words: Messenger writes "You: ..." for your own message, and
+// shows a reply you started typing on another device the same way.
+const OWN_PREVIEW_RE = /^You:/;
 
 // NodeFilter.SHOW_* constants, inlined: this module runs under a plain 'node'
 // vitest environment (tests build their own JSDOM Document rather than using
@@ -37,6 +40,17 @@ export class MessengerNotifier {
       if (anchor.querySelector('[style*="--disabled-icon"]')) continue; // muted
       currentlyUnread.add(href);
 
+      // Your own words are never news. A conversation can stay unread while its preview
+      // shows your own text: start a reply, walk away, and Messenger syncs the half-typed
+      // text to every device as "You: ...", so another machine read that as a fresh preview
+      // and notified you about your own draft. Skipped WITHOUT recording a fingerprint, so
+      // the entry keeps whatever was last notified: when the draft is cleared and the
+      // preview goes back to the message underneath, it matches and stays quiet. Checked on
+      // both fields because which span the extractor takes for the sender is a guess about
+      // Messenger's markup; no contact is called "You: ...".
+      const payload = this.extract(doc, anchor, href);
+      if (payload && (OWN_PREVIEW_RE.test(payload.body) || OWN_PREVIEW_RE.test(payload.sender))) continue;
+
       const fp = this.fingerprint(doc, anchor);
       if (this.notified.get(href) === fp) continue;
 
@@ -44,7 +58,6 @@ export class MessengerNotifier {
       this.notified.set(href, fp);            // record in all paths (grace/DND/emit)
       if (inGrace || this.dnd) continue;
 
-      const payload = this.extract(doc, anchor, href);
       if (payload) out.push(payload);
     }
     for (const [href] of this.notified) if (!currentlyUnread.has(href)) this.notified.delete(href);

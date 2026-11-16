@@ -32,6 +32,13 @@ export class TelegramNotifier {
       const key = this.chatKey(row);
       currentlyUnread.add(key);
 
+      // A draft is the user's own text, and Telegram syncs drafts to every device, showing
+      // one in place of the last message. The original port stripped the "Draft:" prefix
+      // and notified, so a reply started elsewhere arrived looking like an incoming message.
+      // Skipped without recording a fingerprint, as in MessengerNotifier, so clearing the
+      // draft does not re-notify the message underneath it.
+      if (this.isDraft(row)) continue;
+
       const fp = this.fingerprint(row);
       if (this.notified.get(key) === fp) continue;
 
@@ -71,15 +78,22 @@ export class TelegramNotifier {
     return row.getAttribute('data-peer-id') ?? (row.textContent ?? '').substring(0, 50);
   }
 
+  private summary(row: Element): string {
+    return (row.querySelector('.last-message-summary')?.textContent ?? '').trim();
+  }
+
+  private isDraft(row: Element): boolean {
+    return /^Draft\s*:/.test(this.summary(row));
+  }
+
   // Ported from content.js extractTelegramData(): sender from h3.fullName,
-  // preview from .last-message-summary (strip "Draft: " prefix, truncate
-  // long previews). Avatar is resolved separately in extract() since the
-  // fingerprint doesn't need it.
+  // preview from .last-message-summary (truncating long previews). Avatar is
+  // resolved separately in extract() since the fingerprint doesn't need it.
+  // Draft rows never get here (see scan), so there is no prefix to strip.
   private extractData(row: Element): { sender: string; preview: string } {
     const sender = (row.querySelector('h3.fullName')?.textContent ?? '').trim();
 
-    let preview = (row.querySelector('.last-message-summary')?.textContent ?? '').trim();
-    preview = preview.replace(/^Draft:\s*/, '');
+    let preview = this.summary(row);
     if (preview.length > 200) preview = preview.substring(0, 200) + '…';
 
     return { sender, preview };
