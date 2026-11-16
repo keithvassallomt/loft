@@ -28,10 +28,30 @@ describe('badge parsers', () => {
     );
     expect(BADGE_PARSERS.talk(doc)).toBe(6);
   });
-  it('slack counts unread channel rows', () => {
+  it('slack counts unread channel rows when the title has no count', () => {
     const doc = docFrom(
       '<div class="p-channel_sidebar__channel--unread"></div>' +
       '<div class="p-channel_sidebar__channel--unread"></div>',
+    );
+    expect(BADGE_PARSERS.slack(doc)).toBe(2);
+  });
+  it('slack reads its own count from the title, even on the DMs tab with no channel rows', () => {
+    const doc = docFrom(
+      '<span class="p-dms_channel__unread_badge">2</span><span class="p-dms_channel__unread_badge">1</span>',
+      'Matthew Sammut (DM) - ICE Campus - 3 new items - Slack',
+    );
+    expect(BADGE_PARSERS.slack(doc)).toBe(3);
+  });
+  it('slack reads the singular "1 new item"', () => {
+    expect(BADGE_PARSERS.slack(docFrom('', 'general (Channel) - ICE Campus - 1 new item - Slack'))).toBe(1);
+  });
+  it('slack is not fooled by a channel named like a count', () => {
+    expect(BADGE_PARSERS.slack(docFrom('', '5 new items (Channel) - ICE Campus - Slack'))).toBe(0);
+  });
+  it('slack falls back to the DMs tab unread badges when the title has no count', () => {
+    const doc = docFrom(
+      '<span class="p-dms_channel__unread_badge">2</span><span class="p-dms_channel__unread_badge">1</span>',
+      'Matthew Sammut (DM) - ICE Campus - Slack',
     );
     expect(BADGE_PARSERS.slack(doc)).toBe(2);
   });

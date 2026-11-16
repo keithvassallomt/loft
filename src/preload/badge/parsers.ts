@@ -6,15 +6,31 @@ const whatsapp: BadgeParser = (doc) => {
   return m ? parseInt(m[1], 10) : 0;
 };
 
+// Slack's own count of what needs attention, from the tab title:
+// "Matthew Sammut (DM) - ICE Campus - 3 new items - Slack". Anchored to the end, so a channel
+// or workspace that happens to be called "5 new items" cannot be read as the count.
+const SLACK_TITLE_COUNT = /\s-\s(\d+) new items?\s-\sSlack$/;
+
 const slack: BadgeParser = (doc) => {
-  // Count unread channel rows, excluding the "add more items" affordance.
-  // (Filter in JS rather than `:not(:has(...))` — `:has()` works in Chromium but
-  // not in jsdom's selector engine, so this keeps the parser unit-testable.)
+  // The title comes first because it is the one source that exists on every tab. Slack
+  // renders only the sidebar of the tab being shown: on the DMs or Activity tab there are no
+  // channel rows at all, so counting rows alone gave 0 with unread DMs sitting right there
+  // (measured 2026-11-16: title "3 new items", zero channel rows, two unread DM badges).
+  const m = doc.title.match(SLACK_TITLE_COUNT);
+  const fromTitle = m ? parseInt(m[1], 10) : 0;
+  if (fromTitle > 0) return fromTitle;
+
+  // No count in the title: a format change, a non-English UI, or nothing but plain channel
+  // unreads (which the title may not count). Fall back to unread rows in whichever list is
+  // rendered: Home's channel sidebar, excluding its "add more items" affordance, or the DMs
+  // tab's list. Only one of the two is ever in the DOM, so nothing is counted twice.
+  // (Filtered in JS rather than with `:not(:has(...))`: `:has()` works in Chromium but not
+  // in jsdom's selector engine, so this keeps the parser unit-testable.)
   let count = 0;
   doc.querySelectorAll('.p-channel_sidebar__channel--unread').forEach((row) => {
     if (!row.querySelector('.p-channel_sidebar__link--add-more-items')) count++;
   });
-  return count;
+  return count + doc.querySelectorAll('.p-dms_channel__unread_badge').length;
 };
 
 const element: BadgeParser = (doc) => {

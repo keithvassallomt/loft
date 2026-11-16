@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Dragging a file into a chat now works in the Flatpak, instead of Slack calling it "a type of file not supported".** Loft's sandbox has no access to folders like Downloads, so a dropped file has to be handed over through the desktop's file-transfer portal, the way the attach button already does through the file chooser. The browser engine inside Loft received that hand-over and then ignored it, passing the web app a path it could not read. Slack reported every such file as unsupported, and other services could fail the same way. Loft now turns the portal hand-over on, so dropped files arrive readable without widening the sandbox.
+- **Slack's unread badge no longer disappears while you are on its DMs or Activity tab.** Loft counted the unread rows in Slack's Home sidebar, but Slack only draws the sidebar of the tab you are looking at, so on any other tab there was nothing to count and the badge read zero with unread messages waiting. Loft now takes the count Slack itself shows in its window title, which is there whichever tab is open.
 
 ## [1.0.6] - 2026-09-22
 

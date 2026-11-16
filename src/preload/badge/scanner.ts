@@ -22,7 +22,9 @@ export function startBadgeScanner(serviceId: string, send: (count: number) => vo
     : scan;
   const observer = new MutationObserver(onMutation);
   const observeTarget = () => {
-    // Element reports its count via document.title; others via the body DOM.
+    // Element reports its count via document.title; others via the body DOM. Slack reads
+    // its title first too, but keeps the body observer for its DOM fallback; a title-only
+    // change still lands within one 2s poll below.
     const target = serviceId === 'element' ? document.querySelector('title') ?? document.body : document.body;
     if (!target) { setTimeout(observeTarget, 500); return; }
     observer.observe(target, {
