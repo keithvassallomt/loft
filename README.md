@@ -91,13 +91,18 @@ Work is written up under `## [Unreleased]` at the top of [`CHANGELOG.md`](CHANGE
 
 Releases are built by [`.github/workflows/release.yml`](.github/workflows/release.yml):
 
-1. Bump the version in `package.json`. Rename the changelog's `## [Unreleased]` heading to `## [X.Y.Z] - <date>` and open a fresh empty `## [Unreleased]` above it, then add a matching `<release>` to `data/chat.loft.Loft.metainfo.xml` (with a real release date, since the CI AppStream validation step rejects a placeholder date on tag builds).
-2. Commit, then tag the commit `vX.Y.Z` and push the tag.
-3. GitHub Actions checks out the tag, runs the test/typecheck suite, builds the DEB/RPM/AppImage packages (`electron-builder`) and the Flatpak bundle (`flatpak-builder`, from the committed offline sources), and publishes all four artifacts to a GitHub Release for that tag.
+1. Make one commit, `chore: update versions to X.Y.Z`, that changes all of these together:
+   - `package.json` and `package-lock.json`: `npm version X.Y.Z --no-git-tag-version` sets both.
+   - `CHANGELOG.md`: rename `## [Unreleased]` to `## [X.Y.Z] - <date>` and open a fresh empty `## [Unreleased]` above it.
+   - `data/chat.loft.Loft.metainfo.xml`: add a matching `<release>` with a short description and a real date. The CI AppStream validation step rejects a placeholder date on tag builds.
+   - `chat.loft.Loft.yml`: point the app source's `tag:` at `vX.Y.Z`. This is the manifest FriendlyHub builds, and it fetches exactly that tag.
 
-A manual `workflow_dispatch` run (no tag) builds the same artifacts as a rolling **prerelease**, skipping the strict AppStream validation gate — useful for a preview build without cutting a real version.
+   `tests/flatpakManifest.test.ts` fails unless `package.json`, the manifest's tag and the newest metainfo `<release>` all name the same version, so run `npm test` before committing. `generated-sources.json` (the Flatpak's offline npm sources) only needs regenerating with `flatpak-node-generator` when dependencies in `package-lock.json` change. A version bump alone does not count.
+2. Push the commit, then create an annotated tag and push it: `git tag -a vX.Y.Z -m "vX.Y.Z"` and `git push origin vX.Y.Z`.
+3. GitHub Actions checks out the tag, runs the test/typecheck suite, builds the DEB/RPM/AppImage packages (`electron-builder`) and the Flatpak bundle (`flatpak-builder`, from the committed offline sources), lifts the `## [X.Y.Z]` changelog section into the release notes (`scripts/changelogSection.mjs`), and publishes all four artifacts to a GitHub Release for that tag. The release-notes step runs only after every package is built, so if the section is still headed `[Unreleased]` the run fails at the very end, on a tag that is already pushed. Check the rename before tagging.
+4. Submit the Flatpak to FriendlyHub by hand: `chat.loft.Loft.yml` plus its companion `generated-sources.json`, from the tagged commit. FriendlyHub's builder has nothing but those files, which is why the manifest's app source is `type: git` pinned to the tag.
 
-The last manual step is submitting the Flatpak build to FriendlyHub.
+A manual `workflow_dispatch` run (no tag) builds the same artifacts as a rolling **prerelease**, skipping the strict AppStream validation gate. It is useful for a preview build without cutting a real version.
 
 ## Usage
 
