@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-11-16
+
 ### Fixed
 
 - **Dragging a file into a chat now works in the Flatpak, instead of Slack calling it "a type of file not supported".** Loft's sandbox has no access to folders like Downloads, so a dropped file has to be handed over through the desktop's file-transfer portal, the way the attach button already does through the file chooser. The browser engine inside Loft received that hand-over and then ignored it, passing the web app a path it could not read. Slack reported every such file as unsupported, and other services could fail the same way. Loft now turns the portal hand-over on, so dropped files arrive readable without widening the sandbox.
